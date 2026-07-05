@@ -1,0 +1,46 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "fold",
+  "main": "build/worker/shim.mjs",
+  "compatibility_date": "2026-07-04",
+
+  // Build the SPA (-> web/dist) and compile the Rust Worker (-> build/worker).
+  // NOTE: we use `worker-build --dev`, not `--release`. The current wasm-bindgen
+  // (>=0.2.125, required by worker 0.8) turns worker-build's release-only
+  // `--force-enable-abort-handler` into externref catch wrappers that fail to
+  // build on this toolchain. `--dev` skips that flag and produces a correct
+  // build; we then shrink it with `wasm-opt -Oz` (see scripts/build-worker.sh).
+  "build": {
+    "command": "npm --prefix web run build && bash scripts/build-worker.sh"
+  },
+
+  // Static assets: serve the built SPA. Requests to assets are free/unlimited.
+  // Only /api/* invokes the Worker (and counts toward the 100k/day free limit).
+  "assets": {
+    "directory": "web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "fold-db",
+      // Placeholder: replace with the id from `wrangler d1 create fold-db`.
+      // Local dev (wrangler dev) uses a local SQLite file regardless of this id.
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  // Housekeeping: expire past-due activities and prune old notifications.
+  // Every 15 minutes (well under the 5-cron free-plan limit).
+  "triggers": {
+    "crons": ["*/15 * * * *"]
+  },
+
+  "observability": {
+    "enabled": true
+  }
+}

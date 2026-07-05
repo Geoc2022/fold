@@ -1,0 +1,37 @@
+[package]
+name = "fold"
+version = "0.1.0"
+edition = "2021"
+authors = ["fold"]
+
+[lib]
+# cdylib for the wasm Worker; rlib so `cargo test` can build a native test
+# harness for the pure `logic` module.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+worker = { version = "0.8", features = ["d1"] }
+worker-macros = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+getrandom = { version = "0.2", features = ["js"] }
+# Pin below 0.2.126 (parser/EH regression with current toolchain).
+wasm-bindgen = "=0.2.125"
+
+[profile.release]
+# Free plan caps the Worker at 3 MB. Optimize hard for size.
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+
+# Optimized build under a non-"release" name so worker-build does NOT inject
+# `--force-enable-abort-handler` (which the current wasm-bindgen turns into
+# externref catch wrappers that fail to build). Build with:
+#   worker-build --profile small
+[profile.small]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true

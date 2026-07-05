@@ -1,0 +1,179 @@
+// Typed fetch client for the fold Worker API.
+//
+// Identity is a lightweight person_id (UUID) persisted in localStorage and sent
+// as the `X-Person-Id` header. There are no passwords; handles are not unique.
+
+import type {
+  ActivityView,
+  CreateActivityInput,
+  Person,
+  SyncResponse,
+} from './types'
+
+const PERSON_KEY = 'fold.person_id'
+
+export function getPersonId(): string | null {
+  try {
+    return localStorage.getItem(PERSON_KEY)
+  } catch {
+    return null
+  }
+}
+
+export function setPersonId(id: string): void {
+  try {
+    localStorage.setItem(PERSON_KEY, id)
+  } catch {
+    /* ignore storage failures (private mode) */
+  }
+}
+
+export function clearPersonId(): void {
+  try {
+    localStorage.removeItem(PERSON_KEY)
+  } catch {
+    /* ignore */
+  }
+}
+
+export class ApiError extends Error {
+  status: number
+  body: unknown
+  constructor(status: number, message: string, body: unknown) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.body = body
+  }
+}
+
+interface RequestOptions {
+  method?: string
+  body?: unknown
+  /** Attach the X-Person-Id header when available. Default: true. */
+  auth?: boolean
+  signal?: AbortSignal
+}
+
+async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
+  const { method = 'GET', body, auth = true, signal } = opts
+  const headers: Record<string, string> = {}
+  if (body !== undefined) headers['Content-Type'] = 'application/json'
+  if (auth) {
+    const pid = getPersonId()
+    if (pid) headers['X-Person-Id'] = pid
+  }
+
+  const res = await fetch(path, {
+    method,
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+    signal,
+  })
+
+  const text = await res.text()
+  const parsed: unknown = text ? safeJson(text) : null
+
+  if (!res.ok) {
+    const message =
+      (isRecord(parsed) && typeof parsed.error === 'string' && parsed.error) ||
+      `HTTP ${res.status}`
+    throw new ApiError(res.status, message, parsed)
+  }
+  return parsed as T
+}
+
+function safeJson(text: string): unknown {
+  try {
+    return JSON.parse(text)
+  } catch {
+    return text
+  }
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null
+}
+
+// ---- endpoints -------------------------------------------------------------
+
+export const api = {
+  createSession(handle: string, color?: string): Promise<Person> {
+    return request<Person>('/api/session', {
+      method: 'POST',
+      auth: false,
+      body: { handle, color },
+    })
+  },
+
+  getSession(): Promise<Person> {
+    return request<Person>('/api/session')
+  },
+
+  updateSession(patch: { handle?: string; color?: string }): Promise<Person> {
+    return request<Person>('/api/session', { method: 'PATCH', body: patch })
+  },
+
+  sync(signal?: AbortSignal): Promise<SyncResponse> {
+    return request<SyncResponse>('/api/sync', { signal })
+  },
+
+  createActivity(input: CreateActivityInput): Promise<ActivityView> {
+    return request<ActivityView>('/api/activities', {
+      method: 'POST',
+      body: input,
+    })
+  },
+
+  getActivity(id: string): Promise<ActivityView> {
+    return request<ActivityView>(`/api/activities/${id}`)
+  },
+
+  interest(id: string): Promise<ActivityView> {
+    return request<ActivityView>(`/api/activities/${id}/interest`, {
+      method: 'POST',
+    })
+  },
+
+  commit(id: string): Promise<ActivityView> {
+    return request<ActivityView>(`/api/activities/${id}/commit`, {
+      method: 'POST',
+    })
+  },
+
+  withdraw(id: string): Promise<ActivityView> {
+    return request<ActivityView>(`/api/activities/${id}/participation`, {
+      method: 'DELETE',
+    })
+  },
+
+  schedule(
+    id: string,
+    scheduled_for: number,
+    location?: string,
+  ): Promise<ActivityView> {
+    return request<ActivityView>(`/api/activities/${id}/schedule`, {
+      method: 'POST',
+      body: { scheduled_for, location },
+    })
+  },
+
+  close(id: string): Promise<ActivityView> {
+    return request<ActivityView>(`/api/activities/${id}/close`, {
+      method: 'POST',
+    })
+  },
+
+  cancel(id: string): Promise<ActivityView> {
+    return request<ActivityView>(`/api/activities/${id}/cancel`, {
+      method: 'POST',
+    })
+  },
+
+  markRead(ids?: string[]): Promise<unknown> {
+    return request('/api/notifications/read', {
+      method: 'POST',
+      body: ids ? { ids } : {},
+    })
+  },
+}

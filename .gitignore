@@ -1,0 +1,15 @@
+# Rust
+/target
+/build
+
+# Node / Vite
+node_modules
+web/node_modules
+web/dist
+
+# Wrangler
+.wrangler
+.dev.vars
+
+# OS
+.DS_Store
