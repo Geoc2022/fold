@@ -176,4 +176,22 @@ export const api = {
       body: ids ? { ids } : {},
     })
   },
+
+  pushPublicKey(): Promise<{ enabled: boolean; public_key: string | null }> {
+    return request('/api/push/public-key', { auth: false })
+  },
+
+  pushSubscribe(subscription: PushSubscriptionJSON): Promise<unknown> {
+    return request('/api/push/subscriptions', {
+      method: 'POST',
+      body: subscription,
+    })
+  },
+
+  pushUnsubscribe(endpoint: string): Promise<unknown> {
+    return request('/api/push/subscriptions', {
+      method: 'DELETE',
+      body: { endpoint },
+    })
+  },
 }

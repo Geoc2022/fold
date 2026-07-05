@@ -7,6 +7,8 @@ import { Onboarding } from './components/Onboarding'
 import { ProposeForm } from './components/ProposeForm'
 import { ActivityCard } from './components/ActivityCard'
 import { NotificationFeed } from './components/NotificationFeed'
+import { PushPanel } from './components/PushPanel'
+import { ActivityGraph } from './components/ActivityGraph'
 
 const STATUS_ORDER: Record<string, number> = {
   ready: 0,
@@ -99,6 +101,7 @@ export default function App() {
 
       <main className="layout">
         <section className="main-col">
+          <ActivityGraph activities={activities} me={me} />
           <ProposeForm onCreated={refresh} />
 
           {loading && activities.length === 0 && (
@@ -125,6 +128,9 @@ export default function App() {
         </section>
 
         <aside className="side-col">
+          <section className="card side-card">
+            <PushPanel />
+          </section>
           <NotificationFeed
             notifications={data?.notifications ?? []}
             now={now}

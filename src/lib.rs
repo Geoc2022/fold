@@ -10,6 +10,8 @@ mod db;
 #[cfg(target_arch = "wasm32")]
 mod models;
 #[cfg(target_arch = "wasm32")]
+mod push;
+#[cfg(target_arch = "wasm32")]
 mod util;
 
 /// Worker entrypoint.
@@ -45,6 +47,10 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .post_async("/api/activities/:id/cancel", api::activity_cancel)
         // Notifications.
         .post_async("/api/notifications/read", api::notifications_read)
+        // Web Push subscriptions.
+        .get_async("/api/push/public-key", api::push_public_key)
+        .post_async("/api/push/subscriptions", api::push_subscribe)
+        .delete_async("/api/push/subscriptions", api::push_unsubscribe)
         .run(req, env)
         .await
 }
@@ -75,7 +81,7 @@ async fn run_maintenance(env: &Env) -> Result<()> {
     let expiring = db::expiring_activities(&db, now, EXPIRE_BATCH).await?;
     if !expiring.is_empty() {
         for a in &expiring {
-            db::notify_committed(
+            let recipients = db::notify_committed(
                 &db,
                 &a.id,
                 None,
@@ -84,6 +90,7 @@ async fn run_maintenance(env: &Env) -> Result<()> {
                 now,
             )
             .await?;
+            push::send_to_people(env, &db, &recipients).await?;
         }
         let ids: Vec<String> = expiring.into_iter().map(|a| a.id).collect();
         db::expire_activities(&db, &ids, now).await?;

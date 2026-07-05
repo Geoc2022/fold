@@ -40,6 +40,13 @@
     "crons": ["*/15 * * * *"]
   },
 
+  // Web Push setup (optional): generate VAPID keys, then add:
+  //   "vars": { "VAPID_PUBLIC_KEY": "...", "VAPID_SUBJECT": "mailto:you@example.com" }
+  // and store the private key with:
+  //   npx wrangler secret put VAPID_PRIVATE_KEY
+  // Without these bindings, push subscription UI reports "not configured" and
+  // in-app notifications/polling still work normally.
+
   "observability": {
     "enabled": true
   }

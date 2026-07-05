@@ -95,6 +95,23 @@ pub struct MarkRead {
     pub ids: Option<Vec<String>>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct PushSubscribe {
+    pub endpoint: String,
+    pub keys: PushKeys,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PushKeys {
+    pub p256dh: String,
+    pub auth: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PushUnsubscribe {
+    pub endpoint: String,
+}
+
 // ---- API views -------------------------------------------------------------
 
 #[derive(Debug, Serialize)]

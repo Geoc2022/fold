@@ -10,6 +10,11 @@ use worker::*;
 
 use crate::models::{ActivityRow, NotificationRow, ParticipationLite, PersonRow};
 
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct PushSubscriptionRow {
+    pub endpoint: String,
+}
+
 // ---- bind value helpers ----------------------------------------------------
 
 pub fn s(v: &str) -> JsValue {
@@ -51,6 +56,98 @@ pub async fn touch_person(db: &D1Database, id: &str, now: i64) -> Result<()> {
         .run()
         .await?;
     Ok(())
+}
+
+// ---- push subscriptions ----------------------------------------------------
+
+pub async fn upsert_push_subscription(
+    db: &D1Database,
+    person_id: &str,
+    endpoint: &str,
+    p256dh: &str,
+    auth: &str,
+    now: i64,
+) -> Result<()> {
+    let id = crate::util::new_id();
+    db.prepare(
+        "INSERT INTO push_subscriptions (id, person_id, endpoint, p256dh, auth, created_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+         ON CONFLICT(person_id, endpoint) DO UPDATE SET p256dh = ?4, auth = ?5",
+    )
+    .bind(&[s(&id), s(person_id), s(endpoint), s(p256dh), s(auth), i(now)])?
+    .run()
+    .await?;
+    Ok(())
+}
+
+pub async fn delete_push_subscription(
+    db: &D1Database,
+    person_id: &str,
+    endpoint: &str,
+) -> Result<()> {
+    db.prepare("DELETE FROM push_subscriptions WHERE person_id = ? AND endpoint = ?")
+        .bind(&[s(person_id), s(endpoint)])?
+        .run()
+        .await?;
+    Ok(())
+}
+
+pub async fn delete_push_endpoint(db: &D1Database, endpoint: &str) -> Result<()> {
+    db.prepare("DELETE FROM push_subscriptions WHERE endpoint = ?")
+        .bind(&[s(endpoint)])?
+        .run()
+        .await?;
+    Ok(())
+}
+
+pub async fn push_subscriptions_for_people(
+    db: &D1Database,
+    person_ids: &[String],
+    limit: i64,
+) -> Result<Vec<PushSubscriptionRow>> {
+    if person_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders = std::iter::repeat("?")
+        .take(person_ids.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "SELECT endpoint \
+         FROM push_subscriptions WHERE person_id IN ({placeholders}) LIMIT ?"
+    );
+    let mut values = Vec::new();
+    for id in person_ids {
+        values.push(s(id));
+    }
+    values.push(i(limit));
+    db.prepare(&sql)
+        .bind(&values)?
+        .all()
+        .await?
+        .results::<PushSubscriptionRow>()
+}
+
+pub async fn committed_person_ids(
+    db: &D1Database,
+    activity_id: &str,
+    exclude_person: Option<&str>,
+) -> Result<Vec<String>> {
+    #[derive(serde::Deserialize)]
+    struct Row {
+        person_id: String,
+    }
+    let recipients = db
+        .prepare("SELECT person_id FROM participations WHERE activity_id = ? AND state = 'committed'")
+        .bind(&[s(activity_id)])?
+        .all()
+        .await?
+        .results::<Row>()?;
+    Ok(recipients
+        .into_iter()
+        .map(|r| r.person_id)
+        .filter(|id| Some(id.as_str()) != exclude_person)
+        .collect())
 }
 
 // ---- activities ------------------------------------------------------------
@@ -224,36 +321,24 @@ pub async fn notify_committed(
     kind: &str,
     message: &str,
     now: i64,
-) -> Result<()> {
-    #[derive(serde::Deserialize)]
-    struct Row {
-        person_id: String,
-    }
-    let recipients = db
-        .prepare("SELECT person_id FROM participations WHERE activity_id = ? AND state = 'committed'")
-        .bind(&[s(activity_id)])?
-        .all()
-        .await?
-        .results::<Row>()?;
+) -> Result<Vec<String>> {
+    let recipients = committed_person_ids(db, activity_id, exclude_person).await?;
 
     let mut stmts = Vec::new();
-    for r in &recipients {
-        if Some(r.person_id.as_str()) == exclude_person {
-            continue;
-        }
+    for person_id in &recipients {
         let id = crate::util::new_id();
         stmts.push(
             db.prepare(
                 "INSERT INTO notifications (id, recipient_id, activity_id, kind, message, read_at, created_at) \
                  VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6)",
             )
-            .bind(&[s(&id), s(&r.person_id), s(activity_id), s(kind), s(message), i(now)])?,
+            .bind(&[s(&id), s(person_id), s(activity_id), s(kind), s(message), i(now)])?,
         );
     }
     if !stmts.is_empty() {
         db.batch(stmts).await?;
     }
-    Ok(())
+    Ok(recipients)
 }
 
 /// Notify every person except one (broadcast, e.g. "new activity proposed").
@@ -264,7 +349,7 @@ pub async fn notify_all_except(
     kind: &str,
     message: &str,
     now: i64,
-) -> Result<()> {
+) -> Result<Vec<String>> {
     #[derive(serde::Deserialize)]
     struct Row {
         id: String,
@@ -290,7 +375,7 @@ pub async fn notify_all_except(
     if !stmts.is_empty() {
         db.batch(stmts).await?;
     }
-    Ok(())
+    Ok(people.into_iter().map(|p| p.id).collect())
 }
 
 /// Mark notifications read for a person: specific ids, or all when `ids` is None.

@@ -5,6 +5,7 @@ use worker::*;
 use crate::db;
 use crate::logic::{compute_group_state, GroupingMode};
 use crate::models::*;
+use crate::push;
 use crate::util::{err_json, json_status, new_id, now_ms, person_id, random_color};
 
 const ACTIVITY_LIST_LIMIT: i64 = 100;
@@ -53,6 +54,13 @@ async fn require_person(db: &D1Database, req: &Request) -> Result<std::result::R
         Some(p) => Ok(Ok(p)),
         None => Ok(Err(err_json("unknown person; create a session first", 401)?)),
     }
+}
+
+async fn push_people(env: &Env, db: &D1Database, people: Vec<String>) -> Result<()> {
+    if !people.is_empty() {
+        push::send_to_people(env, db, &people).await?;
+    }
+    Ok(())
 }
 
 // ---- session ---------------------------------------------------------------
@@ -195,7 +203,8 @@ pub async fn activity_create(mut req: Request, ctx: RouteContext<()>) -> Result<
 
     // Broadcast to everyone else so the activity is discoverable.
     let msg = format!("{} proposed \"{}\"", proposer.handle, title);
-    db::notify_all_except(&db, &proposer.id, Some(&id), "activity_proposed", &msg, now).await?;
+    let recipients = db::notify_all_except(&db, &proposer.id, Some(&id), "activity_proposed", &msg, now).await?;
+    push_people(&ctx.env, &db, recipients).await?;
 
     let row = db::get_activity(&db, &id).await?.ok_or_else(|| Error::RustError("insert failed".into()))?;
     json_status(&ActivityView::from_row(row, None), 201)
@@ -242,6 +251,7 @@ pub async fn activity_interest(req: Request, ctx: RouteContext<()>) -> Result<Re
     if activity.proposer_id != person.id {
         let msg = format!("{} is interested in \"{}\"", person.handle, row.title);
         db::insert_notification(&db, &activity.proposer_id, Some(&id), "interest_added", &msg, now).await?;
+        push_people(&ctx.env, &db, vec![activity.proposer_id.clone()]).await?;
     }
 
     Response::from_json(&ActivityView::from_row(row, Some("interested".to_string())))
@@ -291,14 +301,17 @@ pub async fn activity_commit(req: Request, ctx: RouteContext<()>) -> Result<Resp
     if !already_committed && activity.proposer_id != person.id {
         let msg = format!("{} committed to \"{}\"", person.handle, row.title);
         db::insert_notification(&db, &activity.proposer_id, Some(&id), "commit_added", &msg, now).await?;
+        push_people(&ctx.env, &db, vec![activity.proposer_id.clone()]).await?;
     }
     if newly_ready {
         let msg = format!("\"{}\" has enough people — it's on!", row.title);
-        db::notify_committed(&db, &id, None, "activity_ready", &msg, now).await?;
+        let mut recipients = db::notify_committed(&db, &id, None, "activity_ready", &msg, now).await?;
         if activity.proposer_id != person.id {
             // proposer may not be committed; make sure they hear it too.
             db::insert_notification(&db, &activity.proposer_id, Some(&id), "activity_ready", &msg, now).await?;
+            recipients.push(activity.proposer_id.clone());
         }
+        push_people(&ctx.env, &db, recipients).await?;
     }
 
     Response::from_json(&ActivityView::from_row(row, Some("committed".to_string())))
@@ -373,7 +386,8 @@ async fn proposer_action(
         "closed" => format!("\"{}\" was closed", activity.title),
         _ => format!("\"{}\" was updated", activity.title),
     };
-    db::notify_committed(&db, &id, Some(&person.id), notify_kind, &msg, now).await?;
+    let recipients = db::notify_committed(&db, &id, Some(&person.id), notify_kind, &msg, now).await?;
+    push_people(&ctx.env, &db, recipients).await?;
 
     let row = db::get_activity(&db, &id).await?.ok_or_else(|| Error::RustError("missing".into()))?;
     let my_state = db::participation_state(&db, &id, &person.id).await?;
@@ -407,6 +421,59 @@ pub async fn notifications_read(mut req: Request, ctx: RouteContext<()>) -> Resu
     let body: MarkRead = req.json().await.unwrap_or(MarkRead { ids: None });
     let now = now_ms();
     db::mark_notifications_read(&db, &person.id, body.ids.as_deref(), now).await?;
+    Response::from_json(&serde_json::json!({ "ok": true }))
+}
+
+// ---- push subscriptions -----------------------------------------------------
+
+pub async fn push_public_key(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let key = push::public_key(&ctx.env);
+    Response::from_json(&serde_json::json!({
+        "enabled": key.is_some(),
+        "public_key": key,
+    }))
+}
+
+pub async fn push_subscribe(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let db = ctx.env.d1("DB")?;
+    let person = match require_person(&db, &req).await? {
+        Ok(p) => p,
+        Err(resp) => return Ok(resp),
+    };
+    let body: PushSubscribe = match req.json().await {
+        Ok(b) => b,
+        Err(_) => return err_json("invalid JSON body", 400),
+    };
+    if body.endpoint.trim().is_empty()
+        || body.keys.p256dh.trim().is_empty()
+        || body.keys.auth.trim().is_empty()
+    {
+        return err_json("invalid push subscription", 400);
+    }
+    let now = now_ms();
+    db::upsert_push_subscription(
+        &db,
+        &person.id,
+        &body.endpoint,
+        &body.keys.p256dh,
+        &body.keys.auth,
+        now,
+    )
+    .await?;
+    Response::from_json(&serde_json::json!({ "ok": true }))
+}
+
+pub async fn push_unsubscribe(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let db = ctx.env.d1("DB")?;
+    let person = match require_person(&db, &req).await? {
+        Ok(p) => p,
+        Err(resp) => return Ok(resp),
+    };
+    let body: PushUnsubscribe = match req.json().await {
+        Ok(b) => b,
+        Err(_) => return err_json("invalid JSON body", 400),
+    };
+    db::delete_push_subscription(&db, &person.id, &body.endpoint).await?;
     Response::from_json(&serde_json::json!({ "ok": true }))
 }
 
