@@ -6,7 +6,7 @@ use crate::db;
 use crate::logic::{compute_group_state, GroupingMode};
 use crate::models::*;
 use crate::push;
-use crate::util::{err_json, json_status, new_id, now_ms, person_id, random_color};
+use crate::util::{err_json, json_status, new_code, new_id, now_ms, person_id, random_color};
 
 const ACTIVITY_LIST_LIMIT: i64 = 100;
 const NOTIFICATION_LIMIT: i64 = 50;
@@ -63,6 +63,30 @@ async fn push_people(env: &Env, db: &D1Database, people: Vec<String>) -> Result<
     Ok(())
 }
 
+async fn unique_activity_code(db: &D1Database) -> Result<String> {
+    for _ in 0..12 {
+        let code = new_code();
+        if db::get_activity_by_code(db, &code).await?.is_none() {
+            return Ok(code);
+        }
+    }
+    Err(Error::RustError("could not generate unique activity code".into()))
+}
+
+async fn validate_or_generate_activity_code(db: &D1Database, requested: Option<&str>) -> Result<std::result::Result<String, Response>> {
+    let Some(raw) = requested else {
+        return Ok(Ok(unique_activity_code(db).await?));
+    };
+    let code = raw.trim().to_ascii_uppercase();
+    if code.len() != 4 || !code.chars().all(|c| c.is_ascii_alphabetic()) {
+        return Ok(Err(err_json("code must be exactly 4 letters", 400)?));
+    }
+    if db::get_activity_by_code(db, &code).await?.is_some() {
+        return Ok(Err(err_json("that code is already taken", 409)?));
+    }
+    Ok(Ok(code))
+}
+
 // ---- session ---------------------------------------------------------------
 
 pub async fn session_create(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -70,9 +94,10 @@ pub async fn session_create(mut req: Request, ctx: RouteContext<()>) -> Result<R
         Ok(b) => b,
         Err(_) => return err_json("invalid JSON body", 400),
     };
-    let handle = body.handle.trim();
-    if handle.is_empty() || handle.chars().count() > 40 {
-        return err_json("handle must be 1-40 characters", 400);
+    let raw_handle = body.handle.trim();
+    let handle = if raw_handle.is_empty() { "guest" } else { raw_handle };
+    if handle.chars().count() > 40 {
+        return err_json("handle must be <= 40 characters", 400);
     }
     let db = ctx.env.d1("DB")?;
     let now = now_ms();
@@ -177,15 +202,20 @@ pub async fn activity_create(mut req: Request, ctx: RouteContext<()>) -> Result<
 
     let now = now_ms();
     let id = new_id();
+    let code = match validate_or_generate_activity_code(&db, body.code.as_deref()).await? {
+        Ok(c) => c,
+        Err(resp) => return Ok(resp),
+    };
     db.prepare(
         "INSERT INTO activities \
-         (id, title, description, proposer_id, min_people, max_people, group_multiple, \
-          grouping_mode, status, location, scheduled_for, expires_at, \
-          interested_count, committed_count, created_at, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'open', ?9, ?10, ?11, 0, 0, ?12, ?12)",
+         (id, code, title, description, proposer_id, min_people, max_people, group_multiple, \
+           grouping_mode, status, location, scheduled_for, expires_at, \
+           interested_count, committed_count, created_at, updated_at) \
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'open', ?10, ?11, ?12, 0, 0, ?13, ?13)",
     )
     .bind(&[
         db::s(&id),
+        db::s(&code),
         db::s(title),
         db::os(body.description.as_deref()),
         db::s(&proposer.id),
@@ -242,7 +272,7 @@ pub async fn activity_interest(req: Request, ctx: RouteContext<()>) -> Result<Re
     }
 
     let now = now_ms();
-    db::upsert_participation(&db, &id, &person.id, "interested", now).await?;
+    db::upsert_participation(&db, &id, &person.id, "interested", None, now).await?;
     db::touch_person(&db, &person.id, now).await?;
 
     let (row, _newly_ready) = refresh_activity(&db, &id, now).await?;
@@ -254,10 +284,16 @@ pub async fn activity_interest(req: Request, ctx: RouteContext<()>) -> Result<Re
         push_people(&ctx.env, &db, vec![activity.proposer_id.clone()]).await?;
     }
 
+    if activity.interested_count < activity.min_people && row.interested_count >= row.min_people {
+        let msg = format!("\"{}\" has enough interested people", row.title);
+        let recipients = db::notify_interested(&db, &id, "activity_interest_ready", &msg, now).await?;
+        push_people(&ctx.env, &db, recipients).await?;
+    }
+
     Response::from_json(&ActivityView::from_row(row, Some("interested".to_string())))
 }
 
-pub async fn activity_commit(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+pub async fn activity_commit(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let db = ctx.env.d1("DB")?;
     let person = match require_person(&db, &req).await? {
         Ok(p) => p,
@@ -292,8 +328,20 @@ pub async fn activity_commit(req: Request, ctx: RouteContext<()>) -> Result<Resp
         }
     }
 
+    let body_text = req.text().await.unwrap_or_default();
+    let body: CommitActivity = if body_text.trim().is_empty() {
+        CommitActivity { eta_minutes: None }
+    } else {
+        match serde_json::from_str(&body_text) {
+            Ok(b) => b,
+            Err(_) => return err_json("invalid JSON body", 400),
+        }
+    };
+
     let now = now_ms();
-    db::upsert_participation(&db, &id, &person.id, "committed", now).await?;
+    let eta = body.eta_minutes.unwrap_or(30).clamp(5, 30) as i64;
+    let arrival_at = now + eta * 60 * 1000;
+    db::upsert_participation(&db, &id, &person.id, "committed", Some(arrival_at), now).await?;
     db::touch_person(&db, &person.id, now).await?;
 
     let (row, newly_ready) = refresh_activity(&db, &id, now).await?;
@@ -475,6 +523,32 @@ pub async fn push_unsubscribe(mut req: Request, ctx: RouteContext<()>) -> Result
     };
     db::delete_push_subscription(&db, &person.id, &body.endpoint).await?;
     Response::from_json(&serde_json::json!({ "ok": true }))
+}
+
+// ---- activity rooms ---------------------------------------------------------
+
+pub async fn room_get(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let db = ctx.env.d1("DB")?;
+    let code = ctx.param("code").cloned().unwrap_or_default();
+    if code.len() != 4 || !code.chars().all(|c| c.is_ascii_alphabetic()) {
+        return err_json("activity code must be 4 letters", 400);
+    }
+    let row = match db::get_activity_by_code(&db, &code).await? {
+        Some(r) => r,
+        None => return err_json("activity not found", 404),
+    };
+    let me_id = person_id(&req);
+    let my_state = match &me_id {
+        Some(pid) => db::participation_state(&db, &row.id, pid).await?,
+        None => None,
+    };
+    let participants = db::participants_for_activity(&db, &row.id, me_id.as_deref()).await?;
+    let resp = RoomResponse {
+        server_time: now_ms(),
+        activity: ActivityView::from_row(row, my_state),
+        participants,
+    };
+    Response::from_json(&resp)
 }
 
 // ---- sync ------------------------------------------------------------------

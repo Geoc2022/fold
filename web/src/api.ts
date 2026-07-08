@@ -7,6 +7,7 @@ import type {
   ActivityView,
   CreateActivityInput,
   Person,
+  RoomResponse,
   SyncResponse,
 } from './types'
 
@@ -34,6 +35,20 @@ export function clearPersonId(): void {
   } catch {
     /* ignore */
   }
+}
+
+export async function ensureSession(): Promise<Person> {
+  const existing = getPersonId()
+  if (existing) {
+    try {
+      return await api.getSession()
+    } catch {
+      clearPersonId()
+    }
+  }
+  const person = await api.createSession('')
+  setPersonId(person.id)
+  return person
 }
 
 export class ApiError extends Error {
@@ -135,10 +150,15 @@ export const api = {
     })
   },
 
-  commit(id: string): Promise<ActivityView> {
+  commit(id: string, eta_minutes?: number): Promise<ActivityView> {
     return request<ActivityView>(`/api/activities/${id}/commit`, {
       method: 'POST',
+      body: eta_minutes == null ? undefined : { eta_minutes },
     })
+  },
+
+  room(code: string, signal?: AbortSignal): Promise<RoomResponse> {
+    return request<RoomResponse>(`/api/rooms/${code}`, { signal })
   },
 
   withdraw(id: string): Promise<ActivityView> {

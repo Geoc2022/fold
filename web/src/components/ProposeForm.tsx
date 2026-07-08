@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { api } from '../api'
 import { localInputToMs } from '../format'
 import type { GroupingMode } from '../types'
@@ -8,7 +9,9 @@ interface Props {
 }
 
 export function ProposeForm({ onCreated }: Props) {
+  const navigate = useNavigate()
   const [open, setOpen] = useState(false)
+  const [code, setCode] = useState('')
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [minPeople, setMinPeople] = useState(2)
@@ -22,6 +25,7 @@ export function ProposeForm({ onCreated }: Props) {
 
   function reset() {
     setTitle('')
+    setCode('')
     setDescription('')
     setMinPeople(2)
     setMaxPeople('')
@@ -39,7 +43,8 @@ export function ProposeForm({ onCreated }: Props) {
     setBusy(true)
     setError(null)
     try {
-      await api.createActivity({
+      const activity = await api.createActivity({
+        code: code.trim() || null,
         title: t,
         description: description.trim() || null,
         min_people: minPeople,
@@ -52,6 +57,7 @@ export function ProposeForm({ onCreated }: Props) {
       reset()
       setOpen(false)
       onCreated()
+      if (activity.code) navigate(`/${activity.code}`)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -82,6 +88,16 @@ export function ProposeForm({ onCreated }: Props) {
           Cancel
         </button>
       </div>
+
+      <label>
+        Code <span className="opt">(optional, 4 letters)</span>
+        <input
+          maxLength={4}
+          placeholder="ABCD"
+          value={code}
+          onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z]/g, ''))}
+        />
+      </label>
 
       <label>
         Title

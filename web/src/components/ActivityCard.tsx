@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { ApiError, api } from '../api'
 import { relativeTime, shortDateTime } from '../format'
 import type { ActivityView, Person } from '../types'
@@ -28,6 +29,7 @@ export function ActivityCard({ activity: a, me, now, onChanged }: Props) {
 
   const isProposer = a.proposer_id === me.id
   const terminal = a.status === 'closed' || a.status === 'cancelled'
+  const roomPath = a.code ? `/${a.code}` : null
 
   async function run(label: string, fn: () => Promise<unknown>) {
     setBusy(label)
@@ -75,6 +77,11 @@ export function ActivityCard({ activity: a, me, now, onChanged }: Props) {
       {a.description && <p className="desc">{a.description}</p>}
 
       <div className="meta">
+        {roomPath && (
+          <Link className="code-chip" to={roomPath}>
+            /{a.code}
+          </Link>
+        )}
         <span className="mode-chip">
           {a.grouping_mode === 'tiling' ? 'Tiling' : 'Single'} · min {a.min_people}
           {a.group_multiple > 1 ? ` · step ${a.group_multiple}` : ''}

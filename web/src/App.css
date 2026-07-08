@@ -224,6 +224,24 @@ label .opt {
   font-weight: 600;
   margin-bottom: 1rem;
 }
+.created-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.9rem;
+}
+.created-link a,
+.code-chip {
+  color: #c7ccff;
+  font-weight: 700;
+  text-decoration: none;
+}
+.created-link a:hover,
+.code-chip:hover {
+  text-decoration: underline;
+}
 .propose-form {
   display: flex;
   flex-direction: column;
@@ -281,6 +299,12 @@ label .opt {
 .mode-chip {
   background: var(--panel-2);
   border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.1rem 0.55rem;
+}
+.code-chip {
+  background: rgba(99, 102, 241, 0.16);
+  border: 1px solid rgba(99, 102, 241, 0.4);
   border-radius: 999px;
   padding: 0.1rem 0.55rem;
 }
@@ -512,4 +536,231 @@ label .opt {
 .me-label {
   fill: var(--text);
   font-weight: 700;
+}
+
+/* ---- activity room (/ABCD) ---- */
+html[data-room-theme='light'] {
+  --room-bg: #ffffff;
+  --room-text: #111827;
+  --room-muted: #6b7280;
+  --panel-bg: rgba(17, 24, 39, 0.92);
+  --panel-text: #f9fafb;
+  --panel-border: #4b5563;
+}
+html[data-room-theme='dark'] {
+  --room-bg: #0b0d12;
+  --room-text: #f8fafc;
+  --room-muted: #96a0b5;
+  --panel-bg: rgba(21, 25, 36, 0.96);
+  --panel-text: #e7ebf3;
+  --panel-border: #3b4252;
+}
+.room-page {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  background: var(--room-bg);
+  color: var(--room-text);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+.room-canvas {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+  touch-action: none;
+  cursor: grab;
+}
+.room-canvas:active {
+  cursor: grabbing;
+}
+.room-code {
+  position: fixed;
+  top: 14px;
+  left: 16px;
+  z-index: 100;
+  color: var(--room-muted);
+  font-size: 13px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  user-select: none;
+}
+.room-error {
+  position: fixed;
+  top: 14px;
+  right: 16px;
+  z-index: 100;
+  color: #ef4444;
+  font-size: 13px;
+}
+.room-alert {
+  position: fixed;
+  left: 16px;
+  bottom: 62px;
+  z-index: 120;
+  max-width: min(360px, calc(100vw - 32px));
+  background: #b91c1c;
+  color: #fff;
+  border: 1px solid #ef4444;
+  border-radius: 10px;
+  padding: 0.7rem 0.9rem;
+  font-size: 0.9rem;
+  box-shadow: 0 12px 32px rgba(185, 28, 28, 0.28);
+  animation: room-alert-in 0.18s ease-out;
+}
+@keyframes room-alert-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.room-message {
+  min-height: 100vh;
+  display: grid;
+  place-content: center;
+  gap: 0.65rem;
+  text-align: center;
+  background: #ffffff;
+  color: #111827;
+}
+.room-message h1,
+.room-message p {
+  margin: 0;
+}
+.room-message a {
+  color: #4f46e5;
+}
+.global-panel {
+  position: fixed;
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-50%);
+  min-height: 46px;
+  padding: 4px 12px;
+  z-index: 101;
+  background: var(--panel-bg);
+  border-radius: 8px 8px 0 0;
+  text-align: center;
+  font-size: 14px;
+  color: var(--panel-text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  box-shadow: 0 -8px 28px rgba(0, 0, 0, 0.18);
+  transition: background 0.2s ease, color 0.2s ease;
+}
+.panel-button,
+.room-action {
+  display: inline-block;
+  background: transparent;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  color: var(--panel-text);
+  padding: 6px 16px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background 0.2s ease, transform 0.12s ease;
+}
+.panel-button:hover,
+.room-action:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+.panel-button.icon {
+  border: none;
+  background: transparent;
+  font-size: 18px;
+  padding: 0 4px;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.room-action.interested {
+  border-color: #22c55e;
+  color: #bbf7d0;
+}
+.room-action.commit {
+  border-color: #f59e0b;
+  color: #fde68a;
+  min-width: 140px;
+}
+.room-action.committed {
+  border-color: #f59e0b;
+  color: #fde68a;
+  opacity: 0.78;
+}
+.panel-separator {
+  border-left: 1px solid var(--panel-border);
+  height: 24px;
+  margin: 0 2px;
+}
+.hold-meter {
+  width: 70px;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  overflow: hidden;
+  margin-left: -8px;
+}
+.hold-meter span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #fbbf24, #f97316);
+}
+.panel-message {
+  color: #d1d5db;
+  font-size: 12px;
+  max-width: 180px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (max-width: 660px) {
+  .global-panel {
+    width: calc(100vw - 18px);
+    gap: 7px;
+    padding-inline: 8px;
+  }
+  .panel-button,
+  .room-action {
+    padding: 6px 10px;
+  }
+  .hold-meter,
+  .panel-message {
+    display: none;
+  }
+}
+
+/* ---- standalone physics playground (/physics) ---- */
+.physics-page {
+  position: fixed;
+  inset: 0;
+  background: #ffffff;
+  overflow: hidden;
+  color: #111827;
+}
+.physics-canvas {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+  touch-action: none;
+  cursor: crosshair;
+}
+.physics-help {
+  position: fixed;
+  left: 14px;
+  top: 12px;
+  z-index: 5;
+  max-width: min(560px, calc(100vw - 28px));
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(17, 24, 39, 0.12);
+  border-radius: 10px;
+  padding: 0.55rem 0.75rem;
+  font-size: 13px;
+  color: #374151;
+  box-shadow: 0 10px 30px rgba(17, 24, 39, 0.08);
 }

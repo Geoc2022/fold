@@ -18,6 +18,7 @@ pub struct PersonRow {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ActivityRow {
     pub id: String,
+    pub code: Option<String>,
     pub title: String,
     pub description: Option<String>,
     pub proposer_id: String,
@@ -72,6 +73,7 @@ pub struct UpdateSession {
 
 #[derive(Debug, Deserialize)]
 pub struct CreateActivity {
+    pub code: Option<String>,
     pub title: String,
     pub description: Option<String>,
     pub min_people: u32,
@@ -87,6 +89,12 @@ pub struct CreateActivity {
 pub struct ScheduleActivity {
     pub scheduled_for: i64,
     pub location: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CommitActivity {
+    /// Minutes from now until the participant can make it. Clamped to 5..=30.
+    pub eta_minutes: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -117,6 +125,7 @@ pub struct PushUnsubscribe {
 #[derive(Debug, Serialize)]
 pub struct ActivityView {
     pub id: String,
+    pub code: Option<String>,
     pub title: String,
     pub description: Option<String>,
     pub proposer_id: String,
@@ -149,6 +158,7 @@ impl ActivityView {
         );
         ActivityView {
             id: row.id,
+            code: row.code,
             title: row.title,
             description: row.description,
             proposer_id: row.proposer_id,
@@ -177,4 +187,22 @@ pub struct SyncResponse {
     pub me: Option<PersonRow>,
     pub activities: Vec<ActivityView>,
     pub notifications: Vec<NotificationRow>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ParticipantView {
+    /// Opaque node id for client animation continuity. This is the participation
+    /// row id, not the person's id.
+    pub id: String,
+    pub color: String,
+    pub state: String,
+    pub arrival_at: Option<i64>,
+    pub is_me: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RoomResponse {
+    pub server_time: i64,
+    pub activity: ActivityView,
+    pub participants: Vec<ParticipantView>,
 }

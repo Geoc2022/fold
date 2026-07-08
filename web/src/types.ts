@@ -30,6 +30,7 @@ export interface GroupState {
 
 export interface ActivityView {
   id: string
+  code: string | null
   title: string
   description: string | null
   proposer_id: string
@@ -77,7 +78,22 @@ export interface SyncResponse {
   notifications: Notification[]
 }
 
+export interface ParticipantView {
+  id: string
+  color: string
+  state: 'interested' | 'committed'
+  arrival_at: number | null
+  is_me: boolean
+}
+
+export interface RoomResponse {
+  server_time: number
+  activity: ActivityView
+  participants: ParticipantView[]
+}
+
 export interface CreateActivityInput {
+  code?: string | null
   title: string
   description?: string | null
   min_people: number

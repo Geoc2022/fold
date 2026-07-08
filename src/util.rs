@@ -19,6 +19,16 @@ pub fn new_id() -> String {
     s
 }
 
+/// Generate a 4-letter share code (A-Z). Collisions are checked by the API.
+pub fn new_code() -> String {
+    let mut bytes = [0u8; 4];
+    getrandom::getrandom(&mut bytes).expect("rng unavailable");
+    bytes
+        .into_iter()
+        .map(|b| (b'A' + (b % 26)) as char)
+        .collect()
+}
+
 const PALETTE: &[&str] = &[
     "#ef4444", "#f97316", "#f59e0b", "#eab308", "#84cc16", "#22c55e", "#10b981", "#14b8a6",
     "#06b6d4", "#3b82f6", "#6366f1", "#8b5cf6", "#a855f7", "#d946ef", "#ec4899", "#f43f5e",

@@ -37,6 +37,7 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         // Activities.
         .post_async("/api/activities", api::activity_create)
         .get_async("/api/activities/:id", api::activity_get)
+        .get_async("/api/rooms/:code", api::room_get)
         // Participation.
         .post_async("/api/activities/:id/interest", api::activity_interest)
         .post_async("/api/activities/:id/commit", api::activity_commit)
