@@ -234,28 +234,7 @@ function draw(
   ctx.arc(0, 0, 5, 0, Math.PI * 2)
   ctx.fill()
 
-  for (const n of nodes) {
-    ctx.fillStyle = colorFor(n.state)
-    ctx.beginPath()
-    ctx.arc(n.x, n.y, NODE_R, 0, Math.PI * 2)
-    ctx.fill()
-
-    if (n.state === 'committed' && n.arrivalAt != null) {
-      ctx.fillStyle = '#111827'
-      ctx.font = '12px system-ui, sans-serif'
-      ctx.textAlign = 'center'
-      ctx.fillText(`${etaSeconds(n.arrivalAt)}s`, n.x, n.y - NODE_R - 8)
-    }
-  }
-
-  if (pointer?.node?.state === 'interested' && !pointer.dragging) {
-    const held = Math.min(HOLD_MS, performance.now() - pointer.downAt)
-    const etaMs = etaFromHold(held)
-    ctx.fillStyle = '#111827'
-    ctx.font = '12px system-ui, sans-serif'
-    ctx.textAlign = 'center'
-    ctx.fillText(`${Math.round(etaMs / 1000)}s`, pointer.node.x, pointer.node.y - NODE_R - 8)
-  }
+  drawNodesWithOutlineCutout(ctx, canvas, nodes, pointer)
 
   ctx.restore()
 }
@@ -264,6 +243,65 @@ function colorFor(state: NodeState) {
   if (state === 'committed') return '#f59e0b'
   if (state === 'interested') return '#22c55e'
   return '#9ca3af'
+}
+
+function drawNodesWithOutlineCutout(
+  ctx: CanvasRenderingContext2D,
+  canvas: HTMLCanvasElement,
+  nodes: Node[],
+  pointer: PointerState | null,
+) {
+  const w = canvas.clientWidth
+  const h = canvas.clientHeight
+  const dpr = canvas.width / Math.max(1, w)
+  const layer = document.createElement('canvas')
+  layer.width = canvas.width
+  layer.height = canvas.height
+  const lctx = layer.getContext('2d')
+  if (!lctx) return
+
+  lctx.scale(dpr, dpr)
+  lctx.translate(w / 2, h / 2)
+  lctx.globalCompositeOperation = 'source-over'
+  for (const n of nodes) {
+    lctx.fillStyle = colorFor(n.state)
+    lctx.beginPath()
+    lctx.arc(n.x, n.y, NODE_R, 0, Math.PI * 2)
+    lctx.fill()
+  }
+
+  // Cut outlines out of the node layer after the XOR fill. Because this is on
+  // the transparent layer, the main canvas/grid shows through the outline.
+  lctx.globalCompositeOperation = 'destination-out'
+  lctx.lineWidth = 4
+  for (const n of nodes) {
+    lctx.beginPath()
+    lctx.arc(n.x, n.y, NODE_R, 0, Math.PI * 2)
+    lctx.stroke()
+  }
+
+  // Center ETA text inside circles and XOR it against the node layer. This
+  // keeps the text visually tied to the circle while cutting through the fill.
+  lctx.globalCompositeOperation = 'xor'
+  lctx.fillStyle = '#fff'
+  lctx.font = '700 12px system-ui, sans-serif'
+  lctx.textAlign = 'center'
+  lctx.textBaseline = 'middle'
+  for (const n of nodes) {
+    if (n.state === 'committed' && n.arrivalAt != null) {
+      lctx.fillText(`${etaSeconds(n.arrivalAt)}s`, n.x, n.y)
+    }
+  }
+  if (pointer?.node?.state === 'interested' && !pointer.dragging) {
+    const held = Math.min(HOLD_MS, performance.now() - pointer.downAt)
+    const etaMs = etaFromHold(held)
+    lctx.fillText(`${Math.round(etaMs / 1000)}s`, pointer.node.x, pointer.node.y)
+  }
+
+  ctx.save()
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+  ctx.drawImage(layer, 0, 0)
+  ctx.restore()
 }
 
 function etaFromHold(holdMs: number) {
