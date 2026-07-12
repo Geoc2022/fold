@@ -78,6 +78,27 @@ body {
   font-weight: 400;
 }
 
+/* Pictogram icon style: inlined public-domain Olympic-style SVGs, forced to
+   `currentColor` so the same per-emoji accent tints them too. */
+.pictogram-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+}
+.pictogram-icon svg {
+  width: 1em;
+  height: 1em;
+  display: block;
+}
+.pictogram-icon svg path,
+.pictogram-icon svg circle,
+.pictogram-icon svg rect,
+.pictogram-icon svg polygon,
+.pictogram-icon svg ellipse {
+  fill: currentColor !important;
+}
+
 h1,
 h2,
 h3 {

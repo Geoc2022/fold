@@ -16,6 +16,8 @@ import { TagBar } from '../components/TagBar'
 import { ViewToggle, type HomeView } from '../components/ViewToggle'
 
 const CODE_PATTERN = /^[a-zA-Z]{4}$/
+const ICON_STYLE_LABEL = { color: 'Color', noto: 'Noto mono', pictogram: 'Pictogram' } as const
+const ICON_STYLE_GLYPH = { color: '🎨', noto: 'Ⓝ', pictogram: '🏅' } as const
 const SORT_KEYS: SortKey[] = ['newest', 'oldest', 'runs', 'served', 'commit', 'name']
 
 function sortActivities(list: ActivityView[], key: SortKey): ActivityView[] {
@@ -225,9 +227,9 @@ export function HomePage() {
           <button
             className="icon-btn"
             onClick={toggleIconStyle}
-            title={iconStyle === 'color' ? 'Icon style: Color (click for Noto mono)' : 'Icon style: Noto mono (click for Color)'}
+            title={`Icon style: ${ICON_STYLE_LABEL[iconStyle]} (click to cycle)`}
           >
-            {iconStyle === 'color' ? '🎨' : 'Ⓝ'}
+            {ICON_STYLE_GLYPH[iconStyle]}
           </button>
           <button className="icon-btn" onClick={refresh} title="Refresh">
             ↻
