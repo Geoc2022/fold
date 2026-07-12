@@ -1177,3 +1177,46 @@ label .opt {
   width: 80px;
   accent-color: #111827;
 }
+
+/* ---- biology page (/biology) ---- */
+.biology-page {
+  position: fixed;
+  inset: 0;
+  background: #ffffff;
+  overflow: hidden;
+  color: #111827;
+}
+.bio-help {
+  max-width: min(320px, calc(100vw - 28px));
+}
+.bio-sliders {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.bio-slider-row {
+  display: grid;
+  grid-template-columns: 90px 1fr 36px;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 12px;
+  color: #374151;
+}
+.bio-slider-label {
+  color: #6b7280;
+  white-space: nowrap;
+}
+.bio-slider-val {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: #111827;
+  font-weight: 600;
+}
+.bio-slider-row input[type='range'] {
+  width: 100%;
+  accent-color: #111827;
+}
+.bio-hint {
+  color: #9ca3af;
+  font-size: 11px;
+}
