@@ -33,18 +33,6 @@ export function relativeTime(ms: number, now: number = Date.now()): string {
   }
 }
 
-export function shortDateTime(ms: number): string {
-  try {
-    return new Date(ms).toLocaleString(undefined, {
-      weekday: 'short',
-      hour: 'numeric',
-      minute: '2-digit',
-    })
-  } catch {
-    return new Date(ms).toISOString()
-  }
-}
-
 /** Convert a <input type="datetime-local"> value to epoch ms, or null. */
 export function localInputToMs(value: string): number | null {
   if (!value) return null

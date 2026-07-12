@@ -1,47 +1,44 @@
 import { useEffect, useRef, useState } from 'react'
-import { api } from '../api'
-import type { ActivityView, ParticipantView, Person } from '../types'
+import { enablePushNotifications } from '../push-client'
+import { DEFAULT_ETA_MIN, HOLD_MS, etaFromHold, etaRemaining, visualState } from '../nodeVisual'
+import type { ActivityView, ParticipantView } from '../types'
 
 interface Props {
   activity: ActivityView
   myParticipant: ParticipantView | null
-  me: Person
-  onMeChanged: (p: Person) => void
   theme: 'light' | 'dark'
   onThemeToggle: () => void
   onInterested: () => Promise<void>
   onCommit: (etaMinutes: number) => Promise<void>
+  onUndo: () => Promise<void>
+  onInfo: () => void
   onProposeRun: () => void
   onAlert: (message: string) => void
 }
 
-const HOLD_MS = 5_000
-const MIN_ETA = 5
-const MAX_ETA = 30
 const HELP_URL = 'https://github.com/CHANGE_ME/fold'
 
 export function RoomPanel({
   activity,
   myParticipant,
-  me,
-  onMeChanged,
   theme,
   onThemeToggle,
   onInterested,
   onCommit,
+  onUndo,
+  onInfo,
   onProposeRun,
   onAlert,
 }: Props) {
   const [busy, setBusy] = useState(false)
   const [holdMs, setHoldMs] = useState(0)
   const [now, setNow] = useState(Date.now())
-  const [namePrompt, setNamePrompt] = useState(false)
-  const [handleInput, setHandleInput] = useState('')
   const startRef = useRef<number | null>(null)
   const rafRef = useRef(0)
 
-  const eta = etaFromHold(holdMs)
   const run = activity.current_run
+  const myVisualState = myParticipant ? visualState(myParticipant, now) : 'lurker'
+  const canUndo = run && myParticipant !== null
 
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 1000)
@@ -57,17 +54,11 @@ export function RoomPanel({
     rafRef.current = requestAnimationFrame(tick)
   }
 
-  async function interested() {
-    // People are only asked for a handle the first time they express
-    // interest in a room, not up front.
-    if (me.handle.trim().toLowerCase() === 'guest') {
-      setHandleInput('')
-      setNamePrompt(true)
-      return
-    }
+  async function runBusy(fn: () => Promise<void>) {
+    if (busy) return
     setBusy(true)
     try {
-      await onInterested()
+      await fn()
     } catch (err) {
       onAlert(err instanceof Error ? err.message : String(err))
     } finally {
@@ -75,21 +66,8 @@ export function RoomPanel({
     }
   }
 
-  async function confirmName(e: React.FormEvent) {
-    e.preventDefault()
-    const handle = handleInput.trim()
-    if (!handle) return
-    setBusy(true)
-    try {
-      const updated = await api.updateSession({ handle })
-      onMeChanged(updated)
-      setNamePrompt(false)
-      await onInterested()
-    } catch (err) {
-      onAlert(err instanceof Error ? err.message : String(err))
-    } finally {
-      setBusy(false)
-    }
+  async function interested() {
+    await runBusy(onInterested)
   }
 
   function startCommit() {
@@ -105,26 +83,18 @@ export function RoomPanel({
     cancelAnimationFrame(rafRef.current)
     startRef.current = null
     setHoldMs(finalHold)
-    const finalEta = etaFromHold(finalHold)
-    setBusy(true)
-    try {
-      await onCommit(finalEta)
+    await runBusy(async () => {
+      await onCommit(etaFromHold(finalHold))
       setHoldMs(0)
-    } catch (err) {
-      onAlert(err instanceof Error ? err.message : String(err))
-    } finally {
-      setBusy(false)
-    }
+    })
   }
 
   async function share() {
     const url = `${window.location.origin}/${activity.code}`
     try {
-      if (navigator.share) {
-        await navigator.share({ title: activity.title, url })
-      } else {
-        await navigator.clipboard.writeText(url)
-      }
+      if (navigator.share) await navigator.share({ title: activity.title, url })
+      else await navigator.clipboard.writeText(url)
+      onAlert('Link copied')
     } catch (err) {
       onAlert(err instanceof Error ? err.message : String(err))
     }
@@ -132,16 +102,7 @@ export function RoomPanel({
 
   async function enablePush() {
     try {
-      if (!('Notification' in window)) {
-        onAlert('Notifications are not supported here')
-        return
-      }
-      const cfg = await api.pushPublicKey()
-      if (!cfg.enabled || !cfg.public_key) {
-        onAlert('Push is not configured yet')
-        return
-      }
-      onAlert('Use the homepage notification panel to enable push for now')
+      onAlert(await enablePushNotifications())
     } catch (err) {
       onAlert(err instanceof Error ? err.message : String(err))
     }
@@ -149,21 +110,15 @@ export function RoomPanel({
 
   const action = (() => {
     if (!run) {
-      return (
-        <button className="room-action propose" onClick={onProposeRun}>
-          Propose a run
-        </button>
-      )
+      return <button className="room-action propose" onClick={onProposeRun}>Propose a run</button>
     }
-    if (activity.my_state === 'committed') {
-      const remaining = etaRemaining(myParticipant?.arrival_at ?? null, now)
-      return (
-        <button className="room-action committed" disabled>
-          {remaining}min
-        </button>
-      )
+    if (myVisualState === 'arrived') {
+      return <button className="room-action arrived" disabled>arrived</button>
     }
-    if (activity.my_state === 'interested') {
+    if (myVisualState === 'committed') {
+      return <button className="room-action committed" disabled>{etaRemaining(myParticipant?.arrival_at ?? null, now)}min</button>
+    }
+    if (myVisualState === 'interested') {
       return (
         <button
           className="room-action commit"
@@ -173,15 +128,11 @@ export function RoomPanel({
           onPointerCancel={finishCommit}
           onPointerLeave={finishCommit}
         >
-          {busy ? '...' : `${eta}min`}
+          {busy ? '...' : `${etaFromHold(holdMs)}min`}
         </button>
       )
     }
-    return (
-      <button className="room-action interested" disabled={busy} onClick={interested}>
-        {busy ? '...' : 'Interested'}
-      </button>
-    )
+    return <button className="room-action interested" disabled={busy} onClick={interested}>{busy ? '...' : 'Interested'}</button>
   })()
 
   return (
@@ -191,76 +142,24 @@ export function RoomPanel({
           {theme === 'light' ? '◐' : '◑'}
         </button>
         <div className="panel-separator" />
+        <button className="panel-button icon" disabled={!canUndo || busy} onClick={() => runBusy(onUndo)} title={`Undo to ${undoLabel(myVisualState)}`}>
+          ↩︎
+        </button>
         {action}
         <div className="panel-separator" />
-        <button className="panel-button icon" onClick={share} title="Share">
-          <ShareIcon />
-        </button>
-        <button className="panel-button icon" onClick={enablePush} title="Notifications">
-          <BellIcon />
-        </button>
-        <a
-          className="panel-button icon"
-          href={HELP_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          title="Help"
-        >
-          ?
-        </a>
+        <button className="panel-button icon noto-emoji" onClick={share} title="Share">🔗</button>
+        <button className="panel-button icon noto-emoji" onClick={enablePush} title="Notifications">🔔</button>
+        <button className="panel-button icon" onClick={onInfo} title="Room info">ℹ︎</button>
+        <a className="panel-button icon" href={HELP_URL} target="_blank" rel="noopener noreferrer" title="Help">?</a>
       </div>
 
-      {namePrompt && (
-        <div className="modal-backdrop" onClick={() => setNamePrompt(false)}>
-          <form className="card name-prompt" onClick={(e) => e.stopPropagation()} onSubmit={confirmName}>
-            <h2>What should people call you?</h2>
-            <input
-              autoFocus
-              maxLength={40}
-              placeholder="e.g. Sam"
-              value={handleInput}
-              onChange={(e) => setHandleInput(e.target.value)}
-            />
-            <div className="row">
-              <button type="button" className="ghost" onClick={() => setNamePrompt(false)}>
-                Cancel
-              </button>
-              <button type="submit" className="primary" disabled={busy || !handleInput.trim()}>
-                {busy ? '…' : "That's me"}
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
     </>
   )
 }
 
-function etaFromHold(holdMs: number) {
-  const t = Math.min(1, Math.max(0, holdMs / HOLD_MS))
-  const eased = t * t
-  return Math.max(MIN_ETA, Math.min(MAX_ETA, Math.round(MAX_ETA - 25 * eased)))
-}
-
-function etaRemaining(arrivalAt: number | null, now: number) {
-  if (arrivalAt == null) return 0
-  return Math.max(0, Math.ceil((arrivalAt - now) / 60000))
-}
-
-function ShareIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M8 12h8M13 7l5 5-5 5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M4 12a8 8 0 0 1 8-8" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-    </svg>
-  )
-}
-
-function BellIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
-      <path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M10 21h4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-    </svg>
-  )
+function undoLabel(state: 'lurker' | 'interested' | 'committed' | 'arrived') {
+  if (state === 'arrived') return `${DEFAULT_ETA_MIN}min committed`
+  if (state === 'committed') return 'interested'
+  if (state === 'interested') return 'lurking'
+  return 'previous state'
 }

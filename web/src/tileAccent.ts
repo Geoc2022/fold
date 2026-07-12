@@ -1,20 +1,17 @@
-// Each tile's accent color is a deterministic hash of the activity's title
-// (not the emoji -- we don't inspect rendered glyph pixels anymore), picked
-// from the Nord "aurora"/"frost" hues only. Nord0-6 are backgrounds/panels
-// and are intentionally excluded so every tile gets an actual color.
-
 import { hashUnit } from './hash'
 
 const ACCENT_COLORS = [
-  '#8FBCBB', // nord7
-  '#88C0D0', // nord8
-  '#81A1C1', // nord9
-  '#5E81AC', // nord10
-  '#BF616A', // nord11
-  '#D08770', // nord12
-  '#EBCB8B', // nord13
-  '#A3BE8C', // nord14
-  '#B48EAD', // nord15
+  '#00287F',
+  '#0049AA',
+  '#0078D0',
+  '#005A46',
+  '#00804D',
+  '#00A651',
+  '#980F30',
+  '#BF192B',
+  '#F0282D',
+  '#E67324',
+  '#FA841E',
 ]
 
 export function tileAccentColor(title: string): string {

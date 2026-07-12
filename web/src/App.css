@@ -1,66 +1,81 @@
 /* ============================================================
-   Nord theme (https://github.com/nordtheme/nord) -- light/dark
-   toggled via [data-theme] on <html>, shared by every page.
+   fold theme -- light/dark toggled via [data-theme] on <html>.
    ============================================================ */
 :root {
-  --nord0: #2e3440;
-  --nord1: #3b4252;
-  --nord2: #434c5e;
-  --nord3: #4c566a;
-  --nord4: #d8dee9;
-  --nord5: #e5e9f0;
-  --nord6: #eceff4;
-  --nord7: #8fbcbb;
-  --nord8: #88c0d0;
-  --nord9: #81a1c1;
-  --nord10: #5e81ac;
-  --nord11: #bf616a;
-  --nord12: #d08770;
-  --nord13: #ebcb8b;
-  --nord14: #a3be8c;
-  --nord15: #b48ead;
+  --white: #ffffff;
+  --blue-900: #00287f;
+  --blue-700: #0049aa;
+  --blue-500: #0078d0;
+  --blue-400: #00b4eb;
+  --blue-300: #5ed6ff;
+  --blue-100: #abebff;
+  --orange-700: #e67324;
+  --orange-500: #fa841e;
+  --yellow-500: #ffb114;
+  --yellow-300: #ffce19;
+  --yellow-200: #ffe045;
+  --yellow-100: #fff08c;
+  --green-900: #005a46;
+  --green-700: #00804d;
+  --green-500: #00a651;
+  --green-400: #00cb50;
+  --green-300: #6bdb83;
+  --green-100: #aae8b8;
+  --red-900: #980f30;
+  --red-700: #bf192b;
+  --red-500: #f0282d;
+  --red-400: #ff555f;
+  --red-300: #ff9196;
+  --red-100: #ffc7c9;
+  --black: #000000;
+  --gray-900: #2e2e2e;
+  --gray-700: #5a5a5a;
+  --gray-500: #969696;
+  --gray-300: #b4b4b4;
+  --gray-100: #e5e5e5;
 
+  --font-sans: "Manrope", ui-sans-serif, system-ui, sans-serif;
   --radius: 14px;
-  /* A single filled-button/underline color that reads on both bg tones. */
-  --accent-solid: var(--nord10);
-  --ok: var(--nord14);
-  --warn: var(--nord13);
-  --danger: var(--nord11);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
-    Helvetica, Arial, sans-serif;
+  --tile-text: var(--white);
+  font-family: var(--font-sans);
 }
 
-/* Every themeable color used on the page lives here, as one of two ramps
-   (dark/light). --surface-3 is derived (not a literal color): it nudges
-   --panel-2 a bit toward the current --text color, which is automatically
-   "one step lighter" in dark mode and "one step darker" in light mode --
-   i.e. always the next step *away* from the background, in either theme. */
 html,
 html[data-theme="dark"] {
   color-scheme: dark;
-  --bg: var(--nord0);
-  --panel: var(--nord1);
-  --panel-2: var(--nord2);
-  --surface-3: color-mix(in srgb, var(--panel-2) 78%, var(--text) 14%);
-  --border: var(--nord3);
-  --text: var(--nord6);
-  --muted: var(--nord4);
-  --accent: var(--nord8);
-  --accent-2: var(--nord7);
+  --bg: var(--black);
+  --panel: var(--gray-900);
+  --panel-2: #1a1a1a;
+  --surface-3: var(--gray-700);
+  --border: var(--gray-700);
+  --text: var(--gray-100);
+  --muted: var(--gray-500);
+  --accent: var(--blue-400);
+  --accent-2: var(--blue-300);
+  --accent-solid: var(--blue-500);
+  --ok: var(--green-400);
+  --warn: var(--yellow-500);
+  --danger: var(--red-400);
+  --on-accent: var(--white);
   --shadow: rgba(0, 0, 0, 0.45);
 }
 html[data-theme="light"] {
   color-scheme: light;
-  --bg: var(--nord6);
-  --panel: #ffffff;
-  --panel-2: var(--nord4);
-  --surface-3: color-mix(in srgb, var(--panel-2) 78%, var(--text) 14%);
-  --border: var(--nord4);
-  --text: var(--nord0);
-  --muted: var(--nord3);
-  --accent: var(--nord10);
-  --accent-2: var(--nord9);
-  --shadow: rgba(46, 52, 64, 0.22);
+  --bg: var(--white);
+  --panel: var(--white);
+  --panel-2: var(--gray-100);
+  --surface-3: var(--gray-300);
+  --border: var(--gray-100);
+  --text: var(--gray-900);
+  --muted: var(--gray-700);
+  --accent: var(--blue-500);
+  --accent-2: var(--blue-700);
+  --accent-solid: var(--blue-700);
+  --ok: var(--green-500);
+  --warn: var(--yellow-500);
+  --danger: var(--red-500);
+  --on-accent: var(--white);
+  --shadow: rgba(0, 40, 127, 0.18);
 }
 
 body {
@@ -95,19 +110,8 @@ a:visited {
   color: var(--accent);
 }
 
-/* Visually-hidden but still readable by screen readers / assistive tech. */
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-}
-
 button,
 a.primary,
-a.secondary,
 a.ghost,
 a.sm,
 a.danger {
@@ -131,16 +135,11 @@ button:disabled {
 .primary {
   background: var(--accent-solid);
   border-color: transparent;
-  color: var(--nord6);
+  color: var(--on-accent);
   font-weight: 600;
 }
 .primary:hover:not(:disabled) {
   filter: brightness(1.1);
-}
-.secondary {
-  background: var(--panel-2);
-  border-color: var(--accent);
-  color: var(--accent);
 }
 .ghost {
   background: transparent;
@@ -356,7 +355,7 @@ label .opt {
 .tag-pill.active {
   background: var(--accent-solid);
   border-color: transparent;
-  color: var(--nord6);
+   color: var(--on-accent);
   font-weight: 600;
 }
 .view-toggle {
@@ -379,7 +378,7 @@ label .opt {
 }
 .view-toggle button.active {
   background: var(--accent-solid);
-  color: var(--nord6);
+   color: var(--on-accent);
 }
 .sort-select {
   flex-direction: row;
@@ -431,7 +430,7 @@ label .opt {
   gap: 0.6rem;
   /* background is set inline per-tile (hashed accent color); text/icon use
      the page background color so they read as a solid, inverted swatch. */
-  color: var(--bg);
+  color: var(--tile-text);
   border: none;
   border-radius: 0;
   padding: 0.5rem;
@@ -792,7 +791,7 @@ label .opt {
 .grouping-toggle button.active {
   background: var(--accent-solid);
   border-color: transparent;
-  color: var(--nord6);
+   color: var(--on-accent);
   font-weight: 600;
 }
 
@@ -875,67 +874,13 @@ label .opt {
   font-weight: 600;
 }
 
-/* ---- notifications (kept for when the Activity panel returns) ---- */
-.feed-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 0.6rem;
-}
 .pill {
   background: var(--accent-solid);
-  color: var(--nord6);
+  color: var(--on-accent);
   border-radius: 999px;
   padding: 0 0.45rem;
   font-size: 0.72rem;
   margin-left: 0.35rem;
-}
-.feed-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.55rem;
-  max-height: 60vh;
-  overflow-y: auto;
-}
-.feed-list li {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: 0.5rem;
-  align-items: start;
-  font-size: 0.85rem;
-}
-.feed-time {
-  color: var(--muted);
-  font-size: 0.72rem;
-  white-space: nowrap;
-}
-.feed .empty {
-  color: var(--muted);
-  font-size: 0.85rem;
-}
-
-/* ---- push ---- */
-.side-card {
-  padding: 0.85rem 1rem;
-}
-.push-panel {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.7rem;
-  flex-wrap: wrap;
-}
-.push-panel strong {
-  font-size: 0.9rem;
-}
-.push-panel .hint {
-  margin: 0.15rem 0 0;
-}
-.push-note {
-  margin: 0;
 }
 
 /* ---- activity room (/ABCD) ---- */
@@ -945,7 +890,7 @@ label .opt {
   overflow: hidden;
   background: var(--bg);
   color: var(--text);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-family: var(--font-sans);
 }
 .room-canvas {
   display: block;
@@ -982,9 +927,9 @@ label .opt {
   bottom: 62px;
   z-index: 120;
   max-width: min(360px, calc(100vw - 32px));
-  background: var(--nord11);
-  color: var(--nord6);
-  border: 1px solid var(--nord11);
+  background: var(--danger);
+  color: var(--on-accent);
+  border: 1px solid var(--danger);
   border-radius: 10px;
   padding: 0.7rem 0.9rem;
   font-size: 0.9rem;
@@ -1018,8 +963,6 @@ label .opt {
   color: var(--accent);
 }
 
-/* The floating action bar is intentionally a constant dark Nord overlay in
-   both themes (contrast against whatever's under it on the canvas). */
 .global-panel {
   position: fixed;
   left: 50%;
@@ -1028,11 +971,13 @@ label .opt {
   min-height: 46px;
   padding: 4px 12px;
   z-index: 101;
-  background: rgba(46, 52, 64, 0.94);
+  background: color-mix(in srgb, var(--panel) 92%, var(--bg) 8%);
+  border: 1px solid var(--border);
+  border-bottom: none;
   border-radius: 8px 8px 0 0;
   text-align: center;
   font-size: 14px;
-  color: var(--nord6);
+  color: var(--text);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1043,9 +988,9 @@ label .opt {
 .room-action {
   display: inline-block;
   background: transparent;
-  border: 1px solid var(--nord3);
+  border: 1px solid var(--border);
   border-radius: 6px;
-  color: var(--nord6);
+  color: var(--text);
   padding: 6px 16px;
   cursor: pointer;
   font-size: 14px;
@@ -1053,7 +998,7 @@ label .opt {
 }
 .panel-button:hover:not(:disabled),
 .room-action:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--surface-3);
 }
 .panel-button.icon {
   border: none;
@@ -1066,49 +1011,62 @@ label .opt {
   justify-content: center;
 }
 .room-action.interested {
-  border-color: var(--nord14);
-  color: var(--nord14);
+  border-color: var(--ok);
+  color: var(--ok);
 }
 .room-action.commit {
-  border-color: var(--nord13);
-  color: var(--nord13);
+  border-color: var(--warn);
+  color: var(--warn);
   min-width: 140px;
 }
 .room-action.committed {
-  border-color: var(--nord13);
-  color: var(--nord13);
+  border-color: var(--warn);
+  color: var(--warn);
   opacity: 0.78;
 }
+.room-action.arrived {
+  border-color: var(--danger);
+  color: var(--danger);
+  opacity: 0.82;
+}
 .room-action.propose {
-  border-color: var(--nord8);
-  color: var(--nord8);
+  border-color: var(--accent);
+  color: var(--accent);
   min-width: 140px;
 }
 .panel-separator {
-  border-left: 1px solid var(--nord3);
+  border-left: 1px solid var(--border);
   height: 24px;
   margin: 0 2px;
 }
-.hold-meter {
-  width: 70px;
-  height: 4px;
-  background: rgba(255, 255, 255, 0.14);
-  border-radius: 999px;
-  overflow: hidden;
-  margin-left: -8px;
+.room-visual-panel {
+  left: 16px;
+  top: 44px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  border-color: var(--border);
+  color: var(--text);
 }
-.hold-meter span {
-  display: block;
-  height: 100%;
-  background: var(--nord13);
+.room-visual-panel .bio-slider-row,
+.room-visual-panel .bio-slider-val {
+  color: var(--text);
 }
-.panel-message {
-  color: var(--nord5);
-  font-size: 12px;
-  max-width: 180px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.room-visual-panel .bio-slider-label,
+.room-visual-panel .bio-section-title,
+.room-visual-panel .bio-hint {
+  color: var(--muted);
+}
+.room-visual-panel input[type='range'] {
+  accent-color: var(--accent);
+}
+.room-info-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+.activity-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
 }
 @media (max-width: 660px) {
   .global-panel {
@@ -1119,10 +1077,6 @@ label .opt {
   .panel-button,
   .room-action {
     padding: 6px 10px;
-  }
-  .hold-meter,
-  .panel-message {
-    display: none;
   }
 }
 
@@ -1246,5 +1200,3 @@ label .opt {
   color: #9ca3af;
   margin-top: 0.2rem;
 }
-
-

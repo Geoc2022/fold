@@ -1,12 +1,17 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
 import { api, ensureSession } from '../api'
+import { ActivityInfo } from '../components/ActivityInfo'
 import { useTheme } from '../theme'
 import { useRoom } from '../useRoom'
 import type { Person } from '../types'
 import { CreateRunForm } from '../components/CreateRunForm'
 import { RoomCanvas } from '../components/RoomCanvas'
 import { RoomPanel } from '../components/RoomPanel'
+import { DEFAULT_ETA_MIN, DEFAULT_VISUAL_CONFIG, visualState, type VisualConfig } from '../nodeVisual'
+import { readJson, writeJson } from '../storage'
+
+const VISUAL_KEY = 'fold.room_visual'
 
 export function ActivityRoom() {
   const params = useParams()
@@ -22,6 +27,11 @@ export function ActivityRoom() {
   const { theme, toggleTheme } = useTheme()
   const [alert, setAlert] = useState<string | null>(null)
   const [proposingRun, setProposingRun] = useState(true)
+  const [showInfo, setShowInfo] = useState(false)
+  const [showVisual, setShowVisual] = useState(false)
+  const [namePrompt, setNamePrompt] = useState(false)
+  const [handleInput, setHandleInput] = useState('')
+  const [visual, setVisual] = useState<VisualConfig>(() => readJson(VISUAL_KEY, DEFAULT_VISUAL_CONFIG))
   const { data, error, loading, notFound, refresh } = useRoom(code, me !== null && code !== null)
 
   useEffect(() => {
@@ -36,6 +46,18 @@ export function ActivityRoom() {
     return () => {
       cancelled = true
     }
+  }, [])
+
+  useEffect(() => {
+    writeJson(VISUAL_KEY, visual)
+  }, [visual])
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key.toLowerCase() === 'v' && !isTypingTarget(e.target)) setShowVisual((v) => !v)
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
   }, [])
 
   // Re-open the propose-run prompt any time the room becomes freshly empty.
@@ -65,6 +87,7 @@ export function ActivityRoom() {
     return <RoomMessage title="fold" message={error ?? 'Loading activity...'} />
   }
 
+  const person = me
   const activity = data.activity
   const myParticipant = data.participants.find((p) => p.is_me) ?? null
 
@@ -75,6 +98,22 @@ export function ActivityRoom() {
 
   async function interest() {
     if (!activity.current_run) return
+    if (person.handle.trim().toLowerCase() === 'guest') {
+      setHandleInput('')
+      setNamePrompt(true)
+      return
+    }
+    await api.interest(activity.current_run.id)
+    refresh()
+  }
+
+  async function confirmName(e: React.FormEvent) {
+    e.preventDefault()
+    const handle = handleInput.trim()
+    if (!handle || !activity.current_run) return
+    const updated = await api.updateSession({ handle })
+    setMe(updated)
+    setNamePrompt(false)
     await api.interest(activity.current_run.id)
     refresh()
   }
@@ -85,24 +124,71 @@ export function ActivityRoom() {
     refresh()
   }
 
+  async function undo() {
+    if (!activity.current_run || !myParticipant) return
+    const state = visualState(myParticipant, Date.now())
+    if (state === 'arrived') await api.commit(activity.current_run.id, DEFAULT_ETA_MIN)
+    else if (state === 'committed') await api.interest(activity.current_run.id)
+    else if (state === 'interested') await api.withdraw(activity.current_run.id)
+    refresh()
+  }
+
   return (
     <main className={`room-page room-${theme}`}>
-      <RoomCanvas activity={activity} participants={data.participants} me={me} theme={theme} />
+      <RoomCanvas
+        activity={activity}
+        participants={data.participants}
+        me={me}
+        visual={visual}
+        onInterested={interest}
+        onCommit={commit}
+        onAlert={showAlert}
+      />
       <div className="room-code">/{activity.code}</div>
       {error && <div className="room-error">{error}</div>}
       {alert && <div className="room-alert">{alert}</div>}
+      {showVisual && <VisualPanel visual={visual} onChange={setVisual} />}
       <RoomPanel
         activity={activity}
         myParticipant={myParticipant}
-        me={me}
-        onMeChanged={setMe}
         theme={theme}
         onThemeToggle={toggleTheme}
         onInterested={interest}
         onCommit={commit}
+        onUndo={undo}
+        onInfo={() => setShowInfo(true)}
         onProposeRun={() => setProposingRun(true)}
         onAlert={showAlert}
       />
+      {showInfo && (
+        <div className="modal-backdrop" onClick={() => setShowInfo(false)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <section className="card room-info-card">
+              <h2>{activity.title}</h2>
+              <ActivityInfo activity={activity} now={data.server_time} showLaunch={false} />
+              <button className="ghost" onClick={() => setShowInfo(false)}>Close</button>
+            </section>
+          </div>
+        </div>
+      )}
+      {namePrompt && (
+        <div className="modal-backdrop" onClick={() => setNamePrompt(false)}>
+          <form className="card name-prompt" onClick={(e) => e.stopPropagation()} onSubmit={confirmName}>
+            <h2>What should people call you?</h2>
+            <input
+              autoFocus
+              maxLength={40}
+              placeholder="e.g. Sam"
+              value={handleInput}
+              onChange={(e) => setHandleInput(e.target.value)}
+            />
+            <div className="row">
+              <button type="button" className="ghost" onClick={() => setNamePrompt(false)}>Cancel</button>
+              <button type="submit" className="primary" disabled={!handleInput.trim()}>That's me</button>
+            </div>
+          </form>
+        </div>
+      )}
       {!activity.current_run && proposingRun && (
         <div className="modal-backdrop" onClick={() => setProposingRun(false)}>
           <div className="modal-card" onClick={(e) => e.stopPropagation()}>
@@ -119,6 +205,43 @@ export function ActivityRoom() {
       )}
     </main>
   )
+}
+
+function VisualPanel({ visual, onChange }: { visual: VisualConfig; onChange: (v: VisualConfig) => void }) {
+  const patch = (p: Partial<VisualConfig>) => onChange({ ...visual, ...p })
+  return (
+    <div className="room-visual-panel physics-help bio-help">
+      <div className="bio-section-title">Visual</div>
+      <div className="bio-sliders">
+        <Slider label="node size" min={6} max={50} step={1} value={visual.nodeRadius} fmt={(v) => `${v}px`} onChange={(v) => patch({ nodeRadius: v })} />
+        <Slider label="outline" min={0} max={12} step={0.5} value={visual.outlineWidth} fmt={(v) => `${v}px`} onChange={(v) => patch({ outlineWidth: v })} />
+        <Slider label="tightness" min={0} max={3} step={0.1} value={visual.clusterTightness} fmt={(v) => v.toFixed(1)} onChange={(v) => patch({ clusterTightness: v })} />
+      </div>
+      <span className="bio-hint">Press v to hide · tap your node for interest · hold to commit · drag committed to set ETA</span>
+    </div>
+  )
+}
+
+function Slider({ label, min, max, step, value, fmt, onChange }: {
+  label: string
+  min: number
+  max: number
+  step: number
+  value: number
+  fmt: (v: number) => string
+  onChange: (v: number) => void
+}) {
+  return (
+    <label className="bio-slider-row">
+      <span className="bio-slider-label">{label}</span>
+      <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} />
+      <span className="bio-slider-val">{fmt(value)}</span>
+    </label>
+  )
+}
+
+function isTypingTarget(target: EventTarget | null) {
+  return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement
 }
 
 function RoomMessage({ title, message }: { title: string; message: string }) {

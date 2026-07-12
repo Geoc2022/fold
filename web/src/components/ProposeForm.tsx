@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ApiError, api } from '../api'
 import { groupingIsFeasible } from '../grouping'
+import { readJson, writeJson } from '../storage'
 import type { ActivityView, GroupingMode } from '../types'
 import { EmojiPicker } from './EmojiPicker'
 import { GroupPreview } from './GroupPreview'
@@ -27,20 +28,11 @@ interface LastProposal {
 }
 
 function loadLastProposal(): LastProposal {
-  try {
-    const raw = localStorage.getItem(LAST_PROPOSAL_KEY)
-    return raw ? (JSON.parse(raw) as LastProposal) : {}
-  } catch {
-    return {}
-  }
+  return readJson(LAST_PROPOSAL_KEY, {})
 }
 
 function saveLastProposal(v: LastProposal) {
-  try {
-    localStorage.setItem(LAST_PROPOSAL_KEY, JSON.stringify(v))
-  } catch {
-    /* ignore storage failures (private mode) */
-  }
+  writeJson(LAST_PROPOSAL_KEY, v)
 }
 
 function randomCode(): string {

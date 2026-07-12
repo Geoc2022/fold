@@ -14,7 +14,10 @@ interface Props {
 export function GroupPreview({ mode, min, max, groupMultiple }: Props) {
   const [seed, setSeed] = useState(0)
   const preview = useMemo(
-    () => sampleGroupPreview(mode, min, max, groupMultiple),
+    () => {
+      void seed
+      return sampleGroupPreview(mode, min, max, groupMultiple)
+    },
     [mode, min, max, groupMultiple, seed],
   )
 

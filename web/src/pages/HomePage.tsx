@@ -16,6 +16,7 @@ import { ViewToggle, type HomeView } from '../components/ViewToggle'
 
 const CODE_PATTERN = /^[a-zA-Z]{4}$/
 const SORT_KEYS: SortKey[] = ['newest', 'oldest', 'runs', 'served', 'commit', 'name']
+const EMPTY_ACTIVITIES: ActivityView[] = []
 
 function sortActivities(list: ActivityView[], key: SortKey): ActivityView[] {
   const arr = [...list]
@@ -113,7 +114,7 @@ export function HomePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams])
 
-  const activities = data?.activities ?? []
+  const activities = data?.activities ?? EMPTY_ACTIVITIES
   const now = data?.server_time ?? Date.now()
 
   const categories = useMemo(() => {

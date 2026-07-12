@@ -1,12 +1,13 @@
-// The picker is a plain scroll through every emoji Noto Emoji supports.
-// Keywords come from `emojilib` (MIT, github.com/muan/emojilib -- the
-// dataset behind GitHub's own emoji picker) purely as a source of emoji
-// characters to list; we don't do any keyword search/ranking. Shipped as a
-// lazily-fetched static asset so it doesn't bloat the main bundle for
-// people who never open the picker.
-
 let cache: string[] | null = null
 let inflight: Promise<string[]> | null = null
+
+function isNotoSingleGlyph(emoji: string): boolean {
+  return !/\u200d/u.test(emoji) &&
+    !/\p{Regional_Indicator}/u.test(emoji) &&
+    !/[\u{1F3FB}-\u{1F3FF}]/u.test(emoji) &&
+    !/[\u{E0020}-\u{E007F}]/u.test(emoji) &&
+    !/\u20e3/u.test(emoji)
+}
 
 /** All emoji characters, in dataset order. */
 export function loadAllEmoji(): Promise<string[]> {
@@ -15,7 +16,7 @@ export function loadAllEmoji(): Promise<string[]> {
   inflight = fetch('/emoji-keywords.json')
     .then((r) => r.json())
     .then((data: Record<string, string[]>) => {
-      const all = Object.keys(data)
+      const all = Object.keys(data).filter(isNotoSingleGlyph)
       cache = all
       return all
     })

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { api } from '../api'
 import { localInputToMs } from '../format'
+import { readJson, writeJson } from '../storage'
 import type { ActivityView } from '../types'
 
 interface Props {
@@ -19,20 +20,11 @@ function storageKey(activityId: string): string {
 }
 
 function loadLastRun(activityId: string): LastRun {
-  try {
-    const raw = localStorage.getItem(storageKey(activityId))
-    return raw ? (JSON.parse(raw) as LastRun) : {}
-  } catch {
-    return {}
-  }
+  return readJson(storageKey(activityId), {})
 }
 
 function saveLastRun(activityId: string, v: LastRun) {
-  try {
-    localStorage.setItem(storageKey(activityId), JSON.stringify(v))
-  } catch {
-    /* ignore storage failures (private mode) */
-  }
+  writeJson(storageKey(activityId), v)
 }
 
 /** Light "propose a run" form shown when an activity's room is empty.

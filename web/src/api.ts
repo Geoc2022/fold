@@ -11,31 +11,20 @@ import type {
   RoomResponse,
   SyncResponse,
 } from './types'
+import { readString, removeItem, writeString } from './storage'
 
 const PERSON_KEY = 'fold.person_id'
 
-export function getPersonId(): string | null {
-  try {
-    return localStorage.getItem(PERSON_KEY)
-  } catch {
-    return null
-  }
+function getPersonId(): string | null {
+  return readString(PERSON_KEY)
 }
 
-export function setPersonId(id: string): void {
-  try {
-    localStorage.setItem(PERSON_KEY, id)
-  } catch {
-    /* ignore storage failures (private mode) */
-  }
+function setPersonId(id: string): void {
+  writeString(PERSON_KEY, id)
 }
 
 export function clearPersonId(): void {
-  try {
-    localStorage.removeItem(PERSON_KEY)
-  } catch {
-    /* ignore */
-  }
+  removeItem(PERSON_KEY)
 }
 
 export async function ensureSession(): Promise<Person> {
@@ -196,13 +185,6 @@ export const api = {
   cancel(runId: string): Promise<ActivityView> {
     return request<ActivityView>(`/api/runs/${runId}/cancel`, {
       method: 'POST',
-    })
-  },
-
-  markRead(ids?: string[]): Promise<unknown> {
-    return request('/api/notifications/read', {
-      method: 'POST',
-      body: ids ? { ids } : {},
     })
   },
 

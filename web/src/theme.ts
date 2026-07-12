@@ -1,7 +1,3 @@
-// Shared light/dark theme (Nord palette) used across the whole app -- the
-// homepage and the activity rooms both toggle the same `data-theme`
-// attribute/storage key, via the ◐ / ◑ control.
-
 import { useEffect, useState } from 'react'
 
 export type Theme = 'light' | 'dark'
