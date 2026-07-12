@@ -420,10 +420,14 @@ label .opt {
 .tile-face {
   flex: 1;
   width: 100%;
-  display: flex;
-  flex-direction: column;
+  /* Two hard-partitioned rows (title, then icon) instead of a single
+     flex-centered stack -- grid tracks never overlap, so the title and
+     icon can't visually intersect even when a large glyph's painted
+     bounds exceed its own logical line-box. */
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   align-items: center;
-  justify-content: center;
+  justify-items: center;
   gap: 0.6rem;
   /* background is set inline per-tile (hashed accent color); text/icon use
      the page background color so they read as a solid, inverted swatch. */
@@ -432,6 +436,15 @@ label .opt {
   border-radius: 0;
   padding: 0.5rem;
   text-align: center;
+}
+.tile-icon-box {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
 }
 .tile-title {
   font-weight: 650;
@@ -1221,3 +1234,13 @@ label .opt {
   color: #9ca3af;
   font-size: 11px;
 }
+.bio-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #9ca3af;
+  margin-top: 0.2rem;
+}
+
+

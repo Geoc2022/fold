@@ -1,19 +1,8 @@
-// Biology sandbox — chemistry mechanics + automatic user simulation.
-//
-// Visual goals:
-//   - In-flight committed nodes have slight repulsion away from arrived groups.
-//   - Arrived groups have gravity toward the center (they stay put, effectively).
-//   - No line from node to center.
-//   - No ETA countdown unless the user is actively dragging that node.
-//   - Background rings fade out when the user is not dragging anything.
-//
-// Simulation: nodes spawn automatically on Vogel's phyllotaxis spiral just
-// outside the commit-time boundary, then probabilistically become interested
-// and then committed at rates controlled by the UI.
+// Biology sandbox — auto-simulation with Vogel spiral spawning.
 
 import { useEffect, useRef, useState } from 'react'
 
-type NodeState = 'lurker' | 'interested' | 'committed'
+type NodeState = 'lurker' | 'interested' | 'committed' | 'arrived'
 type GroupingMode = 'single' | 'parallel'
 
 interface Node {
@@ -24,14 +13,10 @@ interface Node {
   vy: number
   state: NodeState
   arrivalAt: number | null
-  // spawn-fly-out animation target
   targetX?: number
   targetY?: number
-  // stable directional angle from center (for inward commit path)
   angle: number
-  // which Vogel index this node was born at (for spiral determinism)
   vogelN: number
-  // true = created by the simulation, false = user-created
   simulated: boolean
 }
 
@@ -44,50 +29,67 @@ interface PointerState {
   dragging: boolean
 }
 
+interface Camera { x: number; y: number; scale: number }
+
 interface SimConfig {
-  spawnPerSec: number      // new nodes per second
-  interestRate: number     // probability per second a lurker becomes interested
-  commitRate: number       // probability per second an interested node commits
-  avgEtaSec: number        // mean commit ETA in seconds (exponential distribution)
-  maxNodes: number         // total nodes before simulation clears and restarts
+  spawnPerSec: number
+  interestRate: number
+  commitRate: number
+  avgEtaSec: number
+  maxNodes: number
 }
 
-const NODE_R = 22
+interface VisConfig {
+  nodeRadius: number
+  outlineWidth: number
+  clusterTightness: number
+}
+
 const HOLD_MS = 5_000
 const MIN_ETA_MS = 0
 const MAX_ETA_MS = 60 * 1000
-const WORLD_R = 280          // max commit-time orbit radius
-const VOGEL_C = 28           // spiral scale constant (pixels per sqrt(n))
-const PHI_RECIP_SQ = 1 / (((1 + Math.sqrt(5)) / 2) ** 2)  // 1/φ²
-
-// The innermost Vogel index where r >= WORLD_R (so we don't spawn inside the rings)
+const WORLD_R = 280
+const VOGEL_C = 28
+const PHI_RECIP_SQ = 1 / (((1 + Math.sqrt(5)) / 2) ** 2)
 const VOGEL_N_MIN = Math.ceil((WORLD_R / VOGEL_C) ** 2)
 
 export function BiologyPage() {
   const [mode, setMode] = useState<GroupingMode>('single')
   const [perGroup, setPerGroup] = useState(3)
-  const [cfg, setCfg] = useState<SimConfig>({
+  const [sim, setSim] = useState<SimConfig>({
     spawnPerSec: 0.8,
     interestRate: 0.3,
     commitRate: 0.2,
     avgEtaSec: 30,
     maxNodes: 40,
   })
+  const [vis, setVis] = useState<VisConfig>({
+    nodeRadius: 20,
+    outlineWidth: 2,
+    clusterTightness: 1.2,
+  })
 
-  const modeRef = useRef<GroupingMode>('single')
-  const perGroupRef = useRef(3)
-  const cfgRef = useRef<SimConfig>(cfg)
+  const modeRef = useRef(mode)
+  const perGroupRef = useRef(perGroup)
+  const simRef = useRef(sim)
+  const visRef = useRef(vis)
   modeRef.current = mode
   perGroupRef.current = perGroup
-  cfgRef.current = cfg
+  simRef.current = sim
+  visRef.current = vis
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const nodesRef = useRef<Node[]>([])
   const nextIdRef = useRef(1)
   const vogelCounterRef = useRef(VOGEL_N_MIN)
   const pointerRef = useRef<PointerState | null>(null)
+  const cameraRef = useRef<Camera>({ x: 0, y: 0, scale: 1 })
   const lastSimRef = useRef(performance.now())
   const spawnAccRef = useRef(0)
+  const pinchRef = useRef<{ dist: number } | null>(null)
+
+  function patchSim(p: Partial<SimConfig>) { setSim(prev => ({ ...prev, ...p })) }
+  function patchVis(p: Partial<VisConfig>) { setVis(prev => ({ ...prev, ...p })) }
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -105,64 +107,83 @@ export function BiologyPage() {
     resize()
     window.addEventListener('resize', resize)
 
-    // ---- pointer interaction (manual nodes) --------------------------------
-
-    const toWorld = (e: PointerEvent) => {
+    const toWorld = (cx: number, cy: number) => {
       const rect = canvas.getBoundingClientRect()
+      const cam = cameraRef.current
       return {
-        x: e.clientX - rect.left - rect.width / 2,
-        y: e.clientY - rect.top - rect.height / 2,
+        x: (cx - rect.left - rect.width / 2 - cam.x) / cam.scale,
+        y: (cy - rect.top - rect.height / 2 - cam.y) / cam.scale,
       }
     }
 
     const hit = (x: number, y: number) => {
+      const r = visRef.current.nodeRadius
       for (let i = nodesRef.current.length - 1; i >= 0; i--) {
         const n = nodesRef.current[i]
-        if (Math.hypot(n.x - x, n.y - y) <= NODE_R + 4) return n
+        if (Math.hypot(n.x - x, n.y - y) <= r + 4) return n
       }
       return null
     }
 
+    const activePointers = new Map<number, PointerEvent>()
+
     const onPointerDown = (e: PointerEvent) => {
-      const p = toWorld(e)
-      pointerRef.current = {
-        id: e.pointerId,
-        node: hit(p.x, p.y),
-        startX: p.x,
-        startY: p.y,
-        downAt: performance.now(),
-        dragging: false,
-      }
+      activePointers.set(e.pointerId, e)
       canvas.setPointerCapture(e.pointerId)
+      if (activePointers.size === 2) {
+        const pts = [...activePointers.values()]
+        pinchRef.current = { dist: Math.hypot(pts[1].clientX - pts[0].clientX, pts[1].clientY - pts[0].clientY) }
+        pointerRef.current = null
+        return
+      }
+      const p = toWorld(e.clientX, e.clientY)
+      pointerRef.current = { id: e.pointerId, node: hit(p.x, p.y), startX: p.x, startY: p.y, downAt: performance.now(), dragging: false }
     }
 
     const onPointerMove = (e: PointerEvent) => {
+      activePointers.set(e.pointerId, e)
+      if (activePointers.size === 2 && pinchRef.current) {
+        const pts = [...activePointers.values()]
+        const newDist = Math.hypot(pts[1].clientX - pts[0].clientX, pts[1].clientY - pts[0].clientY)
+        cameraRef.current.scale = Math.min(4, Math.max(0.2, cameraRef.current.scale * (newDist / Math.max(1, pinchRef.current.dist))))
+        pinchRef.current.dist = newDist
+        return
+      }
       const ps = pointerRef.current
-      if (!ps || ps.id !== e.pointerId || !ps.node) return
-      const p = toWorld(e)
+      if (!ps || ps.id !== e.pointerId) return
+      if (!ps.node) {
+        const rect = canvas.getBoundingClientRect()
+        const ex = e.clientX - rect.left - rect.width / 2
+        const ey = e.clientY - rect.top - rect.height / 2
+        if (Math.hypot(ex - (ps.startX + cameraRef.current.x), ey - (ps.startY + cameraRef.current.y)) > 6) {
+          const p = toWorld(e.clientX, e.clientY)
+          cameraRef.current.x += (p.x - ps.startX) * cameraRef.current.scale
+          cameraRef.current.y += (p.y - ps.startY) * cameraRef.current.scale
+        }
+        return
+      }
+      const p = toWorld(e.clientX, e.clientY)
       if (Math.hypot(p.x - ps.startX, p.y - ps.startY) > 6) ps.dragging = true
-      ps.node.x = p.x
-      ps.node.y = p.y
-      ps.node.vx = 0
-      ps.node.vy = 0
-      const dist = Math.hypot(p.x, p.y)
-      if (dist > 1) ps.node.angle = Math.atan2(p.y, p.x)
-      if (ps.node.state === 'committed') {
+      ps.node.x = p.x; ps.node.y = p.y; ps.node.vx = 0; ps.node.vy = 0
+      if (Math.hypot(p.x, p.y) > 1) ps.node.angle = Math.atan2(p.y, p.x)
+      if (ps.node.state === 'committed' || ps.node.state === 'arrived') {
         ps.node.arrivalAt = Date.now() + etaFromDistance(p.x, p.y)
+        if (ps.node.state === 'arrived' && ps.node.arrivalAt > Date.now()) ps.node.state = 'committed'
       }
     }
 
     const onPointerUp = (e: PointerEvent) => {
+      activePointers.delete(e.pointerId)
+      if (activePointers.size < 2) pinchRef.current = null
       const ps = pointerRef.current
       if (!ps || ps.id !== e.pointerId) return
       const held = performance.now() - ps.downAt
-      if (!ps.node) {
-        const click = toWorld(e)
-        addNode(click.x, click.y, false)
-      } else if (!ps.dragging) {
-        if (ps.node.state === 'lurker') {
-          ps.node.state = 'interested'
-        } else if (ps.node.state === 'interested' && held > 200) {
+      if (!ps.node && !ps.dragging) {
+        const p = toWorld(e.clientX, e.clientY)
+        addNode(p.x, p.y, false)
+      } else if (ps.node && !ps.dragging) {
+        if (ps.node.state === 'lurker') ps.node.state = 'interested'
+        else if (ps.node.state === 'interested' && held > 200) {
           ps.node.state = 'committed'
           ps.node.arrivalAt = Date.now() + etaFromHold(held)
         }
@@ -170,85 +191,59 @@ export function BiologyPage() {
       pointerRef.current = null
     }
 
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault()
+      cameraRef.current.scale = Math.min(4, Math.max(0.2, cameraRef.current.scale * (e.deltaY < 0 ? 1.08 : 0.92)))
+    }
+
     canvas.addEventListener('pointerdown', onPointerDown)
     canvas.addEventListener('pointermove', onPointerMove)
     canvas.addEventListener('pointerup', onPointerUp)
     canvas.addEventListener('pointercancel', onPointerUp)
-
-    // ---- helpers -----------------------------------------------------------
+    canvas.addEventListener('wheel', onWheel, { passive: false })
 
     function addNode(wx: number, wy: number, simulated: boolean) {
-      const angle =
-        Math.hypot(wx, wy) < 0.001 ? -Math.PI / 2 : Math.atan2(wy, wx)
-      const target = spawnTarget(canvas!, angle)
-      nodesRef.current.push({
-        id: nextIdRef.current++,
-        x: wx,
-        y: wy,
-        vx: 0,
-        vy: 0,
-        state: 'lurker',
-        arrivalAt: null,
-        targetX: target.x,
-        targetY: target.y,
-        angle,
-        vogelN: vogelCounterRef.current++,
-        simulated,
-      })
+      const angle = Math.hypot(wx, wy) < 0.001 ? -Math.PI / 2 : Math.atan2(wy, wx)
+      const target = spawnTarget(canvas!, angle, visRef.current.nodeRadius)
+      nodesRef.current.push({ id: nextIdRef.current++, x: wx, y: wy, vx: 0, vy: 0, state: 'lurker', arrivalAt: null, targetX: target.x, targetY: target.y, angle, vogelN: vogelCounterRef.current++, simulated })
     }
 
     function vogelSpawn() {
       const n = vogelCounterRef.current
-      const r = VOGEL_C * Math.sqrt(n)
-      const theta = n * 2 * Math.PI * PHI_RECIP_SQ
-      addNode(Math.cos(theta) * r, Math.sin(theta) * r, true)
+      addNode(Math.cos(n * 2 * Math.PI * PHI_RECIP_SQ) * VOGEL_C * Math.sqrt(n), Math.sin(n * 2 * Math.PI * PHI_RECIP_SQ) * VOGEL_C * Math.sqrt(n), true)
     }
-
-    // ---- main loop ---------------------------------------------------------
 
     let raf = 0
     const frame = () => {
       const now = Date.now()
       const perf = performance.now()
-      const dt = Math.min(0.2, (perf - lastSimRef.current) / 1000) // seconds
+      const dt = Math.min(0.2, (perf - lastSimRef.current) / 1000)
       lastSimRef.current = perf
-
-      const c = cfgRef.current
+      const c = simRef.current
       const nodes = nodesRef.current
 
-      // Restart if over limit
       if (nodes.length >= c.maxNodes) {
-        nodesRef.current = []
-        vogelCounterRef.current = VOGEL_N_MIN
-        spawnAccRef.current = 0
+        nodesRef.current = []; vogelCounterRef.current = VOGEL_N_MIN; spawnAccRef.current = 0
       }
 
-      // Spawn simulated nodes
       spawnAccRef.current += c.spawnPerSec * dt
-      while (spawnAccRef.current >= 1) {
-        vogelSpawn()
-        spawnAccRef.current -= 1
-      }
+      while (spawnAccRef.current >= 1) { vogelSpawn(); spawnAccRef.current -= 1 }
 
-      // State transitions for simulated nodes
       for (const n of nodes) {
         if (!n.simulated) continue
-        if (n.state === 'lurker' && n.targetX == null) {
-          if (Math.random() < c.interestRate * dt) n.state = 'interested'
-        } else if (n.state === 'interested') {
-          if (Math.random() < c.commitRate * dt) {
-            n.state = 'committed'
-            // Exponential ETA distribution around avgEtaSec
-            const etaSec = -c.avgEtaSec * Math.log(Math.max(0.001, Math.random()))
-            n.arrivalAt = now + Math.min(MAX_ETA_MS, Math.max(MIN_ETA_MS, etaSec * 1000))
-          }
+        if (n.state === 'committed' && n.arrivalAt != null && n.arrivalAt <= now) n.state = 'arrived'
+        if (n.state === 'lurker' && n.targetX == null && Math.random() < c.interestRate * dt) n.state = 'interested'
+        else if (n.state === 'interested' && Math.random() < c.commitRate * dt) {
+          n.state = 'committed'
+          n.arrivalAt = now + Math.min(MAX_ETA_MS, Math.max(MIN_ETA_MS, -c.avgEtaSec * Math.log(Math.max(0.001, Math.random())) * 1000))
         }
       }
+      for (const n of nodes) {
+        if (n.state === 'committed' && n.arrivalAt != null && n.arrivalAt <= now) n.state = 'arrived'
+      }
 
-      const isDragging = pointerRef.current?.dragging ?? false
-
-      step(nodesRef.current, pointerRef.current, modeRef.current, perGroupRef.current)
-      draw(ctx, canvas, nodesRef.current, pointerRef.current, isDragging)
+      step(nodes, pointerRef.current, modeRef.current, perGroupRef.current, visRef.current, now)
+      draw(ctx, canvas, nodes, pointerRef.current, !!(pointerRef.current?.dragging), cameraRef.current, visRef.current, now)
       raf = requestAnimationFrame(frame)
     }
     raf = requestAnimationFrame(frame)
@@ -259,233 +254,142 @@ export function BiologyPage() {
       canvas.removeEventListener('pointermove', onPointerMove)
       canvas.removeEventListener('pointerup', onPointerUp)
       canvas.removeEventListener('pointercancel', onPointerUp)
+      canvas.removeEventListener('wheel', onWheel)
       cancelAnimationFrame(raf)
     }
   }, [])
-
-  function update(patch: Partial<SimConfig>) {
-    setCfg((prev) => ({ ...prev, ...patch }))
-  }
 
   return (
     <main className="biology-page">
       <canvas ref={canvasRef} className="physics-canvas" />
       <div className="physics-help bio-help">
+
         <div className="chem-controls">
-          <button
-            className={`chem-mode-btn ${mode === 'single' ? 'active' : ''}`}
-            onClick={() => setMode('single')}
-          >
-            Single
-          </button>
-          <button
-            className={`chem-mode-btn ${mode === 'parallel' ? 'active' : ''}`}
-            onClick={() => setMode('parallel')}
-          >
-            Parallel
-          </button>
+          <button className={`chem-mode-btn ${mode === 'single' ? 'active' : ''}`} onClick={() => setMode('single')}>Single</button>
+          <button className={`chem-mode-btn ${mode === 'parallel' ? 'active' : ''}`} onClick={() => setMode('parallel')}>Parallel</button>
           {mode === 'parallel' && (
             <label className="chem-slider-label">
               per group
-              <input
-                type="range"
-                min={2}
-                max={8}
-                value={perGroup}
-                onChange={(e) => setPerGroup(Number(e.target.value))}
-              />
+              <input type="range" min={2} max={8} value={perGroup} onChange={e => setPerGroup(Number(e.target.value))} />
               {perGroup}
             </label>
           )}
         </div>
 
+        <div className="bio-section-title">Simulation</div>
         <div className="bio-sliders">
-          <SliderRow
-            label="spawn/s"
-            min={0}
-            max={5}
-            step={0.1}
-            value={cfg.spawnPerSec}
-            fmt={(v) => v.toFixed(1)}
-            onChange={(v) => update({ spawnPerSec: v })}
-          />
-          <SliderRow
-            label="→ interested"
-            min={0}
-            max={1}
-            step={0.05}
-            value={cfg.interestRate}
-            fmt={(v) => `${Math.round(v * 100)}%/s`}
-            onChange={(v) => update({ interestRate: v })}
-          />
-          <SliderRow
-            label="→ committed"
-            min={0}
-            max={1}
-            step={0.05}
-            value={cfg.commitRate}
-            fmt={(v) => `${Math.round(v * 100)}%/s`}
-            onChange={(v) => update({ commitRate: v })}
-          />
-          <SliderRow
-            label="avg ETA"
-            min={5}
-            max={60}
-            step={1}
-            value={cfg.avgEtaSec}
-            fmt={(v) => `${v}s`}
-            onChange={(v) => update({ avgEtaSec: v })}
-          />
-          <SliderRow
-            label="max nodes"
-            min={5}
-            max={100}
-            step={5}
-            value={cfg.maxNodes}
-            fmt={(v) => String(v)}
-            onChange={(v) => update({ maxNodes: v })}
-          />
+          <SR label="spawn/s"      min={0}  max={5}   step={0.1}  value={sim.spawnPerSec}  fmt={v => v.toFixed(1)}              onChange={v => patchSim({ spawnPerSec: v })} />
+          <SR label="→ interested" min={0}  max={1}   step={0.05} value={sim.interestRate} fmt={v => `${Math.round(v*100)}%/s`} onChange={v => patchSim({ interestRate: v })} />
+          <SR label="→ committed"  min={0}  max={1}   step={0.05} value={sim.commitRate}   fmt={v => `${Math.round(v*100)}%/s`} onChange={v => patchSim({ commitRate: v })} />
+          <SR label="avg ETA"      min={5}  max={60}  step={1}    value={sim.avgEtaSec}    fmt={v => `${v}s`}                   onChange={v => patchSim({ avgEtaSec: v })} />
+          <SR label="max nodes"    min={5}  max={120} step={5}    value={sim.maxNodes}     fmt={v => String(v)}                 onChange={v => patchSim({ maxNodes: v })} />
         </div>
 
-        <span className="bio-hint">
-          Click empty: create. Click gray: interested. Hold green: commit. Drag gold: adjust ETA.
-        </span>
+        <div className="bio-section-title">Visual</div>
+        <div className="bio-sliders">
+          <SR label="node size"  min={6}  max={50} step={1}   value={vis.nodeRadius}       fmt={v => `${v}px`}    onChange={v => patchVis({ nodeRadius: v })} />
+          <SR label="outline"    min={0}  max={12} step={0.5} value={vis.outlineWidth}     fmt={v => `${v}px`}    onChange={v => patchVis({ outlineWidth: v })} />
+          <SR label="tightness"  min={0}  max={3}  step={0.1} value={vis.clusterTightness} fmt={v => v.toFixed(1)} onChange={v => patchVis({ clusterTightness: v })} />
+        </div>
+
+        <span className="bio-hint">Click: create · Click gray: interest · Hold green: commit · Drag gold: ETA · Wheel/pinch: zoom</span>
       </div>
     </main>
   )
 }
 
-function SliderRow({
-  label,
-  min,
-  max,
-  step,
-  value,
-  fmt,
-  onChange,
-}: {
-  label: string
-  min: number
-  max: number
-  step: number
-  value: number
-  fmt: (v: number) => string
-  onChange: (v: number) => void
+function SR({ label, min, max, step, value, fmt, onChange }: {
+  label: string; min: number; max: number; step: number
+  value: number; fmt: (v: number) => string; onChange: (v: number) => void
 }) {
   return (
     <label className="bio-slider-row">
       <span className="bio-slider-label">{label}</span>
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-      />
+      <input type="range" min={min} max={max} step={step} value={value} onChange={e => onChange(Number(e.target.value))} />
       <span className="bio-slider-val">{fmt(value)}</span>
     </label>
   )
 }
 
-// ---- simulation ------------------------------------------------------------
+// ---- simulation step -------------------------------------------------------
 
 function step(
   nodes: Node[],
   pointer: PointerState | null,
   mode: GroupingMode,
   perGroup: number,
+  vis: VisConfig,
+  now: number,
 ) {
-  const now = Date.now()
-  const committed = nodes.filter((n) => n.state === 'committed')
-  const targets = computeGroupTargets(committed, now, mode, perGroup)
-
-  // Centers of arrived groups (used for repulsion of in-flight nodes)
-  const arrivedCenters = arrivedGroupCenters(committed, now, mode, perGroup)
+  const targets = computeGroupTargets(nodes, now, mode, perGroup, vis)
+  const arrivedNodes = nodes.filter(n => n.state === 'arrived')
 
   for (const n of nodes) {
     if (pointer?.node === n && pointer.dragging) continue
 
     // Spawn fly-out animation
     if (n.state === 'lurker' && n.targetX != null && n.targetY != null) {
-      n.vx += (n.targetX - n.x) * 0.03
-      n.vy += (n.targetY - n.y) * 0.03
-      n.vx *= 0.82
-      n.vy *= 0.82
-      n.x += n.vx
-      n.y += n.vy
+      n.vx += (n.targetX - n.x) * 0.03; n.vy += (n.targetY - n.y) * 0.03
+      n.vx *= 0.82; n.vy *= 0.82; n.x += n.vx; n.y += n.vy
       if (Math.hypot(n.targetX - n.x, n.targetY - n.y) < 6) {
-        n.x = n.targetX
-        n.y = n.targetY
-        n.vx = 0
-        n.vy = 0
-        delete n.targetX
-        delete n.targetY
+        n.x = n.targetX; n.y = n.targetY; n.vx = 0; n.vy = 0
+        delete n.targetX; delete n.targetY
       }
       continue
     }
 
-    if (n.state === 'committed') {
-      const target = targets.get(n.id) ?? { x: 0, y: 0 }
-      n.vx += (target.x - n.x) * 0.04
-      n.vy += (target.y - n.y) * 0.04
-      n.vx *= 0.82
-      n.vy *= 0.82
-      n.x += n.vx
-      n.y += n.vy
+    if (n.state === 'committed' || n.state === 'arrived') {
+      const t = targets.get(n.id) ?? { x: 0, y: 0 }
+      n.vx += (t.x - n.x) * 0.04; n.vy += (t.y - n.y) * 0.04
+      n.vx *= 0.82; n.vy *= 0.82; n.x += n.vx; n.y += n.vy
       continue
     }
 
-    // Lurker/interested: repulsion from arrived group centers
-    for (const c of arrivedCenters) {
-      const dx = n.x - c.x
-      const dy = n.y - c.y
+    // Arrived clusters repel lurkers and interested nodes
+    const repulseR = vis.nodeRadius * 6
+    for (const src of arrivedNodes) {
+      const dx = n.x - src.x
+      const dy = n.y - src.y
       const dist = Math.max(1, Math.hypot(dx, dy))
-      const repulseR = NODE_R * 5
       if (dist < repulseR) {
         const force = ((repulseR - dist) / repulseR) * 0.6
-        n.vx += (dx / dist) * force
-        n.vy += (dy / dist) * force
+        n.vx += (dx / dist) * force; n.vy += (dy / dist) * force
       }
     }
-    n.vx *= 0.88
-    n.vy *= 0.88
-    n.x += n.vx
-    n.y += n.vy
+    n.vx *= 0.88; n.vy *= 0.88; n.x += n.vx; n.y += n.vy
   }
 }
 
 function computeGroupTargets(
-  committed: Node[],
+  nodes: Node[],
   now: number,
   mode: GroupingMode,
   perGroup: number,
+  vis: VisConfig,
 ): Map<number, { x: number; y: number }> {
   const targets = new Map<number, { x: number; y: number }>()
-  const arrived = committed.filter((n) => n.arrivalAt != null && n.arrivalAt <= now)
-  const inFlight = committed.filter((n) => n.arrivalAt == null || n.arrivalAt > now)
+  const committed = nodes.filter(n => n.state === 'committed' || n.state === 'arrived')
+  const arrived = committed.filter(n => n.state === 'arrived')
+  const inFlight = committed.filter(n => n.state === 'committed')
+  const orbitR = vis.nodeRadius * vis.clusterTightness
 
   if (mode === 'single') {
-    const count = arrived.length
     arrived.forEach((n, i) => {
-      const orbitR = count <= 1 ? 0 : NODE_R * 1.1
-      const angle = count <= 1 ? 0 : (i / count) * Math.PI * 2
-      targets.set(n.id, { x: Math.cos(angle) * orbitR, y: Math.sin(angle) * orbitR })
+      const r = arrived.length <= 1 ? 0 : orbitR
+      const a = arrived.length <= 1 ? 0 : (i / arrived.length) * Math.PI * 2
+      targets.set(n.id, { x: Math.cos(a) * r, y: Math.sin(a) * r })
     })
   } else {
     const numGroups = Math.max(1, Math.ceil(arrived.length / perGroup))
-    const centers = groupCenters(numGroups, perGroup)
+    const centers = groupCenters(numGroups, perGroup, orbitR)
     arrived.forEach((n, i) => {
       const gi = Math.floor(i / perGroup)
       const li = i % perGroup
-      const groupCount = Math.min(perGroup, arrived.length - gi * perGroup)
+      const gc = Math.min(perGroup, arrived.length - gi * perGroup)
       const center = centers[gi] ?? { x: 0, y: 0 }
-      const orbitR = groupCount <= 1 ? 0 : NODE_R * 1.1
-      const angle = groupCount <= 1 ? 0 : (li / groupCount) * Math.PI * 2
-      targets.set(n.id, {
-        x: center.x + Math.cos(angle) * orbitR,
-        y: center.y + Math.sin(angle) * orbitR,
-      })
+      const r = gc <= 1 ? 0 : orbitR
+      const a = gc <= 1 ? 0 : (li / gc) * Math.PI * 2
+      targets.set(n.id, { x: center.x + Math.cos(a) * r, y: center.y + Math.sin(a) * r })
     })
   }
 
@@ -494,32 +398,12 @@ function computeGroupTargets(
     const r = (remaining / MAX_ETA_MS) * WORLD_R
     targets.set(n.id, { x: Math.cos(n.angle) * r, y: Math.sin(n.angle) * r })
   }
-
   return targets
 }
 
-// Returns the center point(s) of arrived clusters (for repulsion)
-function arrivedGroupCenters(
-  committed: Node[],
-  now: number,
-  mode: GroupingMode,
-  perGroup: number,
-): Array<{ x: number; y: number }> {
-  const arrived = committed.filter((n) => n.arrivalAt != null && n.arrivalAt <= now)
-  if (arrived.length === 0) return []
-  if (mode === 'single') return [{ x: 0, y: 0 }]
-  const numGroups = Math.max(1, Math.ceil(arrived.length / perGroup))
-  return groupCenters(numGroups, perGroup)
-}
-
-function groupCenters(
-  count: number,
-  perGroup: number,
-): Array<{ x: number; y: number }> {
-  if (count === 0) return []
-  if (count === 1) return [{ x: 0, y: 0 }]
-  const groupFootprint = NODE_R * (1 + 2 * Math.sin(Math.PI / Math.max(2, perGroup)))
-  const ringR = Math.max(NODE_R * 2.8, (groupFootprint * count) / (2 * Math.PI) * 1.4)
+function groupCenters(count: number, perGroup: number, orbitR: number): Array<{ x: number; y: number }> {
+  if (count <= 1) return [{ x: 0, y: 0 }]
+  const ringR = Math.max(orbitR * 2.8, (orbitR * 2 * count * Math.max(2, perGroup)) / (2 * Math.PI) * 0.7)
   return Array.from({ length: count }, (_, i) => {
     const a = (i / count) * Math.PI * 2 - Math.PI / 2
     return { x: Math.cos(a) * ringR, y: Math.sin(a) * ringR }
@@ -534,6 +418,9 @@ function draw(
   nodes: Node[],
   pointer: PointerState | null,
   isDragging: boolean,
+  camera: Camera,
+  vis: VisConfig,
+  now: number,
 ) {
   const w = canvas.clientWidth
   const h = canvas.clientHeight
@@ -541,123 +428,91 @@ function draw(
   ctx.fillStyle = '#ffffff'
   ctx.fillRect(0, 0, w, h)
   ctx.save()
-  ctx.translate(w / 2, h / 2)
+  ctx.translate(w / 2 + camera.x, h / 2 + camera.y)
+  ctx.scale(camera.scale, camera.scale)
 
-  // Background rings — fade out when not dragging
   const ringAlpha = isDragging ? 0.08 : 0.02
   ctx.strokeStyle = `rgba(17,24,39,${ringAlpha})`
-  ctx.lineWidth = 1
+  ctx.lineWidth = 1 / camera.scale
   for (let r = 80; r <= WORLD_R; r += 80) {
-    ctx.beginPath()
-    ctx.arc(0, 0, r, 0, Math.PI * 2)
-    ctx.stroke()
+    ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.stroke()
   }
-
-  drawNodes(ctx, canvas, nodes, pointer, isDragging)
   ctx.restore()
-}
 
-function drawNodes(
-  ctx: CanvasRenderingContext2D,
-  canvas: HTMLCanvasElement,
-  nodes: Node[],
-  pointer: PointerState | null,
-  isDragging: boolean,
-) {
-  const w = canvas.clientWidth
-  const h = canvas.clientHeight
   const dpr = canvas.width / Math.max(1, w)
-
   const layer = document.createElement('canvas')
-  layer.width = canvas.width
-  layer.height = canvas.height
+  layer.width = canvas.width; layer.height = canvas.height
   const lctx = layer.getContext('2d')
   if (!lctx) return
 
   lctx.scale(dpr, dpr)
-  lctx.translate(w / 2, h / 2)
+  lctx.translate(w / 2 + camera.x, h / 2 + camera.y)
+  lctx.scale(camera.scale, camera.scale)
 
+  const nr = vis.nodeRadius
   lctx.globalCompositeOperation = 'source-over'
   for (const n of nodes) {
     lctx.fillStyle = colorFor(n.state)
-    lctx.beginPath()
-    lctx.arc(n.x, n.y, NODE_R, 0, Math.PI * 2)
-    lctx.fill()
+    lctx.beginPath(); lctx.arc(n.x, n.y, nr, 0, Math.PI * 2); lctx.fill()
   }
 
   lctx.globalCompositeOperation = 'destination-out'
-  lctx.lineWidth = 4
-  lctx.strokeStyle = '#000'
-  lctx.fillStyle = '#000'
-  for (const n of nodes) {
-    lctx.beginPath()
-    lctx.arc(n.x, n.y, NODE_R, 0, Math.PI * 2)
-    lctx.stroke()
-  }
-
-  // ETA countdown only on the node the user is actively dragging
-  const draggedNode = isDragging ? pointer?.node : null
-  if (draggedNode?.state === 'committed' && draggedNode.arrivalAt != null) {
-    lctx.font = '700 12px system-ui, sans-serif'
-    lctx.textAlign = 'center'
-    lctx.textBaseline = 'middle'
-    const remaining = Math.max(0, draggedNode.arrivalAt - Date.now())
-    lctx.fillText(`${Math.ceil(remaining / 1000)}s`, draggedNode.x, draggedNode.y)
-  }
-  // Also show ETA while holding down on an interested node (pre-commit preview)
-  if (pointer?.node?.state === 'interested' && !isDragging && pointer.dragging === false) {
-    const held = Math.min(HOLD_MS, performance.now() - pointer.downAt)
-    if (held > 50) {
-      lctx.font = '700 12px system-ui, sans-serif'
-      lctx.textAlign = 'center'
-      lctx.textBaseline = 'middle'
-      lctx.fillText(
-        `${Math.round(etaFromHold(held) / 1000)}s`,
-        pointer.node.x,
-        pointer.node.y,
-      )
+  lctx.strokeStyle = '#000'; lctx.fillStyle = '#000'
+  if (vis.outlineWidth > 0) {
+    lctx.lineWidth = vis.outlineWidth
+    for (const n of nodes) {
+      lctx.beginPath(); lctx.arc(n.x, n.y, nr, 0, Math.PI * 2); lctx.stroke()
     }
   }
 
-  ctx.save()
-  ctx.setTransform(1, 0, 0, 1, 0, 0)
-  ctx.drawImage(layer, 0, 0)
-  ctx.restore()
+  const labelNode: Node | null = (() => {
+    if (!pointer) return null
+    if (isDragging && pointer.node && (pointer.node.state === 'committed' || pointer.node.state === 'arrived')) return pointer.node
+    if (!isDragging && pointer.node?.state === 'interested' && performance.now() - pointer.downAt > 50) return pointer.node
+    return null
+  })()
+  if (labelNode) {
+    const fs = Math.max(9, Math.round(nr * 0.52))
+    lctx.font = `700 ${fs}px system-ui, sans-serif`
+    lctx.textAlign = 'center'; lctx.textBaseline = 'middle'
+    const etaMs = labelNode.state === 'interested'
+      ? etaFromHold(Math.min(HOLD_MS, performance.now() - pointer!.downAt))
+      : Math.max(0, (labelNode.arrivalAt ?? now) - now)
+    lctx.fillText(`${Math.ceil(etaMs / 1000)}s`, labelNode.x, labelNode.y)
+  }
+
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(layer, 0, 0); ctx.restore()
 }
 
 function colorFor(state: NodeState): string {
-  if (state === 'committed') return '#f59e0b'
+  if (state === 'arrived' || state === 'committed') return '#f59e0b'
   if (state === 'interested') return '#22c55e'
   return '#9ca3af'
 }
 
 // ---- helpers ---------------------------------------------------------------
 
-function etaFromHold(holdMs: number): number {
+function etaFromHold(holdMs: number) {
   const t = Math.min(1, Math.max(0, holdMs / HOLD_MS))
   return MIN_ETA_MS + (MAX_ETA_MS - MIN_ETA_MS) * (1 - t * t)
 }
 
-function etaFromDistance(x: number, y: number): number {
-  const r = Math.min(WORLD_R, Math.max(0, Math.hypot(x, y)))
-  return (r / WORLD_R) * MAX_ETA_MS
+function etaFromDistance(x: number, y: number) {
+  return (Math.min(WORLD_R, Math.max(0, Math.hypot(x, y))) / WORLD_R) * MAX_ETA_MS
 }
 
-function spawnTarget(canvas: HTMLCanvasElement, angle: number): { x: number; y: number } {
-  const margin = NODE_R + 8
+function spawnTarget(canvas: HTMLCanvasElement, angle: number, nodeR: number) {
+  const margin = nodeR + 8
   const halfW = Math.max(margin, canvas.clientWidth / 2 - margin)
   const halfH = Math.max(margin, canvas.clientHeight / 2 - margin)
-  const c = Math.cos(angle)
-  const s = Math.sin(angle)
+  const c = Math.cos(angle), s = Math.sin(angle)
   const maxR = Math.min(
-    Math.abs(c) < 0.0001 ? Number.POSITIVE_INFINITY : halfW / Math.abs(c),
-    Math.abs(s) < 0.0001 ? Number.POSITIVE_INFINITY : halfH / Math.abs(s),
+    Math.abs(c) < 0.0001 ? Infinity : halfW / Math.abs(c),
+    Math.abs(s) < 0.0001 ? Infinity : halfH / Math.abs(s),
   )
-  const minR = WORLD_R + NODE_R + 8
+  const minR = WORLD_R + nodeR + 8
   if (maxR <= minR) return { x: c * maxR, y: s * maxR }
-  const scale = 72
-  const maxExtra = maxR - minR
-  const u = Math.random()
+  const scale = 72, maxExtra = maxR - minR, u = Math.random()
   const extra = -scale * Math.log(1 - u * (1 - Math.exp(-maxExtra / scale)))
   return { x: c * (minR + extra), y: s * (minR + extra) }
 }
