@@ -15,14 +15,14 @@ interface Props {
 }
 
 /** Grid tile: collapsed shows just title + emoji, sized (1x1/2x2/3x3 units)
- * by popularity. Click expands to a fixed 3x2 stats panel with Launch. Only
+ * by popularity. Click expands to a fixed 4x3 stats panel with Launch. Only
  * one tile can be expanded at a time (controlled by the parent). */
 export function ActivityTile({ activity: a, now, size, expanded, onToggle }: Props) {
   const run = a.current_run
   const accent = useMemo(() => nordColorForEmoji(a.emoji), [a.emoji])
 
-  const colSpan = expanded ? 3 : size
-  const rowSpan = expanded ? 2 : size
+  const colSpan = expanded ? 4 : size
+  const rowSpan = expanded ? 3 : size
 
   return (
     <motion.article
@@ -41,29 +41,31 @@ export function ActivityTile({ activity: a, now, size, expanded, onToggle }: Pro
       {expanded && (
         <div className="tile-expanded">
           {a.description && <p className="tile-desc">{a.description}</p>}
-          <table className="stats-table">
-            <tbody>
-              <tr>
-                <th>runs</th>
-                <td>{compactNumber(a.times_run)}</td>
-              </tr>
-              <tr>
-                <th>served</th>
-                <td>{compactNumber(a.players_served)}</td>
-              </tr>
-              <tr>
-                <th>commit%</th>
-                <td>{formatPct(a.commit_pct)}</td>
-              </tr>
-            </tbody>
-          </table>
+          <div className="tile-stats-row">
+            <table className="stats-table">
+              <tbody>
+                <tr>
+                  <th>runs</th>
+                  <td>{compactNumber(a.times_run)}</td>
+                </tr>
+                <tr>
+                  <th>served</th>
+                  <td>{compactNumber(a.players_served)}</td>
+                </tr>
+                <tr>
+                  <th>commit%</th>
+                  <td>{formatPct(a.commit_pct)}</td>
+                </tr>
+              </tbody>
+            </table>
+            <Link className="tile-launch primary" to={`/${a.code}`}>
+              Launch
+            </Link>
+          </div>
           {run && <GroupMeter run={run} groupingMode={a.grouping_mode} />}
           <p className="tile-meta">
             proposed by {a.proposer_handle ?? 'someone'} · active {relativeTime(a.last_active_at, now)}
           </p>
-          <Link className="tile-launch primary" to={`/${a.code}`}>
-            Launch
-          </Link>
         </div>
       )}
     </motion.article>

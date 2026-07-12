@@ -10,7 +10,6 @@ import { ActivityListItem } from '../components/ActivityListItem'
 import { ActivityTile } from '../components/ActivityTile'
 import { CreateTile } from '../components/CreateTile'
 import { ProposeForm } from '../components/ProposeForm'
-import { PushPanel } from '../components/PushPanel'
 import { SortSelect, type SortKey } from '../components/SortSelect'
 import { TagBar } from '../components/TagBar'
 import { ViewToggle, type HomeView } from '../components/ViewToggle'
@@ -211,53 +210,48 @@ export function HomePage() {
       </header>
 
       <main className="layout">
-        <section className="main-col">
-          <div className="browser-controls">
-            <TagBar categories={categories} active={tag} onSelect={(t) => updateUrl({ tag: t })} />
-            <div className="browser-controls-right">
-              {view === 'list' && <SortSelect value={sort} onChange={(s) => updateUrl({ sort: s })} />}
-              <ViewToggle view={view} onChange={(v) => updateUrl({ view: v })} />
-            </div>
+        {error && <p className="err small">Sync issue: {error}</p>}
+
+        <div className="browser-controls">
+          <TagBar categories={categories} active={tag} onSelect={(t) => updateUrl({ tag: t })} />
+          <div className="browser-controls-right">
+            {view === 'list' && <SortSelect value={sort} onChange={(s) => updateUrl({ sort: s })} />}
+            <ViewToggle view={view} onChange={(v) => updateUrl({ view: v })} />
           </div>
+        </div>
 
-          {loading && activities.length === 0 && <p className="pending">Loading activities...</p>}
+        {loading && activities.length === 0 && <p className="pending">Loading activities...</p>}
 
-          {view === 'grid' ? (
-            <div className="tile-grid">
-              <CreateTile view={view} onClick={() => setCreating(true)} />
-              <AnimatePresence mode="popLayout">
-                {gridOrder.map((a) => (
-                  <ActivityTile
-                    key={a.id}
-                    activity={a}
-                    now={now}
-                    size={sizes.get(a.id) ?? 1}
-                    expanded={expandedId === a.id}
-                    onToggle={() => setExpandedId((cur) => (cur === a.id ? null : a.id))}
-                  />
-                ))}
-              </AnimatePresence>
-            </div>
-          ) : (
-            <div className="list-view">
-              <CreateTile view={view} onClick={() => setCreating(true)} />
-              <AnimatePresence mode="popLayout">
-                {listOrder.map((a) => (
-                  <ActivityListItem key={a.id} activity={a} />
-                ))}
-              </AnimatePresence>
-            </div>
-          )}
+        {view === 'grid' ? (
+          <div className="tile-grid">
+            <CreateTile view={view} onClick={() => setCreating(true)} />
+            <AnimatePresence mode="popLayout">
+              {gridOrder.map((a) => (
+                <ActivityTile
+                  key={a.id}
+                  activity={a}
+                  now={now}
+                  size={sizes.get(a.id) ?? 1}
+                  expanded={expandedId === a.id}
+                  onToggle={() => setExpandedId((cur) => (cur === a.id ? null : a.id))}
+                />
+              ))}
+            </AnimatePresence>
+          </div>
+        ) : (
+          <div className="list-view">
+            <CreateTile view={view} onClick={() => setCreating(true)} />
+            <AnimatePresence mode="popLayout">
+              {listOrder.map((a) => (
+                <ActivityListItem key={a.id} activity={a} />
+              ))}
+            </AnimatePresence>
+          </div>
+        )}
 
-          {!loading && activities.length > 0 && filtered.length === 0 && (
-            <p className="empty">No activities in this category yet.</p>
-          )}
-        </section>
-
-        <aside className="side-col">
-          <PushPanel />
-          {error && <p className="err small">Sync issue: {error}</p>}
-        </aside>
+        {!loading && activities.length > 0 && filtered.length === 0 && (
+          <p className="empty">No activities in this category yet.</p>
+        )}
       </main>
 
       {creating && (
