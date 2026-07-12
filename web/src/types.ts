@@ -56,6 +56,7 @@ export interface ActivityView {
   max_people: number | null
   group_multiple: number
   grouping_mode: GroupingMode
+  allow_guests: boolean
   times_run: number
   players_served: number
   interest_total: number
@@ -126,6 +127,7 @@ export interface CreateActivityInput {
   max_people?: number | null
   group_multiple?: number | null
   grouping_mode?: GroupingMode
+  allow_guests?: boolean
   // First-run fields.
   location?: string | null
   details?: string | null

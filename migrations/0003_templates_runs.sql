@@ -29,6 +29,7 @@ CREATE TABLE activities (
   group_multiple   INTEGER NOT NULL DEFAULT 1,
   grouping_mode    TEXT NOT NULL DEFAULT 'single'
                      CHECK (grouping_mode IN ('single', 'tiling')),
+  allow_guests     INTEGER NOT NULL DEFAULT 1,
   current_run_id   TEXT,                      -- active/open run, if any (NULL = room is empty)
   times_run        INTEGER NOT NULL DEFAULT 0, -- runs that reached >=1 complete group
   players_served   INTEGER NOT NULL DEFAULT 0, -- lifetime distinct participants across ended runs

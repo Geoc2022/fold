@@ -181,7 +181,7 @@ export function HomePage() {
   if (!me) {
     return (
       <main className="shell">
-        <h1>fold</h1>
+        <h1>Fold</h1>
         <p className="pending">{error ? `Error: ${error}` : 'Loading…'}</p>
       </main>
     )
@@ -191,7 +191,7 @@ export function HomePage() {
     <div className="app">
       <header className="topbar">
         <div className="brand">
-          <h1>fold</h1>
+          <h1>Fold</h1>
         </div>
         <div className="me">
           {editingHandle ? (

@@ -42,6 +42,8 @@ interface PointerState {
   node: SimNode | null
   startX: number
   startY: number
+  clientX: number
+  clientY: number
   downAt: number
   dragging: boolean
 }
@@ -67,22 +69,28 @@ export function RoomCanvas({ activity, participants, me, visual, onInterested, o
 
   const source = useMemo(() => {
     const now = Date.now()
-    const hasMe = participants.some((p) => p.is_me)
-    const rows = participants.map((p) => ({
-      id: p.is_me ? `me-${me.id}` : p.id,
-      state: visualState(p, now),
-      arrivalAt: p.arrival_at,
-      isMe: p.is_me,
-    }))
-    if (!hasMe) rows.push({ id: `me-${me.id}`, state: 'lurker' as const, arrivalAt: null, isMe: true })
-    return rows
+    const mine = participants.find((p) => p.is_me)
+    return [{
+      id: `me-${me.id}`,
+      state: mine ? visualState(mine, now) : 'lurker' as const,
+      arrivalAt: mine?.arrival_at ?? null,
+      isMe: true,
+    }]
   }, [participants, me.id])
 
   useEffect(() => {
     const existing = new Map(nodesRef.current.map((n) => [n.id, n]))
     nodesRef.current = source.map((s, i) => {
       const old = existing.get(s.id)
-      if (old) return { ...old, ...s }
+      if (old) {
+        const pointerOwnsNode = pointerRef.current?.node === old
+        if (!pointerOwnsNode) {
+          old.state = s.state
+          old.arrivalAt = s.arrivalAt
+        }
+        old.isMe = s.isMe
+        return old
+      }
       const angle = hashUnit(s.id) * Math.PI * 2
       const n = VOGEL_N_MIN + i
       return {
@@ -121,12 +129,10 @@ export function RoomCanvas({ activity, participants, me, visual, onInterested, o
       }
     }
 
-    const hit = (x: number, y: number) => {
-      const r = visualRef.current.nodeRadius
-      for (let i = nodesRef.current.length - 1; i >= 0; i -= 1) {
-        const n = nodesRef.current[i]
-        if (Math.hypot(n.x - x, n.y - y) <= r + 4) return n
-      }
+    const hitMe = (x: number, y: number) => {
+      const r = visualRef.current.nodeRadius + 4
+      const meNode = nodesRef.current.find((n) => n.isMe)
+      if (meNode && Math.hypot(meNode.x - x, meNode.y - y) <= r) return meNode
       return null
     }
 
@@ -154,8 +160,16 @@ export function RoomCanvas({ activity, participants, me, visual, onInterested, o
         return
       }
       const p = toWorld(e.clientX, e.clientY)
-      const node = hit(p.x, p.y)
-      pointerRef.current = { id: e.pointerId, node: node?.isMe ? node : null, startX: p.x, startY: p.y, downAt: performance.now(), dragging: false }
+      pointerRef.current = {
+        id: e.pointerId,
+        node: hitMe(p.x, p.y),
+        startX: p.x,
+        startY: p.y,
+        clientX: e.clientX,
+        clientY: e.clientY,
+        downAt: performance.now(),
+        dragging: false,
+      }
     }
 
     const onPointerMove = (e: PointerEvent) => {
@@ -170,28 +184,28 @@ export function RoomCanvas({ activity, participants, me, visual, onInterested, o
 
       const ps = pointerRef.current
       if (!ps || ps.id !== e.pointerId) return
-      const p = toWorld(e.clientX, e.clientY)
       if (!ps.node) {
-        const cam = cameraRef.current
-        const rect = canvas.getBoundingClientRect()
-        const sx = ps.startX * cam.scale + cam.x + rect.width / 2
-        const sy = ps.startY * cam.scale + cam.y + rect.height / 2
-        if (Math.hypot(e.clientX - rect.left - sx, e.clientY - rect.top - sy) > 6) {
-          cam.x += (p.x - ps.startX) * cam.scale
-          cam.y += (p.y - ps.startY) * cam.scale
-        }
+        const dx = e.clientX - ps.clientX
+        const dy = e.clientY - ps.clientY
+        if (Math.hypot(e.clientX - ps.clientX, e.clientY - ps.clientY) > 0) ps.dragging = true
+        cameraRef.current.x += dx
+        cameraRef.current.y += dy
+        ps.clientX = e.clientX
+        ps.clientY = e.clientY
         return
       }
 
-      if (ps.node.state !== 'committed' && ps.node.state !== 'arrived') return
+      const p = toWorld(e.clientX, e.clientY)
       if (Math.hypot(p.x - ps.startX, p.y - ps.startY) > 6) ps.dragging = true
       ps.node.x = p.x
       ps.node.y = p.y
       ps.node.vx = 0
       ps.node.vy = 0
       if (Math.hypot(p.x, p.y) > 1) ps.node.angle = Math.atan2(p.y, p.x)
-      ps.node.state = 'committed'
-      ps.node.arrivalAt = Date.now() + etaFromDistance(p.x, p.y) * 60_000
+      if (ps.node.state === 'committed' || ps.node.state === 'arrived') {
+        ps.node.state = 'committed'
+        ps.node.arrivalAt = Date.now() + etaFromDistance(p.x, p.y) * 60_000
+      }
     }
 
     const onPointerUp = (e: PointerEvent) => {
@@ -203,7 +217,8 @@ export function RoomCanvas({ activity, participants, me, visual, onInterested, o
       if (!ps.node) return
 
       const held = performance.now() - ps.downAt
-      if (ps.dragging && (ps.node.state === 'committed' || ps.node.state === 'arrived')) {
+      if (ps.dragging) {
+        if (ps.node.state !== 'committed' && ps.node.state !== 'arrived') return
         const eta = etaFromDistance(ps.node.x, ps.node.y)
         void call(() => onCommit(eta))
         return
@@ -264,7 +279,7 @@ function step(nodes: SimNode[], pointer: PointerState | null, activity: Activity
   const targets = computeTargets(nodes, activity, vis, now)
   const arrived = nodes.filter((n) => n.state === 'arrived')
   for (const n of nodes) {
-    if (pointer?.node === n && pointer.dragging) continue
+    if (pointer?.node === n) continue
     if (n.state === 'committed' || n.state === 'arrived') {
       const t = targets.get(n.id) ?? { x: 0, y: 0 }
       n.vx += (t.x - n.x) * 0.04

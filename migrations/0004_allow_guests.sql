@@ -1,0 +1,1 @@
+ALTER TABLE activities ADD COLUMN allow_guests INTEGER NOT NULL DEFAULT 1;

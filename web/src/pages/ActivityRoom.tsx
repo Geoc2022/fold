@@ -8,7 +8,7 @@ import type { Person } from '../types'
 import { CreateRunForm } from '../components/CreateRunForm'
 import { RoomCanvas } from '../components/RoomCanvas'
 import { RoomPanel } from '../components/RoomPanel'
-import { DEFAULT_ETA_MIN, DEFAULT_VISUAL_CONFIG, visualState, type VisualConfig } from '../nodeVisual'
+import { DEFAULT_VISUAL_CONFIG, type VisualConfig } from '../nodeVisual'
 import { readJson, writeJson } from '../storage'
 
 const VISUAL_KEY = 'fold.room_visual'
@@ -89,8 +89,6 @@ export function ActivityRoom() {
 
   const person = me
   const activity = data.activity
-  const myParticipant = data.participants.find((p) => p.is_me) ?? null
-
   function showAlert(message: string) {
     setAlert(message)
     window.setTimeout(() => setAlert((current) => (current === message ? null : current)), 3600)
@@ -99,6 +97,13 @@ export function ActivityRoom() {
   async function interest() {
     if (!activity.current_run) return
     if (person.handle.trim().toLowerCase() === 'guest') {
+      if (activity.allow_guests) {
+        const updated = await api.updateSession({ handle: guestHandle(person.id) })
+        setMe(updated)
+        await api.interest(activity.current_run.id)
+        refresh()
+        return
+      }
       setHandleInput('')
       setNamePrompt(true)
       return
@@ -124,15 +129,6 @@ export function ActivityRoom() {
     refresh()
   }
 
-  async function undo() {
-    if (!activity.current_run || !myParticipant) return
-    const state = visualState(myParticipant, Date.now())
-    if (state === 'arrived') await api.commit(activity.current_run.id, DEFAULT_ETA_MIN)
-    else if (state === 'committed') await api.interest(activity.current_run.id)
-    else if (state === 'interested') await api.withdraw(activity.current_run.id)
-    refresh()
-  }
-
   return (
     <main className={`room-page room-${theme}`}>
       <RoomCanvas
@@ -150,12 +146,8 @@ export function ActivityRoom() {
       {showVisual && <VisualPanel visual={visual} onChange={setVisual} />}
       <RoomPanel
         activity={activity}
-        myParticipant={myParticipant}
         theme={theme}
         onThemeToggle={toggleTheme}
-        onInterested={interest}
-        onCommit={commit}
-        onUndo={undo}
         onInfo={() => setShowInfo(true)}
         onProposeRun={() => setProposingRun(true)}
         onAlert={showAlert}
@@ -172,19 +164,18 @@ export function ActivityRoom() {
         </div>
       )}
       {namePrompt && (
-        <div className="modal-backdrop" onClick={() => setNamePrompt(false)}>
+        <div className="modal-backdrop centered" onClick={() => setNamePrompt(false)}>
           <form className="card name-prompt" onClick={(e) => e.stopPropagation()} onSubmit={confirmName}>
-            <h2>What should people call you?</h2>
             <input
               autoFocus
               maxLength={40}
-              placeholder="e.g. Sam"
+              placeholder="Name"
               value={handleInput}
               onChange={(e) => setHandleInput(e.target.value)}
             />
             <div className="row">
-              <button type="button" className="ghost" onClick={() => setNamePrompt(false)}>Cancel</button>
-              <button type="submit" className="primary" disabled={!handleInput.trim()}>That's me</button>
+              <button type="button" className="ghost danger" onClick={() => setNamePrompt(false)}>Cancel</button>
+              <button type="submit" className="primary" disabled={!handleInput.trim()}>Submit</button>
             </div>
           </form>
         </div>
@@ -242,6 +233,12 @@ function Slider({ label, min, max, step, value, fmt, onChange }: {
 
 function isTypingTarget(target: EventTarget | null) {
   return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement
+}
+
+function guestHandle(id: string) {
+  let n = 0
+  for (let i = 0; i < id.length; i += 1) n = (n * 31 + id.charCodeAt(i)) % 10000
+  return `guest#${String(n).padStart(4, '0')}`
 }
 
 function RoomMessage({ title, message }: { title: string; message: string }) {

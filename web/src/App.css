@@ -652,6 +652,9 @@ label .opt {
   overflow-y: auto;
   z-index: 200;
 }
+.modal-backdrop.centered {
+  align-items: center;
+}
 .modal-card {
   width: 100%;
   max-width: 520px;
@@ -668,8 +671,18 @@ label .opt {
   flex-direction: column;
   gap: 0.8rem;
 }
-.name-prompt h2 {
-  font-size: 1.1rem;
+.name-prompt input {
+  font-size: 1rem;
+}
+.check-row {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text);
+}
+.check-row input {
+  width: auto;
+  accent-color: var(--accent-solid);
 }
 
 /* ---- propose an activity / run ---- */

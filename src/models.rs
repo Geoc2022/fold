@@ -35,6 +35,7 @@ pub struct ActivityRow {
     pub max_people: Option<i64>,
     pub group_multiple: i64,
     pub grouping_mode: String,
+    pub allow_guests: i64,
     pub current_run_id: Option<String>,
     pub times_run: i64,
     pub players_served: i64,
@@ -110,6 +111,7 @@ pub struct CreateActivity {
     pub max_people: Option<u32>,
     pub group_multiple: Option<u32>,
     pub grouping_mode: Option<String>,
+    pub allow_guests: Option<bool>,
     // First-run fields.
     pub location: Option<String>,
     pub details: Option<String>,
@@ -135,7 +137,7 @@ pub struct ScheduleRun {
 
 #[derive(Debug, Deserialize)]
 pub struct CommitRun {
-    /// Minutes from now until the participant can make it. Clamped to 5..=30.
+    /// Minutes from now until the participant can make it. Clamped to 0..=30.
     pub eta_minutes: Option<u32>,
 }
 
@@ -218,6 +220,7 @@ pub struct ActivityView {
     pub max_people: Option<i64>,
     pub group_multiple: i64,
     pub grouping_mode: String,
+    pub allow_guests: bool,
     pub times_run: i64,
     pub players_served: i64,
     pub interest_total: i64,
@@ -262,6 +265,7 @@ impl ActivityView {
             max_people: row.max_people,
             group_multiple: row.group_multiple,
             grouping_mode: row.grouping_mode,
+            allow_guests: row.allow_guests != 0,
             times_run: row.times_run,
             players_served: row.players_served,
             interest_total: row.interest_total,

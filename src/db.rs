@@ -42,7 +42,7 @@ pub fn oi(v: Option<i64>) -> JsValue {
 
 const ACTIVITY_COLS: &str = "a.id, a.code, a.emoji, a.title, a.description, a.category, \
     a.proposer_id, a.min_people, a.max_people, a.group_multiple, a.grouping_mode, \
-    a.current_run_id, a.times_run, a.players_served, a.interest_total, a.commit_total, \
+    a.allow_guests, a.current_run_id, a.times_run, a.players_served, a.interest_total, a.commit_total, \
     a.last_active_at, a.created_at, a.updated_at, p.handle AS proposer_handle";
 
 const RUN_COLS: &str = "id, activity_id, status, location, details, scheduled_for, expires_at, \

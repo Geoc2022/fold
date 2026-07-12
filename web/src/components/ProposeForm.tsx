@@ -24,6 +24,7 @@ interface LastProposal {
   max_people?: number | null
   group_multiple?: number
   grouping_mode?: GroupingMode
+  allow_guests?: boolean
   location?: string
 }
 
@@ -74,6 +75,7 @@ export function ProposeForm({ initialCode, onCreated, onClose }: Props) {
   const [minPeople, setMinPeople] = useState(last.min_people ?? 2)
   const [maxPeople, setMaxPeople] = useState<number | null>(last.max_people ?? null)
   const [groupMultiple, setGroupMultiple] = useState(last.group_multiple ?? 2)
+  const [allowGuests, setAllowGuests] = useState(last.allow_guests ?? true)
   const [code, setCode] = useState(initialCode ?? '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -111,6 +113,7 @@ export function ProposeForm({ initialCode, onCreated, onClose }: Props) {
       max_people: maxPeople,
       group_multiple: mode === 'tiling' ? groupMultiple : 1,
       grouping_mode: mode,
+      allow_guests: allowGuests,
       location: location.trim() || null,
       expires_at: null,
     }
@@ -129,6 +132,7 @@ export function ProposeForm({ initialCode, onCreated, onClose }: Props) {
         max_people: maxPeople,
         group_multiple: groupMultiple,
         grouping_mode: mode,
+        allow_guests: allowGuests,
         location: location.trim() || undefined,
       })
       onCreated(activity)
@@ -188,6 +192,10 @@ export function ProposeForm({ initialCode, onCreated, onClose }: Props) {
             value={location}
             onChange={(e) => setLocation(e.target.value)}
           />
+          <label className="check-row">
+            <input type="checkbox" checked={allowGuests} onChange={(e) => setAllowGuests(e.target.checked)} />
+            <span>Allow Guests</span>
+          </label>
         </>
       )}
 

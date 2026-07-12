@@ -15,13 +15,13 @@ export const DEFAULT_VISUAL_CONFIG: VisualConfig = {
 }
 
 export const HOLD_MS = 5_000
-export const MIN_ETA_MIN = 5
+export const MIN_ETA_MIN = 0
 export const MAX_ETA_MIN = 30
 export const DEFAULT_ETA_MIN = 30
 
 export function etaFromHold(holdMs: number): number {
   const t = Math.min(1, Math.max(0, holdMs / HOLD_MS))
-  return Math.max(MIN_ETA_MIN, Math.min(MAX_ETA_MIN, Math.round(MAX_ETA_MIN - 25 * t * t)))
+  return Math.max(MIN_ETA_MIN, Math.min(MAX_ETA_MIN, Math.round(MAX_ETA_MIN * (1 - t * t))))
 }
 
 export function etaRemaining(arrivalAt: number | null, now: number): number {

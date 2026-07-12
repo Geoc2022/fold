@@ -329,10 +329,10 @@ pub async fn activity_create(mut req: Request, ctx: RouteContext<()>) -> Result<
 
     db.prepare(
         "INSERT INTO activities \
-         (id, code, emoji, title, description, category, proposer_id, min_people, max_people, group_multiple, \
-           grouping_mode, current_run_id, times_run, players_served, interest_total, commit_total, \
-           last_active_at, created_at, updated_at) \
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 0, 0, 0, 0, ?13, ?13, ?13)",
+          (id, code, emoji, title, description, category, proposer_id, min_people, max_people, group_multiple, \
+            grouping_mode, allow_guests, current_run_id, times_run, players_served, interest_total, commit_total, \
+            last_active_at, created_at, updated_at) \
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 0, 0, 0, 0, ?14, ?14, ?14)",
     )
     .bind(&[
         db::s(&id),
@@ -346,6 +346,7 @@ pub async fn activity_create(mut req: Request, ctx: RouteContext<()>) -> Result<
         db::oi(body.max_people.map(|m| m as i64)),
         db::i(group_multiple as i64),
         db::s(grouping_mode),
+        db::i(if body.allow_guests.unwrap_or(true) { 1 } else { 0 }),
         db::s(&run_id),
         db::i(now),
     ])?
@@ -550,7 +551,7 @@ pub async fn run_commit(mut req: Request, ctx: RouteContext<()>) -> Result<Respo
     };
 
     let now = now_ms();
-    let eta = body.eta_minutes.unwrap_or(30).clamp(5, 30) as i64;
+    let eta = body.eta_minutes.unwrap_or(30).min(30) as i64;
     let arrival_at = now + eta * 60 * 1000;
     db::upsert_participation(&db, &run.id, &person.id, "committed", Some(arrival_at), now).await?;
     db::touch_person(&db, &person.id, now).await?;
