@@ -1,5 +1,6 @@
+import { motion } from 'framer-motion'
 import { Link } from 'react-router-dom'
-import { compactNumber, formatPct, titleCase } from '../format'
+import { compactNumber, formatPct } from '../format'
 import type { ActivityView } from '../types'
 
 interface Props {
@@ -9,12 +10,18 @@ interface Props {
 /** List-view row: SE's lv-item, with our stats swapped in for theirs. */
 export function ActivityListItem({ activity: a }: Props) {
   return (
-    <div className="list-item">
+    <motion.div
+      layout
+      initial={{ opacity: 0, y: -8 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, scale: 0.9 }}
+      transition={{ type: 'spring', stiffness: 320, damping: 32 }}
+      className="list-item"
+    >
       <span className="list-emoji">{a.emoji}</span>
       <div className="list-info">
         <h3>{a.title}</h3>
         {a.description && <p className="list-desc">{a.description}</p>}
-        <span className="tag-pill sm">{titleCase(a.category)}</span>
       </div>
       <div className="list-stats">
         <div className="stat-box">
@@ -30,6 +37,6 @@ export function ActivityListItem({ activity: a }: Props) {
       <Link className="list-launch primary sm" to={`/${a.code}`}>
         Launch
       </Link>
-    </div>
+    </motion.div>
   )
 }

@@ -1,23 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, Navigate, useParams } from 'react-router-dom'
 import { api, ensureSession } from '../api'
+import { useTheme } from '../theme'
 import { useRoom } from '../useRoom'
 import type { Person } from '../types'
 import { CreateRunForm } from '../components/CreateRunForm'
 import { RoomCanvas } from '../components/RoomCanvas'
 import { RoomPanel } from '../components/RoomPanel'
-
-type Theme = 'light' | 'dark'
-
-const THEME_KEY = 'fold.room_theme'
-
-function initialTheme(): Theme {
-  try {
-    return localStorage.getItem(THEME_KEY) === 'dark' ? 'dark' : 'light'
-  } catch {
-    return 'light'
-  }
-}
 
 export function ActivityRoom() {
   const params = useParams()
@@ -26,7 +15,7 @@ export function ActivityRoom() {
     return /^[a-zA-Z]{4}$/.test(raw) ? raw.toUpperCase() : null
   }, [params.code])
   const [me, setMe] = useState<Person | null>(null)
-  const [theme, setTheme] = useState<Theme>(initialTheme)
+  const { theme, toggleTheme } = useTheme()
   const [alert, setAlert] = useState<string | null>(null)
   const [proposingRun, setProposingRun] = useState(true)
   const { data, error, loading, notFound, refresh } = useRoom(code, me !== null && code !== null)
@@ -44,18 +33,6 @@ export function ActivityRoom() {
       cancelled = true
     }
   }, [])
-
-  useEffect(() => {
-    document.documentElement.dataset.roomTheme = theme
-    try {
-      localStorage.setItem(THEME_KEY, theme)
-    } catch {
-      /* ignore */
-    }
-    return () => {
-      delete document.documentElement.dataset.roomTheme
-    }
-  }, [theme])
 
   // Re-open the propose-run prompt any time the room becomes freshly empty.
   useEffect(() => {
@@ -108,7 +85,7 @@ export function ActivityRoom() {
         me={me}
         onMeChanged={setMe}
         theme={theme}
-        onThemeToggle={() => setTheme((t) => (t === 'light' ? 'dark' : 'light'))}
+        onThemeToggle={toggleTheme}
         onInterested={interest}
         onCommit={commit}
         onProposeRun={() => setProposingRun(true)}

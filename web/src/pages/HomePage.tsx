@@ -1,40 +1,24 @@
+import { AnimatePresence } from 'framer-motion'
 import { useEffect, useMemo, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { clearPersonId, ensureSession } from '../api'
+import { useTheme } from '../theme'
+import { popularityOrder, tileSizes } from '../tileLayout'
 import { useSync } from '../useSync'
 import type { ActivityView, Person } from '../types'
 import { ActivityListItem } from '../components/ActivityListItem'
 import { ActivityTile } from '../components/ActivityTile'
 import { CreateTile } from '../components/CreateTile'
-import { NotificationFeed } from '../components/NotificationFeed'
 import { ProposeForm } from '../components/ProposeForm'
 import { PushPanel } from '../components/PushPanel'
 import { SortSelect, type SortKey } from '../components/SortSelect'
 import { TagBar } from '../components/TagBar'
 import { ViewToggle, type HomeView } from '../components/ViewToggle'
 
-const VIEW_KEY = 'fold.home_view'
-const SORT_KEY = 'fold.home_sort'
 const CODE_PATTERN = /^[a-zA-Z]{4}$/
+const SORT_KEYS: SortKey[] = ['newest', 'oldest', 'runs', 'served', 'commit', 'name']
 
-function initialView(): HomeView {
-  try {
-    return localStorage.getItem(VIEW_KEY) === 'list' ? 'list' : 'grid'
-  } catch {
-    return 'grid'
-  }
-}
-
-function initialSort(): SortKey {
-  try {
-    const v = localStorage.getItem(SORT_KEY)
-    return v === 'oldest' || v === 'runs' || v === 'served' || v === 'commit' || v === 'name' ? v : 'newest'
-  } catch {
-    return 'newest'
-  }
-}
-
-function sortActivities(list: ActivityView[], key: SortKey | 'active'): ActivityView[] {
+function sortActivities(list: ActivityView[], key: SortKey): ActivityView[] {
   const arr = [...list]
   switch (key) {
     case 'oldest':
@@ -49,14 +33,14 @@ function sortActivities(list: ActivityView[], key: SortKey | 'active'): Activity
       return arr.sort((a, b) => (b.commit_pct ?? -1) - (a.commit_pct ?? -1))
     case 'name':
       return arr.sort((a, b) => a.title.localeCompare(b.title))
-    case 'active':
-    default:
-      return arr.sort((a, b) => b.last_active_at - a.last_active_at)
   }
 }
 
 export function HomePage() {
+  const location = useLocation()
+  const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
+  const { theme, toggleTheme } = useTheme()
 
   // No name-gated onboarding: mint an anonymous guest session immediately,
   // matching the room's entry flow. People are only asked for a handle when
@@ -87,18 +71,30 @@ export function HomePage() {
     }
   }, [me, data])
 
-  const [tag, setTag] = useState('all')
-  const [view, setView] = useState<HomeView>(initialView)
-  const [sort, setSort] = useState<SortKey>(initialSort)
+  // View/tag/sort live entirely in the URL, matching stackexchange.com/sites
+  // (?view=list, ?tag=..., #oldest) -- no separate local persistence.
+  const view: HomeView = searchParams.get('view') === 'list' ? 'list' : 'grid'
+  const tag = searchParams.get('tag') ?? 'all'
+  const hashSort = location.hash.replace('#', '')
+  const sort: SortKey = (SORT_KEYS as string[]).includes(hashSort) ? (hashSort as SortKey) : 'oldest'
+
+  function updateUrl(patch: { view?: HomeView; tag?: string; sort?: SortKey }) {
+    const params = new URLSearchParams(searchParams)
+    params.delete('code')
+    const nextView = patch.view ?? view
+    if (nextView === 'grid') params.delete('view')
+    else params.set('view', 'list')
+    const nextTag = patch.tag ?? tag
+    if (nextTag === 'all') params.delete('tag')
+    else params.set('tag', nextTag)
+    const nextSort = patch.sort ?? sort
+    const qs = params.toString()
+    const hash = nextView === 'list' ? `#${nextSort}` : ''
+    navigate(`${location.pathname}${qs ? `?${qs}` : ''}${hash}`, { replace: true })
+  }
+
   const [creating, setCreating] = useState(false)
   const [prefillCode, setPrefillCode] = useState<string | null>(null)
-
-  useEffect(() => {
-    localStorage.setItem(VIEW_KEY, view)
-  }, [view])
-  useEffect(() => {
-    localStorage.setItem(SORT_KEY, sort)
-  }, [sort])
 
   // Arriving at /?code=TEST (redirected from a nonexistent /TEST room) opens
   // the propose form with that code pre-filled.
@@ -107,10 +103,13 @@ export function HomePage() {
     if (codeParam && CODE_PATTERN.test(codeParam)) {
       setPrefillCode(codeParam.toUpperCase())
       setCreating(true)
-      setSearchParams((p) => {
-        p.delete('code')
-        return p
-      }, { replace: true })
+      setSearchParams(
+        (p) => {
+          p.delete('code')
+          return p
+        },
+        { replace: true },
+      )
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams])
@@ -128,10 +127,10 @@ export function HomePage() {
     () => (tag === 'all' ? activities : activities.filter((a) => a.category === tag)),
     [activities, tag],
   )
-  const sorted = useMemo(
-    () => sortActivities(filtered, view === 'list' ? sort : 'active'),
-    [filtered, view, sort],
-  )
+
+  const gridOrder = useMemo(() => popularityOrder(filtered), [filtered])
+  const sizes = useMemo(() => tileSizes(filtered), [filtered])
+  const listOrder = useMemo(() => sortActivities(filtered, sort), [filtered, sort])
 
   const committedTo = activities.find((a) => a.my_state === 'committed')
 
@@ -151,8 +150,10 @@ export function HomePage() {
           <h1>fold</h1>
         </div>
         <div className="me">
-          <span className="me-dot" style={{ background: me.color }} />
           <span className="me-handle">{me.handle}</span>
+          <button className="ghost sm icon-btn" onClick={toggleTheme} title="Toggle theme">
+            {theme === 'light' ? '◐' : '◑'}
+          </button>
           <button className="ghost sm" onClick={refresh} title="Refresh now">
             ↻
           </button>
@@ -173,27 +174,36 @@ export function HomePage() {
       <main className="layout">
         <section className="main-col">
           <div className="browser-controls">
-            <TagBar categories={categories} active={tag} onSelect={setTag} />
+            <TagBar categories={categories} active={tag} onSelect={(t) => updateUrl({ tag: t })} />
             <div className="browser-controls-right">
-              {view === 'list' && <SortSelect value={sort} onChange={setSort} />}
-              <ViewToggle view={view} onChange={setView} />
+              {view === 'list' && <SortSelect value={sort} onChange={(s) => updateUrl({ sort: s })} />}
+              <ViewToggle view={view} onChange={(v) => updateUrl({ view: v })} />
             </div>
           </div>
 
           {loading && activities.length === 0 && <p className="pending">Loading activities...</p>}
 
-          <div className={view === 'grid' ? 'tile-grid' : 'list-view'}>
-            <CreateTile view={view} onClick={() => setCreating(true)} />
-            {sorted.map((a) =>
-              view === 'grid' ? (
-                <ActivityTile key={a.id} activity={a} now={now} />
-              ) : (
-                <ActivityListItem key={a.id} activity={a} />
-              ),
-            )}
-          </div>
+          {view === 'grid' ? (
+            <div className="tile-grid">
+              <CreateTile view={view} onClick={() => setCreating(true)} />
+              <AnimatePresence mode="popLayout">
+                {gridOrder.map((a) => (
+                  <ActivityTile key={a.id} activity={a} now={now} size={sizes.get(a.id) ?? 1} />
+                ))}
+              </AnimatePresence>
+            </div>
+          ) : (
+            <div className="list-view">
+              <CreateTile view={view} onClick={() => setCreating(true)} />
+              <AnimatePresence mode="popLayout">
+                {listOrder.map((a) => (
+                  <ActivityListItem key={a.id} activity={a} />
+                ))}
+              </AnimatePresence>
+            </div>
+          )}
 
-          {!loading && activities.length > 0 && sorted.length === 0 && (
+          {!loading && activities.length > 0 && filtered.length === 0 && (
             <p className="empty">No activities in this category yet.</p>
           )}
         </section>
@@ -202,11 +212,6 @@ export function HomePage() {
           <section className="card side-card">
             <PushPanel />
           </section>
-          <NotificationFeed
-            notifications={data?.notifications ?? []}
-            now={now}
-            onRead={refresh}
-          />
           {error && <p className="err small">Sync issue: {error}</p>}
         </aside>
       </main>
@@ -232,4 +237,3 @@ export function HomePage() {
     </div>
   )
 }
-

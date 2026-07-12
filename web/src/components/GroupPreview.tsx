@@ -47,17 +47,13 @@ export function GroupPreview({ mode, min, max, groupMultiple }: Props) {
           </span>
         )}
       </div>
-      <div className="preview-caption">
-        <span className="hint">
-          if {preview.sampleTotal} committed:{' '}
-          {mode === 'tiling'
-            ? `${preview.groupSizes.length} group${preview.groupSizes.length === 1 ? '' : 's'} of ${groupMultiple}`
-            : `1 group of ${preview.groupSizes[0] ?? 0}`}
-        </span>
-        <button type="button" className="ghost sm" onClick={() => setSeed((s) => s + 1)}>
-          Reroll
-        </button>
-      </div>
+      <button type="button" className="preview-caption hint" onClick={() => setSeed((s) => s + 1)}>
+        if {preview.sampleTotal} committed:{' '}
+        {mode === 'tiling'
+          ? `${preview.groupSizes.length} group${preview.groupSizes.length === 1 ? '' : 's'} of ${groupMultiple}`
+          : `1 group of ${preview.groupSizes[0] ?? 0}`}{' '}
+        <span aria-hidden="true">↻</span>
+      </button>
     </div>
   )
 }

@@ -1,3 +1,4 @@
+import { motion } from 'framer-motion'
 import type { HomeView } from './ViewToggle'
 
 interface Props {
@@ -9,18 +10,20 @@ interface Props {
 export function CreateTile({ view, onClick }: Props) {
   if (view === 'list') {
     return (
-      <button type="button" className="list-item create-list-item" onClick={onClick}>
+      <motion.button layout type="button" className="list-item create-list-item" onClick={onClick}>
         <span className="list-emoji">➕</span>
-        <div className="list-info">
-          <h3>Propose an activity</h3>
-        </div>
-      </button>
+      </motion.button>
     )
   }
   return (
-    <button type="button" className="tile create-tile" onClick={onClick}>
-      <span className="tile-emoji">➕</span>
-      <span className="tile-title">Propose an activity</span>
-    </button>
+    <motion.button
+      layout
+      type="button"
+      className="tile create-tile"
+      style={{ gridColumn: 'span 1', gridRow: 'span 1' }}
+      onClick={onClick}
+    >
+      ➕
+    </motion.button>
   )
 }

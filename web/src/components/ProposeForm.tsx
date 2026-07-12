@@ -1,11 +1,10 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ApiError, api } from '../api'
-import { localInputToMs } from '../format'
 import { groupingIsFeasible } from '../grouping'
 import type { ActivityView, GroupingMode } from '../types'
+import { EmojiPicker } from './EmojiPicker'
 import { GroupPreview } from './GroupPreview'
-import { RangeSlider } from './RangeSlider'
 
 interface Props {
   /** Prefills the code field, e.g. when arriving at a nonexistent /CODE. */
@@ -14,12 +13,12 @@ interface Props {
   onClose: () => void
 }
 
+type FormMode = 'simple' | 'expanded'
+
 const LAST_PROPOSAL_KEY = 'fold.last_proposal'
-const EMOJI_SUGGESTIONS = ['🎲', '🏸', '⚽️', '🎮', '☕️', '🧩', '🃏', '🍜', '📖', '🎵', '🏓', '🎯']
 
 interface LastProposal {
   emoji?: string
-  category?: string
   min_people?: number
   max_people?: number | null
   group_multiple?: number
@@ -74,8 +73,8 @@ export function ProposeForm({ initialCode, onCreated, onClose }: Props) {
   const navigate = useNavigate()
   const [last] = useState(loadLastProposal)
 
+  const [formMode, setFormMode] = useState<FormMode>('simple')
   const [emoji, setEmoji] = useState(last.emoji ?? '🎲')
-  const [category, setCategory] = useState(last.category ?? 'general')
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [location, setLocation] = useState(last.location ?? '')
@@ -84,12 +83,14 @@ export function ProposeForm({ initialCode, onCreated, onClose }: Props) {
   const [maxPeople, setMaxPeople] = useState<number | null>(last.max_people ?? null)
   const [groupMultiple, setGroupMultiple] = useState(last.group_multiple ?? 2)
   const [code, setCode] = useState(initialCode ?? '')
-  const [expires, setExpires] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (initialCode) setCode(initialCode)
+    if (initialCode) {
+      setCode(initialCode)
+      setFormMode('expanded')
+    }
   }, [initialCode])
 
   const feasible = groupingIsFeasible(mode, minPeople, maxPeople, groupMultiple)
@@ -105,13 +106,12 @@ export function ProposeForm({ initialCode, onCreated, onClose }: Props) {
       emoji: emoji.trim() || null,
       title: t,
       description: description.trim() || null,
-      category: category.trim() || null,
       min_people: minPeople,
       max_people: maxPeople,
       group_multiple: mode === 'tiling' ? groupMultiple : 1,
       grouping_mode: mode,
       location: location.trim() || null,
-      expires_at: localInputToMs(expires),
+      expires_at: null,
     }
 
     try {
@@ -124,7 +124,6 @@ export function ProposeForm({ initialCode, onCreated, onClose }: Props) {
       }
       saveLastProposal({
         emoji: activity.emoji,
-        category: activity.category,
         min_people: minPeople,
         max_people: maxPeople,
         group_multiple: groupMultiple,
@@ -143,74 +142,59 @@ export function ProposeForm({ initialCode, onCreated, onClose }: Props) {
   return (
     <form className="card propose-form" onSubmit={submit}>
       <div className="propose-head">
-        <h2>Propose an activity</h2>
-        <button type="button" className="ghost" onClick={onClose}>
-          Cancel
-        </button>
-      </div>
-
-      <div className="row emoji-row">
-        <label>
-          Emoji or symbol
-          <input maxLength={8} value={emoji} onChange={(e) => setEmoji(e.target.value)} />
-        </label>
-        <label>
-          Category
-          <input
-            maxLength={40}
-            placeholder="Board Games, Sports…"
-            value={category}
-            onChange={(e) => setCategory(e.target.value)}
-          />
-        </label>
-      </div>
-      <div className="emoji-suggestions">
-        {EMOJI_SUGGESTIONS.map((em) => (
+        <h2>Add an Activity</h2>
+        <div className="propose-head-actions">
           <button
             type="button"
-            key={em}
-            className={`emoji-pick ${emoji === em ? 'active' : ''}`}
-            onClick={() => setEmoji(em)}
+            className="ghost sm icon-btn"
+            title={formMode === 'simple' ? 'Show more fields' : 'Show fewer fields'}
+            onClick={() => setFormMode((m) => (m === 'simple' ? 'expanded' : 'simple'))}
           >
-            {em}
+            {formMode === 'simple' ? '◁' : '◀'}
           </button>
-        ))}
+          <button type="button" className="ghost" onClick={onClose}>
+            Cancel
+          </button>
+        </div>
       </div>
 
-      <label>
-        Title
+      <div className="title-row">
+        <EmojiPicker value={emoji} onChange={setEmoji} />
         <input
           autoFocus
           maxLength={100}
-          placeholder="Badminton, coffee run, board games…"
+          placeholder="Title"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
         />
-      </label>
+      </div>
 
-      <label>
-        Details <span className="opt">(optional)</span>
-        <textarea
-          rows={2}
-          maxLength={500}
-          placeholder="Where, vibe, anything useful"
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-        />
-      </label>
+      {formMode === 'expanded' && (
+        <>
+          <label>
+            Details
+            <textarea
+              rows={2}
+              maxLength={500}
+              placeholder="Details (optional)"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+            />
+          </label>
 
-      <label>
-        Location <span className="opt">(optional)</span>
-        <input
-          maxLength={120}
-          placeholder="Courtyard, Room 3…"
-          value={location}
-          onChange={(e) => setLocation(e.target.value)}
-        />
-      </label>
+          <label>
+            Location
+            <input
+              maxLength={120}
+              placeholder="Location (optional)"
+              value={location}
+              onChange={(e) => setLocation(e.target.value)}
+            />
+          </label>
+        </>
+      )}
 
       <div className="grouping-block">
-        <span className="grouping-label">Grouping</span>
         <div className="grouping-toggle" role="group" aria-label="Grouping mode">
           <button type="button" className={mode === 'single' ? 'active' : ''} onClick={() => setMode('single')}>
             Single group
@@ -220,16 +204,40 @@ export function ProposeForm({ initialCode, onCreated, onClose }: Props) {
           </button>
         </div>
 
-        <RangeSlider
-          floor={2}
-          ceilingPlus={15}
-          valueMin={minPeople}
-          valueMax={maxPeople}
-          onChange={(mn, mx) => {
-            setMinPeople(mn)
-            setMaxPeople(mx)
-          }}
-        />
+        <div className="row">
+          <label>
+            Min
+            <input
+              type="number"
+              min={1}
+              value={minPeople}
+              onChange={(e) => {
+                const v = Math.max(1, Number(e.target.value) || 1)
+                setMinPeople(v)
+                if (maxPeople != null && maxPeople < v) setMaxPeople(v)
+              }}
+            />
+          </label>
+          <label>
+            Max
+            <input
+              type="number"
+              min={1}
+              placeholder="∞"
+              value={maxPeople ?? ''}
+              onChange={(e) => {
+                const raw = e.target.value
+                if (raw.trim() === '') {
+                  setMaxPeople(null)
+                  return
+                }
+                const v = Math.max(1, Number(raw) || 1)
+                setMaxPeople(v)
+                if (v < minPeople) setMinPeople(v)
+              }}
+            />
+          </label>
+        </div>
 
         {mode === 'tiling' && (
           <label className="per-group">
@@ -244,28 +252,19 @@ export function ProposeForm({ initialCode, onCreated, onClose }: Props) {
         )}
 
         <GroupPreview mode={mode} min={minPeople} max={maxPeople} groupMultiple={mode === 'tiling' ? groupMultiple : 1} />
-
-        <p className="hint">
-          {mode === 'single'
-            ? 'One elastic group grows as people commit.'
-            : 'People auto-fill into parallel groups of the size above (e.g. courts of 2).'}
-        </p>
       </div>
 
-      <label>
-        Code <span className="opt">(optional, 4 letters)</span>
-        <input
-          maxLength={4}
-          placeholder="auto, from the title"
-          value={code}
-          onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z]/g, ''))}
-        />
-      </label>
-
-      <label>
-        Auto-expire <span className="opt">(optional)</span>
-        <input type="datetime-local" value={expires} onChange={(e) => setExpires(e.target.value)} />
-      </label>
+      {formMode === 'expanded' && (
+        <label>
+          Code
+          <input
+            maxLength={4}
+            placeholder="Code (optional)"
+            value={code}
+            onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z]/g, ''))}
+          />
+        </label>
+      )}
 
       {error && <p className="err">{error}</p>}
       <button type="submit" disabled={busy || !title.trim() || !feasible}>

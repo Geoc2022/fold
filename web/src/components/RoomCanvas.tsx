@@ -146,26 +146,26 @@ function draw(
   const w = canvas.clientWidth
   const h = canvas.clientHeight
   ctx.clearRect(0, 0, w, h)
-  ctx.fillStyle = theme === 'light' ? '#ffffff' : '#0b0d12'
+  ctx.fillStyle = theme === 'light' ? '#ECEFF4' : '#2E3440'
   ctx.fillRect(0, 0, w, h)
 
   ctx.save()
   ctx.translate(w / 2 + camera.x, h / 2 + camera.y)
   ctx.scale(camera.scale, camera.scale)
 
-  ctx.strokeStyle = theme === 'light' ? 'rgba(17,24,39,0.07)' : 'rgba(231,235,243,0.08)'
+  ctx.strokeStyle = theme === 'light' ? 'rgba(46,52,64,0.09)' : 'rgba(216,222,233,0.08)'
   for (let r = 80; r <= 360; r += 70) {
     ctx.beginPath()
     ctx.arc(0, 0, r, 0, Math.PI * 2)
     ctx.stroke()
   }
 
-  ctx.fillStyle = theme === 'light' ? '#111827' : '#f8fafc'
+  ctx.fillStyle = theme === 'light' ? '#2E3440' : '#ECEFF4'
   ctx.font = '600 22px system-ui, sans-serif'
   ctx.textAlign = 'center'
   ctx.fillText(activity.title, 0, -18)
   ctx.font = '13px system-ui, sans-serif'
-  ctx.fillStyle = theme === 'light' ? '#6b7280' : '#96a0b5'
+  ctx.fillStyle = theme === 'light' ? '#4C566A' : '#D8DEE9'
   ctx.fillText(roomSubtitle(activity), 0, 7)
 
   const targets = computeTargets(activity, nodes, now)
@@ -259,9 +259,9 @@ function hashAngle(id: string) {
 }
 
 function stateColor(state: 'lurker' | 'interested' | 'committed') {
-  if (state === 'committed') return '#f59e0b'
-  if (state === 'interested') return '#22c55e'
-  return '#9ca3af'
+  if (state === 'committed') return '#D08770'
+  if (state === 'interested') return '#A3BE8C'
+  return '#4C566A'
 }
 
 function roomSubtitle(a: ActivityView) {
