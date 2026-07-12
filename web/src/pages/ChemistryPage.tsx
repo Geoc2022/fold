@@ -1,10 +1,11 @@
-// Chemistry sandbox — physics interaction model (click/hold/drag) with node
-// fusion: once a committed node reaches the center it joins a cluster ring,
-// forming "circles made out of circles" like the activity room grouping.
+// Chemistry sandbox — physics interactions with node fusion into cluster rings.
+// Single mode:   all arrived nodes form one elastic group (grows with each arrival).
+// Parallel mode: arrived nodes tile into fixed-size groups of `perGroup` each.
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 type NodeState = 'lurker' | 'interested' | 'committed'
+type GroupingMode = 'single' | 'parallel'
 
 interface Node {
   id: number
@@ -14,10 +15,8 @@ interface Node {
   vy: number
   state: NodeState
   arrivalAt: number | null
-  // spawn animation
   targetX?: number
   targetY?: number
-  // stable hash angle so the node has a consistent direction from center
   angle: number
 }
 
@@ -35,12 +34,17 @@ const HOLD_MS = 5_000
 const MIN_ETA_MS = 0
 const MAX_ETA_MS = 60 * 1000
 const WORLD_R = 300
-// how close to target orbit radius before a committed node is considered "arrived"
-const ARRIVE_THRESHOLD = 6
-// number of committed nodes per group before a new group starts
-const GROUP_SIZE = 3
 
 export function ChemistryPage() {
+  const [mode, setMode] = useState<GroupingMode>('single')
+  const [perGroup, setPerGroup] = useState(3)
+  const modeRef = useRef<GroupingMode>('single')
+  const perGroupRef = useRef(3)
+
+  // Keep refs in sync so the canvas loop reads latest without re-binding
+  modeRef.current = mode
+  perGroupRef.current = perGroup
+
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const nodesRef = useRef<Node[]>([])
   const nextIdRef = useRef(1)
@@ -81,10 +85,9 @@ export function ChemistryPage() {
 
     const onPointerDown = (e: PointerEvent) => {
       const p = toWorld(e)
-      const node = hit(p.x, p.y)
       pointerRef.current = {
         id: e.pointerId,
-        node,
+        node: hit(p.x, p.y),
         startX: p.x,
         startY: p.y,
         downAt: performance.now(),
@@ -102,7 +105,6 @@ export function ChemistryPage() {
       ps.node.y = p.y
       ps.node.vx = 0
       ps.node.vy = 0
-      // Update angle so physics targets along the new direction
       const dist = Math.hypot(p.x, p.y)
       if (dist > 1) ps.node.angle = Math.atan2(p.y, p.x)
       if (ps.node.state === 'committed') {
@@ -118,12 +120,11 @@ export function ChemistryPage() {
 
       if (!ps.node) {
         const click = toWorld(e)
-        const angle = Math.hypot(click.x, click.y) < 0.001
-          ? -Math.PI / 2
-          : Math.atan2(click.y, click.x)
+        const angle =
+          Math.hypot(click.x, click.y) < 0.001 ? -Math.PI / 2 : Math.atan2(click.y, click.x)
         const target = spawnTarget(canvas, angle)
         nodesRef.current.push({
-          id: nextIdRef.current,
+          id: nextIdRef.current++,
           x: click.x,
           y: click.y,
           vx: 0,
@@ -134,7 +135,6 @@ export function ChemistryPage() {
           targetY: target.y,
           angle,
         })
-        nextIdRef.current += 1
       } else if (!ps.dragging) {
         if (ps.node.state === 'lurker') {
           ps.node.state = 'interested'
@@ -154,12 +154,12 @@ export function ChemistryPage() {
 
     let raf = 0
     const frame = () => {
-      step(nodesRef.current, pointerRef.current)
+      step(nodesRef.current, pointerRef.current, modeRef.current, perGroupRef.current)
       draw(ctx, canvas, nodesRef.current, pointerRef.current)
       const now = performance.now()
       if (now - lastLogRef.current > 1000) {
         lastLogRef.current = now
-        nodesRef.current.filter(n => n.state === 'committed').forEach(logNode)
+        nodesRef.current.filter((n) => n.state === 'committed').forEach(logNode)
       }
       raf = requestAnimationFrame(frame)
     }
@@ -179,7 +179,34 @@ export function ChemistryPage() {
     <main className="chemistry-page">
       <canvas ref={canvasRef} className="physics-canvas" />
       <div className="physics-help">
-        Click empty space: create node. Click gray: interested. Hold green: commit. Drag gold: adjust ETA. Nodes fuse into groups at the center.
+        <div className="chem-controls">
+          <button
+            className={`chem-mode-btn ${mode === 'single' ? 'active' : ''}`}
+            onClick={() => setMode('single')}
+          >
+            Single
+          </button>
+          <button
+            className={`chem-mode-btn ${mode === 'parallel' ? 'active' : ''}`}
+            onClick={() => setMode('parallel')}
+          >
+            Parallel
+          </button>
+          {mode === 'parallel' && (
+            <label className="chem-slider-label">
+              per group
+              <input
+                type="range"
+                min={2}
+                max={8}
+                value={perGroup}
+                onChange={(e) => setPerGroup(Number(e.target.value))}
+              />
+              {perGroup}
+            </label>
+          )}
+        </div>
+        Click empty: create. Click gray: interest. Hold green: commit. Drag gold: adjust ETA.
       </div>
     </main>
   )
@@ -187,17 +214,19 @@ export function ChemistryPage() {
 
 // ---- simulation ------------------------------------------------------------
 
-function step(nodes: Node[], pointer: PointerState | null) {
+function step(
+  nodes: Node[],
+  pointer: PointerState | null,
+  mode: GroupingMode,
+  perGroup: number,
+) {
   const now = Date.now()
-  const committed = nodes.filter(n => n.state === 'committed')
-
-  // Assign targets for each committed node based on group membership
-  const groupTargets = computeGroupTargets(committed, now)
+  const committed = nodes.filter((n) => n.state === 'committed')
+  const targets = computeGroupTargets(committed, now, mode, perGroup)
 
   for (const n of nodes) {
     if (pointer?.node === n && pointer.dragging) continue
 
-    // Spawn animation: lurker flies to outer ring
     if (n.state === 'lurker' && n.targetX != null && n.targetY != null) {
       n.vx += (n.targetX - n.x) * 0.03
       n.vy += (n.targetY - n.y) * 0.03
@@ -205,7 +234,7 @@ function step(nodes: Node[], pointer: PointerState | null) {
       n.vy *= 0.82
       n.x += n.vx
       n.y += n.vy
-      if (Math.hypot(n.targetX - n.x, n.targetY - n.y) < ARRIVE_THRESHOLD) {
+      if (Math.hypot(n.targetX - n.x, n.targetY - n.y) < 6) {
         n.x = n.targetX
         n.y = n.targetY
         n.vx = 0
@@ -217,49 +246,61 @@ function step(nodes: Node[], pointer: PointerState | null) {
     }
 
     if (n.state === 'committed') {
-      const target = groupTargets.get(n.id) ?? { x: 0, y: 0 }
+      const target = targets.get(n.id) ?? { x: 0, y: 0 }
       n.vx += (target.x - n.x) * 0.04
       n.vy += (target.y - n.y) * 0.04
       n.vx *= 0.82
       n.vy *= 0.82
       n.x += n.vx
       n.y += n.vy
-      logNode(n)
     }
   }
 }
 
-function computeGroupTargets(committed: Node[], now: number): Map<number, { x: number; y: number }> {
+function computeGroupTargets(
+  committed: Node[],
+  now: number,
+  mode: GroupingMode,
+  perGroup: number,
+): Map<number, { x: number; y: number }> {
   const targets = new Map<number, { x: number; y: number }>()
 
-  // Separate into: arrived (ETA elapsed) and in-flight
-  const arrived: Node[] = []
-  const inFlight: Node[] = []
-  for (const n of committed) {
-    const remaining = n.arrivalAt == null ? MAX_ETA_MS : Math.max(0, n.arrivalAt - now)
-    if (remaining === 0) {
-      arrived.push(n)
-    } else {
-      inFlight.push(n)
+  const arrived = committed.filter(
+    (n) => n.arrivalAt != null && n.arrivalAt - now <= 0,
+  )
+  const inFlight = committed.filter(
+    (n) => n.arrivalAt == null || n.arrivalAt - now > 0,
+  )
+
+  if (mode === 'single') {
+    // One elastic group: all arrived nodes orbit the center together.
+    // The orbit radius scales so nodes stay overlapping circles-of-circles.
+    const count = arrived.length
+    if (count > 0) {
+      const orbitR = count === 1 ? 0 : NODE_R * 1.1
+      arrived.forEach((n, i) => {
+        const angle = count === 1 ? 0 : (i / count) * Math.PI * 2
+        targets.set(n.id, { x: Math.cos(angle) * orbitR, y: Math.sin(angle) * orbitR })
+      })
     }
-  }
-
-  // Arrived nodes form cluster rings at center
-  const numGroups = Math.ceil(arrived.length / GROUP_SIZE)
-  const clusterCenters = groupCenters(numGroups)
-
-  arrived.forEach((n, i) => {
-    const groupIdx = Math.floor(i / GROUP_SIZE)
-    const posInGroup = i % GROUP_SIZE
-    const groupCount = Math.min(GROUP_SIZE, arrived.length - groupIdx * GROUP_SIZE)
-    const center = clusterCenters[groupIdx] ?? { x: 0, y: 0 }
-    const orbitR = NODE_R * 1.1
-    const angle = (posInGroup / groupCount) * Math.PI * 2
-    targets.set(n.id, {
-      x: center.x + Math.cos(angle) * orbitR,
-      y: center.y + Math.sin(angle) * orbitR,
+  } else {
+    // Parallel: tile into groups of `perGroup`. Each full (or partial) group
+    // gets its own cluster center arranged in a ring around the origin.
+    const numGroups = Math.max(1, Math.ceil(arrived.length / perGroup))
+    const centers = groupCenters(numGroups, perGroup)
+    arrived.forEach((n, i) => {
+      const gi = Math.floor(i / perGroup)
+      const li = i % perGroup
+      const groupCount = Math.min(perGroup, arrived.length - gi * perGroup)
+      const center = centers[gi] ?? { x: 0, y: 0 }
+      const orbitR = groupCount === 1 ? 0 : NODE_R * 1.1
+      const angle = groupCount === 1 ? 0 : (li / groupCount) * Math.PI * 2
+      targets.set(n.id, {
+        x: center.x + Math.cos(angle) * orbitR,
+        y: center.y + Math.sin(angle) * orbitR,
+      })
     })
-  })
+  }
 
   // In-flight nodes move inward along their angle as ETA approaches
   for (const n of inFlight) {
@@ -274,11 +315,16 @@ function computeGroupTargets(committed: Node[], now: number): Map<number, { x: n
   return targets
 }
 
-// Centers for N groups arranged in a small ring around the origin
-function groupCenters(count: number): Array<{ x: number; y: number }> {
+// Arrange N group centers in a ring sized to fit `perGroup` node circles
+function groupCenters(
+  count: number,
+  perGroup: number,
+): Array<{ x: number; y: number }> {
   if (count === 0) return []
   if (count === 1) return [{ x: 0, y: 0 }]
-  const ringR = NODE_R * 2.4 * (count <= 3 ? 1 : Math.sqrt(count - 1))
+  // Ring radius: enough separation so groups don't overlap each other
+  const groupFootprint = NODE_R * (1 + 2 * Math.sin(Math.PI / Math.max(2, perGroup)))
+  const ringR = Math.max(NODE_R * 2.8, groupFootprint * count / (2 * Math.PI) * 1.4)
   return Array.from({ length: count }, (_, i) => {
     const a = (i / count) * Math.PI * 2 - Math.PI / 2
     return { x: Math.cos(a) * ringR, y: Math.sin(a) * ringR }
@@ -301,7 +347,6 @@ function draw(
   ctx.save()
   ctx.translate(w / 2, h / 2)
 
-  // Concentric guide rings
   ctx.strokeStyle = 'rgba(17,24,39,0.08)'
   ctx.lineWidth = 1
   for (let r = 80; r <= WORLD_R; r += 80) {
@@ -310,7 +355,6 @@ function draw(
     ctx.stroke()
   }
 
-  // Lines from center to committed in-flight nodes
   const now = Date.now()
   for (const n of nodes) {
     if (n.state !== 'committed') continue
@@ -357,7 +401,6 @@ function drawNodes(
     lctx.fill()
   }
 
-  // Cut outline + ETA text out of layer so background shows through
   lctx.globalCompositeOperation = 'destination-out'
   lctx.lineWidth = 4
   lctx.strokeStyle = '#000'
@@ -367,6 +410,7 @@ function drawNodes(
     lctx.arc(n.x, n.y, NODE_R, 0, Math.PI * 2)
     lctx.stroke()
   }
+
   lctx.font = '700 12px system-ui, sans-serif'
   lctx.textAlign = 'center'
   lctx.textBaseline = 'middle'
@@ -381,7 +425,11 @@ function drawNodes(
   }
   if (pointer?.node?.state === 'interested' && !pointer.dragging) {
     const held = Math.min(HOLD_MS, performance.now() - pointer.downAt)
-    lctx.fillText(`${Math.round(etaFromHold(held) / 1000)}s`, pointer.node.x, pointer.node.y)
+    lctx.fillText(
+      `${Math.round(etaFromHold(held) / 1000)}s`,
+      pointer.node.x,
+      pointer.node.y,
+    )
   }
 
   ctx.save()
@@ -429,6 +477,7 @@ function spawnTarget(canvas: HTMLCanvasElement, angle: number): { x: number; y: 
 
 function logNode(n: Node) {
   const distance = Math.round(Math.hypot(n.x, n.y))
-  const eta = n.arrivalAt == null ? null : Math.max(0, Math.ceil((n.arrivalAt - Date.now()) / 1000))
+  const eta =
+    n.arrivalAt == null ? null : Math.max(0, Math.ceil((n.arrivalAt - Date.now()) / 1000))
   console.log(`node ${n.id}: distance=${distance}px eta=${eta ?? 'n/a'}s state=${n.state}`)
 }
