@@ -2,6 +2,7 @@ import { motion } from 'framer-motion'
 import { Link } from 'react-router-dom'
 import { compactNumber, formatPct } from '../format'
 import type { ActivityView } from '../types'
+import { EmojiGlyph } from './EmojiGlyph'
 
 interface Props {
   activity: ActivityView
@@ -18,7 +19,7 @@ export function ActivityListItem({ activity: a }: Props) {
       transition={{ type: 'spring', stiffness: 320, damping: 32 }}
       className="list-item"
     >
-      <span className="list-emoji">{a.emoji}</span>
+      <EmojiGlyph emoji={a.emoji} className="list-emoji" />
       <div className="list-info">
         <h3>{a.title}</h3>
         {a.description && <p className="list-desc">{a.description}</p>}

@@ -2,6 +2,7 @@ import { AnimatePresence } from 'framer-motion'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { api, clearPersonId, ensureSession } from '../api'
+import { useIconStyle } from '../iconStyle'
 import { useTheme } from '../theme'
 import { popularityOrder, tileSizes } from '../tileLayout'
 import { useSync } from '../useSync'
@@ -40,6 +41,7 @@ export function HomePage() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const { theme, toggleTheme } = useTheme()
+  const { iconStyle, toggleIconStyle } = useIconStyle()
 
   // No name-gated onboarding: mint an anonymous guest session immediately,
   // matching the room's entry flow. People are only asked for a handle when
@@ -219,6 +221,13 @@ export function HomePage() {
           )}
           <button className="icon-btn" onClick={toggleTheme} title="Toggle theme">
             {theme === 'light' ? '◐' : '◑'}
+          </button>
+          <button
+            className="icon-btn"
+            onClick={toggleIconStyle}
+            title={iconStyle === 'color' ? 'Icon style: Color (click for Noto mono)' : 'Icon style: Noto mono (click for Color)'}
+          >
+            {iconStyle === 'color' ? '🎨' : 'Ⓝ'}
           </button>
           <button className="icon-btn" onClick={refresh} title="Refresh">
             ↻

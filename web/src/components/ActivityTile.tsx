@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 import { nordColorForEmoji } from '../emojiColor'
 import { compactNumber, formatPct, relativeTime } from '../format'
 import type { ActivityView } from '../types'
+import { EmojiGlyph } from './EmojiGlyph'
 import { GroupMeter } from './GroupMeter'
 
 interface Props {
@@ -36,7 +37,7 @@ export function ActivityTile({ activity: a, now, size, expanded, onToggle }: Pro
     >
       <button type="button" className="tile-face" onClick={onToggle} aria-expanded={expanded}>
         <span className="tile-title">{a.title}</span>
-        <span className="tile-emoji">{a.emoji}</span>
+        <EmojiGlyph emoji={a.emoji} className="tile-emoji" />
       </button>
       {expanded && (
         <div className="tile-expanded">
