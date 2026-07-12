@@ -168,7 +168,7 @@ export function ProposeForm({ initialCode, onCreated, onClose }: Props) {
       </div>
 
       <div className="title-row">
-        <EmojiPicker value={emoji} onChange={setEmoji} title={title} />
+        <EmojiPicker value={emoji} onChange={setEmoji} />
         <input
           autoFocus
           maxLength={100}

@@ -71,32 +71,12 @@ body {
   transition: background 0.15s ease, color 0.15s ease;
 }
 
-/* Monochrome icon style: Noto Emoji is a single-color font, so `color`
-   tints the glyph directly (unlike system color-emoji fonts). */
+/* Every activity icon renders as Noto Emoji: a single-color font, so
+   `color` tints the glyph directly (unlike system color-emoji fonts) and
+   nothing changes visually when an emoji goes from picker to tile. */
 .noto-emoji {
   font-family: "Noto Emoji", sans-serif;
   font-weight: 400;
-}
-
-/* Pictogram icon style: inlined public-domain Olympic-style SVGs, forced to
-   `currentColor` so the same per-emoji accent tints them too. */
-.pictogram-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  line-height: 0;
-}
-.pictogram-icon svg {
-  width: 1em;
-  height: 1em;
-  display: block;
-}
-.pictogram-icon svg path,
-.pictogram-icon svg circle,
-.pictogram-icon svg rect,
-.pictogram-icon svg polygon,
-.pictogram-icon svg ellipse {
-  fill: currentColor !important;
 }
 
 h1,
@@ -203,6 +183,10 @@ select {
   border-radius: 10px;
   padding: 0.55rem 0.7rem;
 }
+textarea {
+  resize: vertical;
+  min-height: 3.4em;
+}
 input:focus,
 textarea:focus,
 select:focus {
@@ -293,6 +277,7 @@ label .opt {
   border: none;
   border-radius: 0;
   padding: 0.15rem 0.2rem;
+  margin-left: 0.5rem;
   color: var(--text);
   cursor: text;
 }
@@ -309,6 +294,7 @@ label .opt {
   width: auto;
   text-align: right;
   padding: 0.15rem 0.2rem;
+  margin-left: 0.5rem;
   border: none;
   background: transparent;
 }
@@ -359,8 +345,13 @@ label .opt {
   color: var(--muted);
   white-space: nowrap;
 }
-.tag-pill:hover:not(:disabled):not(.active) {
-  background: var(--surface-3);
+/* No hover animation at all for categories -- cancel the generic
+   button:hover rule by re-asserting each state's own resting background. */
+.tag-pill:hover:not(:disabled) {
+  background: var(--panel-2);
+}
+.tag-pill.active:hover:not(:disabled) {
+  background: var(--accent-solid);
 }
 .tag-pill.active {
   background: var(--accent-solid);
@@ -452,7 +443,7 @@ label .opt {
   -webkit-box-orient: vertical;
 }
 .tile-emoji {
-  font-size: 1.7rem;
+  font-size: 1.4rem;
   line-height: 1;
 }
 /* Icon size is O(n^2) in the tile's side length (n units), not linear, so
@@ -461,13 +452,13 @@ label .opt {
   font-size: 0.95rem;
 }
 .tile.size-2 .tile-emoji {
-  font-size: 6.8rem;
+  font-size: 5.6rem;
 }
 .tile.size-3 .tile-title {
   font-size: 1.05rem;
 }
 .tile.size-3 .tile-emoji {
-  font-size: 15.3rem;
+  font-size: 12.6rem;
 }
 .tile.expanded .tile-title {
   font-size: 1.2rem;
@@ -722,17 +713,15 @@ label .opt {
   padding: 0;
   font-size: 1.4rem;
   text-align: center;
+  font-family: "Noto Emoji", sans-serif;
 }
 .emoji-nav {
   position: absolute;
   top: calc(100% + 0.35rem);
   left: 0;
   z-index: 20;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
   width: 260px;
-  max-height: 70vh;
+  max-height: 320px;
   padding: 0.6rem;
   background: var(--panel);
   border: 1px solid var(--border);
@@ -740,23 +729,18 @@ label .opt {
   box-shadow: 0 12px 28px var(--shadow);
   overflow-y: auto;
 }
-.emoji-nav-divider {
-  border-top: 1px solid var(--border);
-  flex: 0 0 auto;
-}
+/* Fixed-size cells (not aspect-ratio on a fluid width) so every row is
+   identically tall regardless of a given glyph's own metrics. */
 .emoji-grid {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(6, 36px);
+  grid-auto-rows: 36px;
   gap: 0.3rem;
-  flex: 0 0 auto;
-}
-.emoji-grid-scroll {
-  max-height: 220px;
-  overflow-y: auto;
+  justify-content: center;
 }
 .emoji-pick {
-  width: 100%;
-  aspect-ratio: 1;
+  width: 36px;
+  height: 36px;
   padding: 0;
   font-size: 1.05rem;
   display: flex;
