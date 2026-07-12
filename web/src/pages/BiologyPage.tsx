@@ -264,18 +264,6 @@ export function BiologyPage() {
       <canvas ref={canvasRef} className="physics-canvas" />
       <div className="physics-help bio-help">
 
-        <div className="chem-controls">
-          <button className={`chem-mode-btn ${mode === 'single' ? 'active' : ''}`} onClick={() => setMode('single')}>Single</button>
-          <button className={`chem-mode-btn ${mode === 'parallel' ? 'active' : ''}`} onClick={() => setMode('parallel')}>Parallel</button>
-          {mode === 'parallel' && (
-            <label className="chem-slider-label">
-              per group
-              <input type="range" min={2} max={8} value={perGroup} onChange={e => setPerGroup(Number(e.target.value))} />
-              {perGroup}
-            </label>
-          )}
-        </div>
-
         <div className="bio-section-title">Simulation</div>
         <div className="bio-sliders">
           <SR label="spawn/s"      min={0}  max={5}   step={0.1}  value={sim.spawnPerSec}  fmt={v => v.toFixed(1)}              onChange={v => patchSim({ spawnPerSec: v })} />
@@ -283,6 +271,16 @@ export function BiologyPage() {
           <SR label="→ committed"  min={0}  max={1}   step={0.05} value={sim.commitRate}   fmt={v => `${Math.round(v*100)}%/s`} onChange={v => patchSim({ commitRate: v })} />
           <SR label="avg ETA"      min={5}  max={60}  step={1}    value={sim.avgEtaSec}    fmt={v => `${v}s`}                   onChange={v => patchSim({ avgEtaSec: v })} />
           <SR label="max nodes"    min={5}  max={120} step={5}    value={sim.maxNodes}     fmt={v => String(v)}                 onChange={v => patchSim({ maxNodes: v })} />
+          <div className="bio-slider-row">
+            <span className="bio-slider-label">grouping</span>
+            <div className="bio-mode-btns">
+              <button className={`chem-mode-btn ${mode === 'single' ? 'active' : ''}`} onClick={() => setMode('single')}>Single</button>
+              <button className={`chem-mode-btn ${mode === 'parallel' ? 'active' : ''}`} onClick={() => setMode('parallel')}>Parallel</button>
+            </div>
+          </div>
+          {mode === 'parallel' && (
+            <SR label="per group" min={2} max={8} step={1} value={perGroup} fmt={v => String(v)} onChange={v => setPerGroup(v)} />
+          )}
         </div>
 
         <div className="bio-section-title">Visual</div>
@@ -485,7 +483,8 @@ function draw(
 }
 
 function colorFor(state: NodeState): string {
-  if (state === 'arrived' || state === 'committed') return '#f59e0b'
+  if (state === 'arrived') return '#ef4444'
+  if (state === 'committed') return '#f59e0b'
   if (state === 'interested') return '#22c55e'
   return '#9ca3af'
 }
