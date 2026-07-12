@@ -21,14 +21,13 @@ function loadSvg(slug: string): Promise<string> {
 
 interface Props {
   slug: string
-  color: string
   className?: string
 }
 
 /** Inlines a downloaded pictogram SVG (see pictogramCatalog.ts) so it can be
- * tinted with `color` via `fill: currentColor` -- the files ship with no
- * explicit fill (SVG default black), same trick as the Noto Emoji style. */
-export function PictogramIcon({ slug, color, className }: Props) {
+ * tinted with `color: currentColor` -- the files ship with no explicit fill
+ * (SVG default black), and the actual color is whatever the parent sets. */
+export function PictogramIcon({ slug, className }: Props) {
   const [svg, setSvg] = useState<string | null>(svgCache.get(slug) ?? null)
 
   useEffect(() => {
@@ -42,11 +41,5 @@ export function PictogramIcon({ slug, color, className }: Props) {
     }
   }, [slug])
 
-  return (
-    <span
-      className={`${className ?? ''} pictogram-icon`}
-      style={{ color }}
-      dangerouslySetInnerHTML={{ __html: svg ?? '' }}
-    />
-  )
+  return <span className={`${className ?? ''} pictogram-icon`} dangerouslySetInnerHTML={{ __html: svg ?? '' }} />
 }

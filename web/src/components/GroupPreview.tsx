@@ -21,10 +21,7 @@ export function GroupPreview({ mode, min, max, groupMultiple }: Props) {
   if (!preview.feasible) {
     return (
       <div className="group-preview infeasible">
-        <p className="err">
-          This min/max/group-size combination can never form a complete group
-          {mode === 'tiling' ? ` of ${groupMultiple}` : ''}. Widen the range or change the group size.
-        </p>
+        <p className="err">Invalid grouping</p>
       </div>
     )
   }

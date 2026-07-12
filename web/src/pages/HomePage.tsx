@@ -2,7 +2,6 @@ import { AnimatePresence } from 'framer-motion'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { api, clearPersonId, ensureSession } from '../api'
-import { useIconStyle } from '../iconStyle'
 import { useTheme } from '../theme'
 import { popularityOrder, tileSizes } from '../tileLayout'
 import { useSync } from '../useSync'
@@ -16,8 +15,6 @@ import { TagBar } from '../components/TagBar'
 import { ViewToggle, type HomeView } from '../components/ViewToggle'
 
 const CODE_PATTERN = /^[a-zA-Z]{4}$/
-const ICON_STYLE_LABEL = { color: 'Color', noto: 'Noto mono', pictogram: 'Pictogram' } as const
-const ICON_STYLE_GLYPH = { color: '🎨', noto: 'Ⓝ', pictogram: '🏅' } as const
 const SORT_KEYS: SortKey[] = ['newest', 'oldest', 'runs', 'served', 'commit', 'name']
 
 function sortActivities(list: ActivityView[], key: SortKey): ActivityView[] {
@@ -43,7 +40,6 @@ export function HomePage() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const { theme, toggleTheme } = useTheme()
-  const { iconStyle, toggleIconStyle } = useIconStyle()
 
   // No name-gated onboarding: mint an anonymous guest session immediately,
   // matching the room's entry flow. People are only asked for a handle when
@@ -223,13 +219,6 @@ export function HomePage() {
           )}
           <button className="icon-btn" onClick={toggleTheme} title="Toggle theme">
             {theme === 'light' ? '◐' : '◑'}
-          </button>
-          <button
-            className="icon-btn"
-            onClick={toggleIconStyle}
-            title={`Icon style: ${ICON_STYLE_LABEL[iconStyle]} (click to cycle)`}
-          >
-            {ICON_STYLE_GLYPH[iconStyle]}
           </button>
           <button className="icon-btn" onClick={refresh} title="Refresh">
             ↻

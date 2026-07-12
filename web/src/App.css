@@ -178,6 +178,9 @@ button:disabled {
   color: var(--danger);
   border-color: transparent;
 }
+.danger:hover:not(:disabled) {
+  background: transparent;
+}
 .icon-btn {
   padding: 0.3rem 0.5rem;
   line-height: 1;
@@ -309,6 +312,9 @@ label .opt {
   border: none;
   background: transparent;
 }
+.handle-edit:focus {
+  outline: none;
+}
 .handle-measure {
   position: absolute;
   visibility: hidden;
@@ -353,11 +359,13 @@ label .opt {
   color: var(--muted);
   white-space: nowrap;
 }
-.tag-pill:hover:not(:disabled) {
+.tag-pill:hover:not(:disabled):not(.active) {
   background: var(--surface-3);
 }
 .tag-pill.active {
-  color: var(--text);
+  background: var(--accent-solid);
+  border-color: transparent;
+  color: var(--nord6);
   font-weight: 600;
 }
 .view-toggle {
@@ -375,11 +383,12 @@ label .opt {
   align-items: center;
   color: var(--muted);
 }
-.view-toggle button:hover:not(:disabled) {
+.view-toggle button:hover:not(:disabled):not(.active) {
   background: var(--surface-3);
 }
 .view-toggle button.active {
-  color: var(--text);
+  background: var(--accent-solid);
+  color: var(--nord6);
 }
 .sort-select {
   flex-direction: row;
@@ -404,9 +413,8 @@ label .opt {
   justify-content: center;
 }
 .tile {
-  background: color-mix(in srgb, var(--tile-accent, var(--panel)) 8%, var(--panel));
+  background: var(--panel);
   border: 1px solid var(--border);
-  border-top: 3px solid var(--tile-accent, var(--border));
   border-radius: var(--radius);
   overflow: hidden;
   text-align: left;
@@ -425,15 +433,14 @@ label .opt {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0.35rem;
-  background: transparent;
+  gap: 0.6rem;
+  /* background is set inline per-tile (hashed accent color); text/icon use
+     the page background color so they read as a solid, inverted swatch. */
+  color: var(--bg);
   border: none;
   border-radius: 0;
   padding: 0.5rem;
   text-align: center;
-}
-.tile-face:hover:not(:disabled) {
-  background: transparent;
 }
 .tile-title {
   font-weight: 650;
@@ -448,17 +455,19 @@ label .opt {
   font-size: 1.7rem;
   line-height: 1;
 }
+/* Icon size is O(n^2) in the tile's side length (n units), not linear, so
+   bigger tiles get disproportionately bigger icons. */
 .tile.size-2 .tile-title {
   font-size: 0.95rem;
 }
 .tile.size-2 .tile-emoji {
-  font-size: 2.5rem;
+  font-size: 6.8rem;
 }
 .tile.size-3 .tile-title {
   font-size: 1.05rem;
 }
 .tile.size-3 .tile-emoji {
-  font-size: 3.2rem;
+  font-size: 15.3rem;
 }
 .tile.expanded .tile-title {
   font-size: 1.2rem;
@@ -479,6 +488,10 @@ label .opt {
   background: transparent;
   border-color: var(--accent);
   color: var(--accent);
+}
+.create-plus {
+  font-weight: 300;
+  line-height: 1;
 }
 
 .tile-expanded {
@@ -717,26 +730,27 @@ label .opt {
   z-index: 20;
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
+  gap: 0.5rem;
   width: 260px;
+  max-height: 70vh;
   padding: 0.6rem;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 10px;
   box-shadow: 0 12px 28px var(--shadow);
+  overflow-y: auto;
 }
-.emoji-nav-hint {
-  margin: 0;
-  font-size: 0.72rem;
-  color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.emoji-nav-divider {
+  border-top: 1px solid var(--border);
+  flex: 0 0 auto;
 }
 .emoji-grid {
   display: grid;
   grid-template-columns: repeat(6, 1fr);
   gap: 0.3rem;
+  flex: 0 0 auto;
+}
+.emoji-grid-scroll {
   max-height: 220px;
   overflow-y: auto;
 }
@@ -775,11 +789,13 @@ label .opt {
   background: var(--panel-2);
   color: var(--muted);
 }
-.grouping-toggle button:hover:not(:disabled) {
+.grouping-toggle button:hover:not(:disabled):not(.active) {
   background: var(--surface-3);
 }
 .grouping-toggle button.active {
-  color: var(--text);
+  background: var(--accent-solid);
+  border-color: transparent;
+  color: var(--nord6);
   font-weight: 600;
 }
 
@@ -808,6 +824,7 @@ label .opt {
   cursor: pointer;
 }
 .preview-caption:hover:not(:disabled) {
+  background: transparent;
   filter: none;
   text-decoration: underline;
 }
