@@ -1,7 +1,7 @@
 import { AnimatePresence } from 'framer-motion'
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
-import { clearPersonId, ensureSession } from '../api'
+import { api, clearPersonId, ensureSession } from '../api'
 import { useTheme } from '../theme'
 import { popularityOrder, tileSizes } from '../tileLayout'
 import { useSync } from '../useSync'
@@ -132,7 +132,40 @@ export function HomePage() {
   const sizes = useMemo(() => tileSizes(filtered), [filtered])
   const listOrder = useMemo(() => sortActivities(filtered, sort), [filtered, sort])
 
-  const committedTo = activities.find((a) => a.my_state === 'committed')
+  // Only one tile can be expanded at a time; clicking off any tile collapses it.
+  const [expandedId, setExpandedId] = useState<string | null>(null)
+  useEffect(() => {
+    if (!expandedId) return
+    function onDocClick(e: MouseEvent) {
+      const target = e.target as HTMLElement
+      if (target.closest('.tile-face')) return // the tile's own click handles this
+      if (target.closest('.tile.expanded')) return // click inside the expanded panel
+      setExpandedId(null)
+    }
+    document.addEventListener('click', onDocClick)
+    return () => document.removeEventListener('click', onDocClick)
+  }, [expandedId])
+
+  const [editingHandle, setEditingHandle] = useState(false)
+  const [handleInput, setHandleInput] = useState('')
+
+  function startEditHandle() {
+    if (!me) return
+    setHandleInput(me.handle)
+    setEditingHandle(true)
+  }
+
+  async function commitHandle() {
+    setEditingHandle(false)
+    const trimmed = handleInput.trim()
+    if (!me || !trimmed || trimmed === me.handle) return
+    try {
+      const updated = await api.updateSession({ handle: trimmed })
+      setMe(updated)
+    } catch {
+      /* best effort; keep the previous handle displayed */
+    }
+  }
 
   if (!me) {
     return (
@@ -150,7 +183,24 @@ export function HomePage() {
           <h1>fold</h1>
         </div>
         <div className="me">
-          <span className="me-handle">{me.handle}</span>
+          {editingHandle ? (
+            <input
+              className="handle-edit"
+              autoFocus
+              maxLength={40}
+              value={handleInput}
+              onChange={(e) => setHandleInput(e.target.value)}
+              onBlur={commitHandle}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') commitHandle()
+                if (e.key === 'Escape') setEditingHandle(false)
+              }}
+            />
+          ) : (
+            <button type="button" className="me-handle" onClick={startEditHandle} title="Click to rename">
+              {me.handle}
+            </button>
+          )}
           <button className="ghost sm icon-btn" onClick={toggleTheme} title="Toggle theme">
             {theme === 'light' ? '◐' : '◑'}
           </button>
@@ -159,17 +209,6 @@ export function HomePage() {
           </button>
         </div>
       </header>
-
-      {committedTo && (
-        <div className="committed-banner">
-          You're committed to <strong>{committedTo.title}</strong>
-          {committedTo.current_run?.status === 'scheduled'
-            ? ' - scheduled.'
-            : committedTo.current_run?.group.is_ready
-              ? ' - group is ready!'
-              : ' - waiting for the group to form.'}
-        </div>
-      )}
 
       <main className="layout">
         <section className="main-col">
@@ -188,7 +227,14 @@ export function HomePage() {
               <CreateTile view={view} onClick={() => setCreating(true)} />
               <AnimatePresence mode="popLayout">
                 {gridOrder.map((a) => (
-                  <ActivityTile key={a.id} activity={a} now={now} size={sizes.get(a.id) ?? 1} />
+                  <ActivityTile
+                    key={a.id}
+                    activity={a}
+                    now={now}
+                    size={sizes.get(a.id) ?? 1}
+                    expanded={expandedId === a.id}
+                    onToggle={() => setExpandedId((cur) => (cur === a.id ? null : a.id))}
+                  />
                 ))}
               </AnimatePresence>
             </div>
@@ -209,9 +255,7 @@ export function HomePage() {
         </section>
 
         <aside className="side-col">
-          <section className="card side-card">
-            <PushPanel />
-          </section>
+          <PushPanel />
           {error && <p className="err small">Sync issue: {error}</p>}
         </aside>
       </main>

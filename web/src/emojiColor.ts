@@ -3,6 +3,8 @@
 // palette swatch. Memoized since the canvas sampling is a little expensive
 // and every activity with the same emoji shares the same result.
 
+import { hashUnit } from './hash'
+
 export const NORD_PALETTE = [
   '#2E3440', // nord0
   '#3B4252', // nord1
@@ -22,10 +24,16 @@ export const NORD_PALETTE = [
   '#B48EAD', // nord15
 ]
 
-const FALLBACK = NORD_PALETTE[8] // nord8
-
 const cache = new Map<string, string>()
 let sharedCanvas: HTMLCanvasElement | null = null
+
+/** When the glyph has no usable color (blank/whitespace/unsupported
+ * character, or canvas is unavailable), hash the string itself onto the
+ * palette so the "random" choice is still consistent for everyone. */
+function hashedFallback(s: string): string {
+  const idx = Math.floor(hashUnit(s) * NORD_PALETTE.length) % NORD_PALETTE.length
+  return NORD_PALETTE[idx]
+}
 
 function hexToRgb(hex: string): [number, number, number] {
   const n = parseInt(hex.slice(1), 16)
@@ -57,7 +65,7 @@ export function nordColorForEmoji(emoji: string): string {
     canvas.width = size
     canvas.height = size
     const ctx = canvas.getContext('2d', { willReadFrequently: true })
-    if (!ctx) return FALLBACK
+    if (!ctx) return hashedFallback(emoji)
 
     ctx.clearRect(0, 0, size, size)
     ctx.font = `${Math.round(size * 0.85)}px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif`
@@ -84,10 +92,10 @@ export function nordColorForEmoji(emoji: string): string {
     for (const bucket of buckets.values()) {
       if (!mode || bucket.count > mode.count) mode = bucket
     }
-    const result = mode ? nearestNord(mode.r, mode.g, mode.b) : FALLBACK
+    const result = mode ? nearestNord(mode.r, mode.g, mode.b) : hashedFallback(emoji)
     cache.set(emoji, result)
     return result
   } catch {
-    return FALLBACK
+    return hashedFallback(emoji)
   }
 }

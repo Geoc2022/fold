@@ -210,6 +210,21 @@ label .opt {
 }
 .me-handle {
   font-weight: 600;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  padding: 0.15rem 0.4rem;
+  color: var(--text);
+}
+.me-handle:hover {
+  filter: none;
+  background: var(--panel-2);
+}
+.handle-edit {
+  width: auto;
+  font-weight: 600;
+  padding: 0.15rem 0.4rem;
+  max-width: 140px;
 }
 
 .committed-banner {
@@ -313,7 +328,7 @@ label .opt {
 
 /* ---- grid (tile) view: variable-size mosaic, popularity-ordered ---- */
 .tile-grid {
-  --tile-unit: 150px;
+  --tile-unit: 108px;
   display: grid;
   grid-template-columns: repeat(auto-fill, var(--tile-unit));
   grid-auto-rows: var(--tile-unit);
@@ -507,8 +522,8 @@ label .opt {
 
 @media (max-width: 560px) {
   .tile-grid {
-    --tile-unit: 108px;
-    gap: 0.45rem;
+    --tile-unit: 82px;
+    gap: 0.4rem;
   }
   .list-item {
     flex-wrap: wrap;

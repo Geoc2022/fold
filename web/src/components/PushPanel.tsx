@@ -100,19 +100,20 @@ export function PushPanel() {
     }
   }
 
-  if (state === 'checking') return null
-  if (state === 'unsupported') {
-    return <p className="hint push-note">This browser does not support Web Push.</p>
-  }
-  if (state === 'not-configured') {
-    return <p className="hint push-note">Push is disabled until VAPID keys are configured.</p>
-  }
+  // Nothing useful to show right now (still checking, unsupported, or not
+  // configured) -- render nothing rather than an empty/disabled-looking box.
+  if (state === 'checking' || state === 'unsupported' || state === 'not-configured') return null
+
   if (state === 'blocked') {
-    return <p className="hint push-note">Push notifications are blocked in this browser.</p>
+    return (
+      <section className="card side-card">
+        <p className="hint push-note">Push notifications are blocked in this browser.</p>
+      </section>
+    )
   }
 
   return (
-    <div className="push-panel">
+    <section className="card side-card push-panel">
       <div>
         <strong>Push notifications</strong>
         <p className="hint">
@@ -125,6 +126,6 @@ export function PushPanel() {
         {busy ? '…' : state === 'on' ? 'Disable' : 'Enable'}
       </button>
       {error && <p className="err small">{error}</p>}
-    </div>
+    </section>
   )
 }

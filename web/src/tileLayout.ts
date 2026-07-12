@@ -4,19 +4,10 @@
 // per-user) lets smaller activities occasionally surface near the top too --
 // consistently, for every visitor.
 
+import { hashUnit } from './hash'
 import type { ActivityView } from './types'
 
 export type TileSize = 1 | 2 | 3
-
-/** Stable string hash (FNV-1a), normalized to [0, 1). */
-function hashUnit(s: string): number {
-  let h = 0x811c9dc5
-  for (let i = 0; i < s.length; i += 1) {
-    h ^= s.charCodeAt(i)
-    h = Math.imul(h, 0x01000193)
-  }
-  return (h >>> 0) / 4294967295
-}
 
 function popularity(a: ActivityView): number {
   return a.players_served * 2 + a.times_run

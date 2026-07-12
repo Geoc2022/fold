@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link, Navigate, useParams } from 'react-router-dom'
+import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
 import { api, ensureSession } from '../api'
 import { useTheme } from '../theme'
 import { useRoom } from '../useRoom'
@@ -10,10 +10,14 @@ import { RoomPanel } from '../components/RoomPanel'
 
 export function ActivityRoom() {
   const params = useParams()
+  const navigate = useNavigate()
+  const rawParam = params.code ?? ''
+  // Any letters-only link of 4+ characters resolves against its first four
+  // letters (e.g. /boardgames -> BOAR), so an existing code's link can be
+  // typed/shared in a longer, friendlier form and still shorten correctly.
   const code = useMemo(() => {
-    const raw = params.code ?? ''
-    return /^[a-zA-Z]{4}$/.test(raw) ? raw.toUpperCase() : null
-  }, [params.code])
+    return /^[a-zA-Z]{4,}$/.test(rawParam) ? rawParam.slice(0, 4).toUpperCase() : null
+  }, [rawParam])
   const [me, setMe] = useState<Person | null>(null)
   const { theme, toggleTheme } = useTheme()
   const [alert, setAlert] = useState<string | null>(null)
@@ -39,8 +43,16 @@ export function ActivityRoom() {
     if (data && data.activity.current_run == null) setProposingRun(true)
   }, [data])
 
+  // A longer link that resolved to a real code shortens itself in the
+  // address bar, e.g. /boardgames -> /BOAR, once we know BOAR is real.
+  useEffect(() => {
+    if (code && data && !notFound && rawParam.toUpperCase() !== code) {
+      navigate(`/${code}`, { replace: true })
+    }
+  }, [code, data, notFound, rawParam, navigate])
+
   if (code === null) {
-    return <RoomMessage title="Invalid link" message="Activity links are four letters." />
+    return <RoomMessage title="Invalid link" message="Activity links are letters only." />
   }
 
   // A nonexistent code prompts creating a brand-new activity with that code
