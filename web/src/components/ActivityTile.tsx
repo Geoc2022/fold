@@ -44,7 +44,9 @@ export function ActivityTile({ activity: a, now, size, expanded, onToggle }: Pro
         style={{ background: accent }}
       >
         <span className="tile-title">{a.title}</span>
-        <EmojiGlyph emoji={a.emoji} className="tile-emoji" />
+        <span className="tile-icon-box">
+          <EmojiGlyph emoji={a.emoji} className="tile-emoji" />
+        </span>
       </button>
       {expanded && (
         <div className="tile-expanded">
