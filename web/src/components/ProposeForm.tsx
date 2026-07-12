@@ -93,6 +93,15 @@ export function ProposeForm({ initialCode, onCreated, onClose }: Props) {
     }
   }, [initialCode])
 
+  // Esc closes the form, same as clicking Cancel.
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [onClose])
+
   const feasible = groupingIsFeasible(mode, minPeople, maxPeople, groupMultiple)
 
   async function submit(e: React.FormEvent) {
@@ -152,7 +161,7 @@ export function ProposeForm({ initialCode, onCreated, onClose }: Props) {
           >
             {formMode === 'simple' ? '◁' : '◀'}
           </button>
-          <button type="button" className="ghost" onClick={onClose}>
+          <button type="button" className="ghost danger" onClick={onClose}>
             Cancel
           </button>
         </div>
@@ -171,26 +180,22 @@ export function ProposeForm({ initialCode, onCreated, onClose }: Props) {
 
       {formMode === 'expanded' && (
         <>
-          <label>
-            Details
-            <textarea
-              rows={2}
-              maxLength={500}
-              placeholder="Details (optional)"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-            />
-          </label>
+          <textarea
+            aria-label="Details"
+            rows={2}
+            maxLength={500}
+            placeholder="Details (optional)"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+          />
 
-          <label>
-            Location
-            <input
-              maxLength={120}
-              placeholder="Location (optional)"
-              value={location}
-              onChange={(e) => setLocation(e.target.value)}
-            />
-          </label>
+          <input
+            aria-label="Location"
+            maxLength={120}
+            placeholder="Location (optional)"
+            value={location}
+            onChange={(e) => setLocation(e.target.value)}
+          />
         </>
       )}
 
@@ -204,8 +209,8 @@ export function ProposeForm({ initialCode, onCreated, onClose }: Props) {
           </button>
         </div>
 
-        <div className="row">
-          <label>
+        <div className="people-row">
+          <label className="num-field">
             Min
             <input
               type="number"
@@ -218,7 +223,7 @@ export function ProposeForm({ initialCode, onCreated, onClose }: Props) {
               }}
             />
           </label>
-          <label>
+          <label className="num-field">
             Max
             <input
               type="number"
@@ -237,33 +242,30 @@ export function ProposeForm({ initialCode, onCreated, onClose }: Props) {
               }}
             />
           </label>
+          {mode === 'tiling' && (
+            <label className="num-field">
+              Per group
+              <input
+                type="number"
+                min={1}
+                value={groupMultiple}
+                onChange={(e) => setGroupMultiple(Math.max(1, Number(e.target.value) || 1))}
+              />
+            </label>
+          )}
         </div>
-
-        {mode === 'tiling' && (
-          <label className="per-group">
-            Per group
-            <input
-              type="number"
-              min={1}
-              value={groupMultiple}
-              onChange={(e) => setGroupMultiple(Math.max(1, Number(e.target.value) || 1))}
-            />
-          </label>
-        )}
 
         <GroupPreview mode={mode} min={minPeople} max={maxPeople} groupMultiple={mode === 'tiling' ? groupMultiple : 1} />
       </div>
 
       {formMode === 'expanded' && (
-        <label>
-          Code
-          <input
-            maxLength={4}
-            placeholder="Code (optional)"
-            value={code}
-            onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z]/g, ''))}
-          />
-        </label>
+        <input
+          aria-label="Code"
+          maxLength={4}
+          placeholder="Code (optional)"
+          value={code}
+          onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z]/g, ''))}
+        />
       )}
 
       {error && <p className="err">{error}</p>}
@@ -274,6 +276,12 @@ export function ProposeForm({ initialCode, onCreated, onClose }: Props) {
   )
 }
 
+/** Distinguishes "that code is already taken" (retry with another candidate)
+ * from other 409s like a duplicate title (surface immediately instead). */
+function isCodeConflict(body: unknown): boolean {
+  return typeof body === 'object' && body !== null && (body as { conflict?: unknown }).conflict === 'code'
+}
+
 async function createWithDerivedCode(
   basePayload: Omit<Parameters<typeof api.createActivity>[0], 'code'>,
   title: string,
@@ -282,7 +290,7 @@ async function createWithDerivedCode(
     try {
       return await api.createActivity({ ...basePayload, code: candidate })
     } catch (err) {
-      if (err instanceof ApiError && err.status === 409) continue
+      if (err instanceof ApiError && err.status === 409 && isCodeConflict(err.body)) continue
       throw err
     }
   }

@@ -30,26 +30,37 @@
     Helvetica, Arial, sans-serif;
 }
 
+/* Every themeable color used on the page lives here, as one of two ramps
+   (dark/light). --surface-3 is derived (not a literal color): it nudges
+   --panel-2 a bit toward the current --text color, which is automatically
+   "one step lighter" in dark mode and "one step darker" in light mode --
+   i.e. always the next step *away* from the background, in either theme. */
 html,
 html[data-theme="dark"] {
+  color-scheme: dark;
   --bg: var(--nord0);
   --panel: var(--nord1);
   --panel-2: var(--nord2);
+  --surface-3: color-mix(in srgb, var(--panel-2) 78%, var(--text) 14%);
   --border: var(--nord3);
   --text: var(--nord6);
   --muted: var(--nord4);
   --accent: var(--nord8);
   --accent-2: var(--nord7);
+  --shadow: rgba(0, 0, 0, 0.45);
 }
 html[data-theme="light"] {
+  color-scheme: light;
   --bg: var(--nord6);
   --panel: #ffffff;
-  --panel-2: var(--nord5);
+  --panel-2: var(--nord4);
+  --surface-3: color-mix(in srgb, var(--panel-2) 78%, var(--text) 14%);
   --border: var(--nord4);
   --text: var(--nord0);
   --muted: var(--nord3);
   --accent: var(--nord10);
   --accent-2: var(--nord9);
+  --shadow: rgba(46, 52, 64, 0.22);
 }
 
 body {
@@ -68,7 +79,30 @@ h3 {
   letter-spacing: -0.01em;
 }
 
-button {
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:visited {
+  color: var(--accent);
+}
+
+/* Visually-hidden but still readable by screen readers / assistive tech. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+button,
+a.primary,
+a.secondary,
+a.ghost,
+a.sm,
+a.danger {
   font: inherit;
   cursor: pointer;
   border-radius: 10px;
@@ -76,41 +110,55 @@ button {
   background: var(--panel-2);
   color: var(--text);
   padding: 0.5rem 0.9rem;
-  transition: filter 0.12s ease, background 0.12s ease;
+  display: inline-block;
+  transition: background 0.12s ease;
 }
 button:hover:not(:disabled) {
-  filter: brightness(1.15);
+  background: var(--surface-3);
 }
 button:disabled {
   opacity: 0.55;
   cursor: default;
 }
-button.primary {
+.primary {
   background: var(--accent-solid);
   border-color: transparent;
   color: var(--nord6);
   font-weight: 600;
 }
-button.secondary {
+.primary:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+.secondary {
   background: var(--panel-2);
   border-color: var(--accent);
   color: var(--accent);
 }
-button.ghost {
+.ghost {
   background: transparent;
+  border-color: transparent;
 }
-button.sm {
+.ghost:hover:not(:disabled) {
+  background: var(--surface-3);
+}
+.sm {
   padding: 0.3rem 0.6rem;
   font-size: 0.85rem;
   border-radius: 8px;
 }
-button.danger {
+.danger {
   color: var(--danger);
-  border-color: var(--danger);
+  border-color: transparent;
 }
 .icon-btn {
   padding: 0.3rem 0.5rem;
   line-height: 1;
+  border: none;
+  background: transparent;
+}
+.icon-btn:hover:not(:disabled) {
+  background: transparent;
+  filter: brightness(1.3);
 }
 
 input,
@@ -212,19 +260,32 @@ label .opt {
   font-weight: 600;
   background: transparent;
   border: none;
-  border-radius: 6px;
-  padding: 0.15rem 0.4rem;
+  border-radius: 0;
+  padding: 0.15rem 0.2rem;
   color: var(--text);
+  cursor: text;
 }
-.me-handle:hover {
-  filter: none;
-  background: var(--panel-2);
+.me-handle:hover:not(:disabled) {
+  background: transparent;
+}
+.handle-edit,
+.handle-measure {
+  font-weight: 600;
+  font-size: inherit;
+  font-family: inherit;
 }
 .handle-edit {
   width: auto;
-  font-weight: 600;
-  padding: 0.15rem 0.4rem;
-  max-width: 140px;
+  text-align: right;
+  padding: 0.15rem 0.2rem;
+  border: none;
+  background: transparent;
+}
+.handle-measure {
+  position: absolute;
+  visibility: hidden;
+  white-space: pre;
+  left: -9999px;
 }
 
 /* ---- layout ---- */
@@ -264,10 +325,11 @@ label .opt {
   color: var(--muted);
   white-space: nowrap;
 }
+.tag-pill:hover:not(:disabled) {
+  background: var(--surface-3);
+}
 .tag-pill.active {
-  background: var(--accent-solid);
-  border-color: transparent;
-  color: var(--nord6);
+  color: var(--text);
   font-weight: 600;
 }
 .view-toggle {
@@ -285,9 +347,11 @@ label .opt {
   align-items: center;
   color: var(--muted);
 }
+.view-toggle button:hover:not(:disabled) {
+  background: var(--surface-3);
+}
 .view-toggle button.active {
-  background: var(--accent-solid);
-  color: var(--nord6);
+  color: var(--text);
 }
 .sort-select {
   flex-direction: row;
@@ -320,6 +384,11 @@ label .opt {
   text-align: left;
   display: flex;
   flex-direction: column;
+  box-shadow: 0 0 0 rgba(0, 0, 0, 0);
+  transition: box-shadow 0.2s ease;
+}
+.tile:hover {
+  box-shadow: 0 10px 28px var(--shadow);
 }
 .tile-face {
   flex: 1;
@@ -334,6 +403,9 @@ label .opt {
   border-radius: 0;
   padding: 0.5rem;
   text-align: center;
+}
+.tile-face:hover:not(:disabled) {
+  background: transparent;
 }
 .tile-title {
   font-weight: 650;
@@ -376,6 +448,7 @@ label .opt {
   color: var(--muted);
 }
 .create-tile:hover:not(:disabled) {
+  background: transparent;
   border-color: var(--accent);
   color: var(--accent);
 }
@@ -492,12 +565,14 @@ label .opt {
   font-weight: 650;
 }
 .create-list-item {
+  background: transparent;
   border-style: dashed;
   color: var(--muted);
   cursor: pointer;
   justify-content: center;
 }
-.create-list-item:hover {
+.create-list-item:hover:not(:disabled) {
+  background: transparent;
   border-color: var(--accent);
   color: var(--accent);
 }
@@ -576,6 +651,16 @@ label .opt {
   grid-template-columns: 1fr 1fr;
   gap: 0.7rem;
 }
+.people-row {
+  display: flex;
+  gap: 0.7rem;
+}
+.num-field {
+  flex: 0 0 auto;
+}
+.num-field input {
+  width: 4.2rem;
+}
 
 /* ---- emoji picker ---- */
 .title-row {
@@ -642,15 +727,14 @@ label .opt {
 .grouping-toggle button {
   flex: 1 1 0;
   background: var(--panel-2);
+  color: var(--muted);
+}
+.grouping-toggle button:hover:not(:disabled) {
+  background: var(--surface-3);
 }
 .grouping-toggle button.active {
-  background: var(--accent-solid);
-  border-color: transparent;
-  color: var(--nord6);
+  color: var(--text);
   font-weight: 600;
-}
-.per-group input {
-  max-width: 120px;
 }
 
 /* ---- group preview ---- */
@@ -907,8 +991,8 @@ label .opt {
   font-size: 14px;
   transition: background 0.2s ease, transform 0.12s ease;
 }
-.panel-button:hover,
-.room-action:hover {
+.panel-button:hover:not(:disabled),
+.room-action:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.08);
 }
 .panel-button.icon {

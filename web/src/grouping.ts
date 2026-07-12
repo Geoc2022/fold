@@ -15,6 +15,10 @@ export function groupingIsFeasible(
   if (mode === 'single') {
     return maxPeople == null || min <= maxPeople
   }
+  // Tiling groups only ever form in multiples of `step`, so min (and max,
+  // if capped) must themselves be clean multiples of it.
+  if (min % step !== 0) return false
+  if (maxPeople != null && maxPeople % step !== 0) return false
   const needed = Math.max(min, step)
   return maxPeople == null || needed <= maxPeople
 }

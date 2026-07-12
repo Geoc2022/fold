@@ -61,7 +61,8 @@ async fn validate_or_generate_activity_code(
         return Ok(Err(err_json("code must be exactly 4 letters", 400)?));
     }
     if db::get_activity_by_code(db, &code).await?.is_some() {
-        return Ok(Err(err_json("that code is already taken", 409)?));
+        let body = serde_json::json!({ "error": "that code is already taken", "conflict": "code" });
+        return Ok(Err(json_status(&body, 409)?));
     }
     Ok(Ok(code))
 }
@@ -281,6 +282,13 @@ pub async fn activity_create(mut req: Request, ctx: RouteContext<()>) -> Result<
     let title = body.title.trim();
     if title.is_empty() || title.chars().count() > 100 {
         return err_json("title must be 1-100 characters", 400);
+    }
+    if db::get_activity_by_title(&db, title).await?.is_some() {
+        let response_body = serde_json::json!({
+            "error": "an activity with this title already exists",
+            "conflict": "title",
+        });
+        return json_status(&response_body, 409);
     }
     if body.min_people < 1 {
         return err_json("min_people must be >= 1", 400);

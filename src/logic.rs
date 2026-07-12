@@ -63,9 +63,21 @@ pub fn grouping_is_feasible(mode: GroupingMode, min_people: u32, max_people: Opt
     match mode {
         // Single mode just needs the floor (min) to fit under the cap.
         GroupingMode::Single => max_people.is_none_or(|cap| min <= cap),
-        // Tiling needs at least `step` committed people (and at least `min`)
-        // to fit under the cap for a single group to ever complete.
+        // Tiling groups only ever form in multiples of `step`, so min (and
+        // max, if capped) must themselves be clean multiples of it --
+        // otherwise people are structurally guaranteed to be left waiting
+        // outside a group. Beyond that, at least `step` committed people
+        // (and at least `min`) must fit under the cap for a group to ever
+        // complete.
         GroupingMode::Tiling => {
+            if min % step != 0 {
+                return false;
+            }
+            if let Some(cap) = max_people {
+                if cap % step != 0 {
+                    return false;
+                }
+            }
             let needed = min.max(step);
             max_people.is_none_or(|cap| needed <= cap)
         }
@@ -306,23 +318,42 @@ mod tests {
 
     #[test]
     fn feasible_tiling_uncapped() {
-        assert!(grouping_is_feasible(GroupingMode::Tiling, 1, None, 4));
+        assert!(grouping_is_feasible(GroupingMode::Tiling, 4, None, 4));
     }
 
     #[test]
     fn infeasible_tiling_group_size_over_cap() {
         // Doubles (groups of 4) can never fit under a cap of 3.
-        assert!(!grouping_is_feasible(GroupingMode::Tiling, 1, Some(3), 4));
+        assert!(!grouping_is_feasible(GroupingMode::Tiling, 4, Some(3), 4));
     }
 
     #[test]
     fn feasible_tiling_group_size_equals_cap() {
-        assert!(grouping_is_feasible(GroupingMode::Tiling, 1, Some(4), 4));
+        assert!(grouping_is_feasible(GroupingMode::Tiling, 4, Some(4), 4));
     }
 
     #[test]
     fn infeasible_tiling_min_over_cap_even_if_step_fits() {
         // min (6) exceeds the cap (5) even though step (2) alone would fit.
         assert!(!grouping_is_feasible(GroupingMode::Tiling, 6, Some(5), 2));
+    }
+
+    // ---- tiling guardrail: min/max must be exact multiples of the group size ----
+
+    #[test]
+    fn infeasible_tiling_min_not_multiple_of_step() {
+        // 5 people can never split evenly into groups of 4.
+        assert!(!grouping_is_feasible(GroupingMode::Tiling, 5, None, 4));
+    }
+
+    #[test]
+    fn infeasible_tiling_max_not_multiple_of_step() {
+        // A cap of 10 can never be fully used by groups of 4 (max leaves a remainder).
+        assert!(!grouping_is_feasible(GroupingMode::Tiling, 4, Some(10), 4));
+    }
+
+    #[test]
+    fn feasible_tiling_min_and_max_both_multiples() {
+        assert!(grouping_is_feasible(GroupingMode::Tiling, 4, Some(12), 4));
     }
 }

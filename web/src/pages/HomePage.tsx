@@ -1,5 +1,5 @@
 import { AnimatePresence } from 'framer-motion'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { api, clearPersonId, ensureSession } from '../api'
 import { useTheme } from '../theme'
@@ -147,6 +147,17 @@ export function HomePage() {
 
   const [editingHandle, setEditingHandle] = useState(false)
   const [handleInput, setHandleInput] = useState('')
+  const [handleWidth, setHandleWidth] = useState(24)
+  const handleMeasureRef = useRef<HTMLSpanElement>(null)
+
+  // Auto-grow the input to fit what's typed (measured via a hidden mirror
+  // span) so the right edge stays put instead of the box being a fixed,
+  // oversized text field.
+  useLayoutEffect(() => {
+    if (editingHandle && handleMeasureRef.current) {
+      setHandleWidth(Math.max(24, handleMeasureRef.current.scrollWidth + 4))
+    }
+  }, [handleInput, editingHandle])
 
   function startEditHandle() {
     if (!me) return
@@ -183,27 +194,33 @@ export function HomePage() {
         </div>
         <div className="me">
           {editingHandle ? (
-            <input
-              className="handle-edit"
-              autoFocus
-              maxLength={40}
-              value={handleInput}
-              onChange={(e) => setHandleInput(e.target.value)}
-              onBlur={commitHandle}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') commitHandle()
-                if (e.key === 'Escape') setEditingHandle(false)
-              }}
-            />
+            <>
+              <span ref={handleMeasureRef} className="handle-measure" aria-hidden="true">
+                {handleInput || ' '}
+              </span>
+              <input
+                className="handle-edit"
+                autoFocus
+                maxLength={40}
+                style={{ width: handleWidth }}
+                value={handleInput}
+                onChange={(e) => setHandleInput(e.target.value)}
+                onBlur={commitHandle}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') commitHandle()
+                  if (e.key === 'Escape') setEditingHandle(false)
+                }}
+              />
+            </>
           ) : (
             <button type="button" className="me-handle" onClick={startEditHandle} title="Click to rename">
               {me.handle}
             </button>
           )}
-          <button className="ghost sm icon-btn" onClick={toggleTheme} title="Toggle theme">
+          <button className="icon-btn" onClick={toggleTheme} title="Toggle theme">
             {theme === 'light' ? '◐' : '◑'}
           </button>
-          <button className="ghost sm" onClick={refresh} title="Refresh now">
+          <button className="icon-btn" onClick={refresh} title="Refresh">
             ↻
           </button>
         </div>

@@ -195,6 +195,15 @@ pub async fn get_activity_by_code(db: &D1Database, code: &str) -> Result<Option<
         .await
 }
 
+/// Case-insensitive title lookup, used to reject duplicate activities.
+pub async fn get_activity_by_title(db: &D1Database, title: &str) -> Result<Option<ActivityRow>> {
+    let sql = format!(
+        "SELECT {ACTIVITY_COLS} FROM activities a \
+         LEFT JOIN people p ON p.id = a.proposer_id WHERE LOWER(a.title) = LOWER(?)"
+    );
+    db.prepare(&sql).bind(&[s(title)])?.first::<ActivityRow>(None).await
+}
+
 /// Bump `last_active_at` (and `updated_at`) -- resets the 7-day homepage
 /// visibility window. Called on run creation and on any interest/commit.
 pub async fn touch_activity_last_active(db: &D1Database, activity_id: &str, now: i64) -> Result<()> {
