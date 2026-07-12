@@ -20,10 +20,11 @@ export interface UseRoom extends RoomState {
 
 function signature(r: RoomResponse): string {
   const a = r.activity
+  const run = a.current_run
   const participants = r.participants
     .map((p) => `${p.id}:${p.state}:${p.arrival_at ?? ''}:${p.is_me}`)
     .join('|')
-  return `${a.id}:${a.status}:${a.updated_at}:${a.interested_count}:${a.committed_count}#${participants}`
+  return `${a.id}:${a.updated_at}:${run?.id ?? ''}:${run?.status ?? ''}:${run?.interested_count ?? 0}:${run?.committed_count ?? 0}#${participants}`
 }
 
 export function useRoom(code: string | null, enabled: boolean): UseRoom {

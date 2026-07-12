@@ -1,8 +1,8 @@
-import type { ActivityView } from '../types'
+import type { GroupingMode, RunView } from '../types'
 
 /** Visualizes committed people as filled dots grouped into complete groups. */
-export function GroupMeter({ activity }: { activity: ActivityView }) {
-  const { group, committed_count, grouping_mode } = activity
+export function GroupMeter({ run, groupingMode }: { run: RunView; groupingMode: GroupingMode }) {
+  const { group, committed_count } = run
   const inGroups = group.group_sizes.reduce((a, b) => a + b, 0)
   const waiting = group.waiting_count
 
@@ -29,7 +29,7 @@ export function GroupMeter({ activity }: { activity: ActivityView }) {
         {group.is_ready ? (
           <span className="ready-text">
             {group.complete_groups}{' '}
-            {grouping_mode === 'tiling'
+            {groupingMode === 'tiling'
               ? group.complete_groups === 1
                 ? 'group'
                 : 'groups'

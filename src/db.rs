@@ -1,14 +1,18 @@
 //! D1 query helpers.
 //!
-//! Counters on `activities` are kept authoritative by recomputing them from
-//! `participations` on each mutation (`recompute_counts`). This reads only the
-//! participations for a single activity (indexed) and happens on infrequent
-//! writes, so it does not affect the polling read budget.
+//! Counters on `runs` are kept authoritative by recomputing them from
+//! `participations` on each mutation (`recompute_run_counts`). Lifetime stats
+//! on `activities` (times_run, players_served, interest_total, commit_total)
+//! are incremented once, at run-end, from that run's final denormalized
+//! counts -- no extra scans needed since a participation's state is
+//! exclusive (interested XOR committed).
 
 use worker::wasm_bindgen::JsValue;
 use worker::*;
 
-use crate::models::{ActivityRow, NotificationRow, ParticipantView, ParticipationLite, PersonRow};
+use crate::models::{
+    ActivityRow, NotificationRow, ParticipantView, ParticipationLite, PersonRow, RunRow,
+};
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct PushSubscriptionRow {
@@ -36,10 +40,13 @@ pub fn oi(v: Option<i64>) -> JsValue {
     }
 }
 
-const ACTIVITY_COLS: &str = "a.id, a.code, a.title, a.description, a.proposer_id, a.min_people, \
-    a.max_people, a.group_multiple, a.grouping_mode, a.status, a.location, a.scheduled_for, \
-    a.expires_at, a.interested_count, a.committed_count, a.created_at, a.updated_at, \
-    p.handle AS proposer_handle";
+const ACTIVITY_COLS: &str = "a.id, a.code, a.emoji, a.title, a.description, a.category, \
+    a.proposer_id, a.min_people, a.max_people, a.group_multiple, a.grouping_mode, \
+    a.current_run_id, a.times_run, a.players_served, a.interest_total, a.commit_total, \
+    a.last_active_at, a.created_at, a.updated_at, p.handle AS proposer_handle";
+
+const RUN_COLS: &str = "id, activity_id, status, location, details, scheduled_for, expires_at, \
+    interested_count, committed_count, reached_ready, created_at, updated_at, ended_at";
 
 // ---- people ----------------------------------------------------------------
 
@@ -58,7 +65,7 @@ pub async fn touch_person(db: &D1Database, id: &str, now: i64) -> Result<()> {
     Ok(())
 }
 
-// ---- push subscriptions ----------------------------------------------------
+// ---- push subscriptions -----------------------------------------------------
 
 pub async fn upsert_push_subscription(
     db: &D1Database,
@@ -128,9 +135,10 @@ pub async fn push_subscriptions_for_people(
         .results::<PushSubscriptionRow>()
 }
 
+/// Person ids currently committed to a run (optionally excluding one person).
 pub async fn committed_person_ids(
     db: &D1Database,
-    activity_id: &str,
+    run_id: &str,
     exclude_person: Option<&str>,
 ) -> Result<Vec<String>> {
     #[derive(serde::Deserialize)]
@@ -138,8 +146,8 @@ pub async fn committed_person_ids(
         person_id: String,
     }
     let recipients = db
-        .prepare("SELECT person_id FROM participations WHERE activity_id = ? AND state = 'committed'")
-        .bind(&[s(activity_id)])?
+        .prepare("SELECT person_id FROM participations WHERE run_id = ? AND state = 'committed'")
+        .bind(&[s(run_id)])?
         .all()
         .await?
         .results::<Row>()?;
@@ -150,15 +158,22 @@ pub async fn committed_person_ids(
         .collect())
 }
 
-// ---- activities ------------------------------------------------------------
+// ---- activities (templates/tiles) ------------------------------------------
 
-pub async fn list_activities(db: &D1Database, limit: i64) -> Result<Vec<ActivityRow>> {
+/// Activities active within the last `window_ms` (the homepage's 7-day
+/// visibility window). Ordered most-recently-active first.
+pub async fn list_activities(db: &D1Database, since: i64, limit: i64) -> Result<Vec<ActivityRow>> {
     let sql = format!(
         "SELECT {ACTIVITY_COLS} FROM activities a \
          LEFT JOIN people p ON p.id = a.proposer_id \
-         ORDER BY a.created_at DESC LIMIT ?"
+         WHERE a.last_active_at >= ?1 \
+         ORDER BY a.last_active_at DESC LIMIT ?2"
     );
-    db.prepare(&sql).bind(&[i(limit)])?.all().await?.results::<ActivityRow>()
+    db.prepare(&sql)
+        .bind(&[i(since), i(limit)])?
+        .all()
+        .await?
+        .results::<ActivityRow>()
 }
 
 pub async fn get_activity(db: &D1Database, id: &str) -> Result<Option<ActivityRow>> {
@@ -180,41 +195,176 @@ pub async fn get_activity_by_code(db: &D1Database, code: &str) -> Result<Option<
         .await
 }
 
-/// Recompute denormalized counts from participations and refresh `updated_at`.
-pub async fn recompute_counts(db: &D1Database, activity_id: &str, now: i64) -> Result<()> {
-    db.prepare(
-        "UPDATE activities SET \
-            interested_count = (SELECT COUNT(*) FROM participations WHERE activity_id = ?1 AND state = 'interested'), \
-            committed_count  = (SELECT COUNT(*) FROM participations WHERE activity_id = ?1 AND state = 'committed'), \
-            updated_at = ?2 \
-         WHERE id = ?1",
-    )
-    .bind(&[s(activity_id), i(now)])?
-    .run()
-    .await?;
-    Ok(())
-}
-
-pub async fn set_activity_status(
-    db: &D1Database,
-    activity_id: &str,
-    status: &str,
-    now: i64,
-) -> Result<()> {
-    db.prepare("UPDATE activities SET status = ?, updated_at = ? WHERE id = ?")
-        .bind(&[s(status), i(now), s(activity_id)])?
+/// Bump `last_active_at` (and `updated_at`) -- resets the 7-day homepage
+/// visibility window. Called on run creation and on any interest/commit.
+pub async fn touch_activity_last_active(db: &D1Database, activity_id: &str, now: i64) -> Result<()> {
+    db.prepare("UPDATE activities SET last_active_at = ?, updated_at = ? WHERE id = ?")
+        .bind(&[i(now), i(now), s(activity_id)])?
         .run()
         .await?;
     Ok(())
 }
 
-// ---- participations --------------------------------------------------------
+pub async fn set_activity_current_run(
+    db: &D1Database,
+    activity_id: &str,
+    run_id: Option<&str>,
+    now: i64,
+) -> Result<()> {
+    db.prepare("UPDATE activities SET current_run_id = ?, updated_at = ? WHERE id = ?")
+        .bind(&[os(run_id), i(now), s(activity_id)])?
+        .run()
+        .await?;
+    Ok(())
+}
+
+/// Roll a just-ended run's final counts onto the activity's lifetime stats.
+/// `times_run_inc` should be 1 only if the run ever reached a complete group.
+pub async fn rollup_activity_stats(
+    db: &D1Database,
+    activity_id: &str,
+    times_run_inc: i64,
+    players_served_inc: i64,
+    interest_inc: i64,
+    commit_inc: i64,
+    now: i64,
+) -> Result<()> {
+    db.prepare(
+        "UPDATE activities SET \
+            times_run = times_run + ?1, \
+            players_served = players_served + ?2, \
+            interest_total = interest_total + ?3, \
+            commit_total = commit_total + ?4, \
+            updated_at = ?5 \
+         WHERE id = ?6",
+    )
+    .bind(&[
+        i(times_run_inc),
+        i(players_served_inc),
+        i(interest_inc),
+        i(commit_inc),
+        i(now),
+        s(activity_id),
+    ])?
+    .run()
+    .await?;
+    Ok(())
+}
+
+// ---- runs -------------------------------------------------------------------
+
+pub async fn insert_run(
+    db: &D1Database,
+    id: &str,
+    activity_id: &str,
+    location: Option<&str>,
+    details: Option<&str>,
+    scheduled_for: Option<i64>,
+    expires_at: Option<i64>,
+    now: i64,
+) -> Result<()> {
+    db.prepare(
+        "INSERT INTO runs \
+         (id, activity_id, status, location, details, scheduled_for, expires_at, \
+           interested_count, committed_count, reached_ready, created_at, updated_at) \
+         VALUES (?1, ?2, 'open', ?3, ?4, ?5, ?6, 0, 0, 0, ?7, ?7)",
+    )
+    .bind(&[
+        s(id),
+        s(activity_id),
+        os(location),
+        os(details),
+        oi(scheduled_for),
+        oi(expires_at),
+        i(now),
+    ])?
+    .run()
+    .await?;
+    Ok(())
+}
+
+pub async fn get_run(db: &D1Database, id: &str) -> Result<Option<RunRow>> {
+    let sql = format!("SELECT {RUN_COLS} FROM runs WHERE id = ?");
+    db.prepare(&sql).bind(&[s(id)])?.first::<RunRow>(None).await
+}
+
+/// Batch-fetch runs by id (used to attach each activity's current run in
+/// list views without an N+1 query).
+pub async fn get_runs_by_ids(db: &D1Database, ids: &[String]) -> Result<Vec<RunRow>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders = std::iter::repeat("?").take(ids.len()).collect::<Vec<_>>().join(",");
+    let sql = format!("SELECT {RUN_COLS} FROM runs WHERE id IN ({placeholders})");
+    let values: Vec<JsValue> = ids.iter().map(|id| s(id)).collect();
+    db.prepare(&sql).bind(&values)?.all().await?.results::<RunRow>()
+}
+
+/// Recompute denormalized counts from participations and refresh `updated_at`.
+pub async fn recompute_run_counts(db: &D1Database, run_id: &str, now: i64) -> Result<()> {
+    db.prepare(
+        "UPDATE runs SET \
+            interested_count = (SELECT COUNT(*) FROM participations WHERE run_id = ?1 AND state = 'interested'), \
+            committed_count  = (SELECT COUNT(*) FROM participations WHERE run_id = ?1 AND state = 'committed'), \
+            updated_at = ?2 \
+         WHERE id = ?1",
+    )
+    .bind(&[s(run_id), i(now)])?
+    .run()
+    .await?;
+    Ok(())
+}
+
+pub async fn set_run_status(db: &D1Database, run_id: &str, status: &str, now: i64) -> Result<()> {
+    let ended = matches!(status, "closed" | "cancelled");
+    if ended {
+        db.prepare("UPDATE runs SET status = ?, updated_at = ?, ended_at = ? WHERE id = ?")
+            .bind(&[s(status), i(now), i(now), s(run_id)])?
+            .run()
+            .await?;
+    } else {
+        db.prepare("UPDATE runs SET status = ?, updated_at = ? WHERE id = ?")
+            .bind(&[s(status), i(now), s(run_id)])?
+            .run()
+            .await?;
+    }
+    Ok(())
+}
+
+pub async fn set_run_schedule(
+    db: &D1Database,
+    run_id: &str,
+    status: &str,
+    scheduled_for: i64,
+    location: Option<&str>,
+    now: i64,
+) -> Result<()> {
+    db.prepare(
+        "UPDATE runs SET status = ?, scheduled_for = ?, location = COALESCE(?, location), updated_at = ? WHERE id = ?",
+    )
+    .bind(&[s(status), i(scheduled_for), os(location), i(now), s(run_id)])?
+    .run()
+    .await?;
+    Ok(())
+}
+
+/// Mark a run as having reached at least one complete group. Sticky: never
+/// reset back to false even if people later withdraw.
+pub async fn mark_run_reached_ready(db: &D1Database, run_id: &str) -> Result<()> {
+    db.prepare("UPDATE runs SET reached_ready = 1 WHERE id = ?")
+        .bind(&[s(run_id)])?
+        .run()
+        .await?;
+    Ok(())
+}
+
+// ---- participations ---------------------------------------------------------
 
 pub async fn participations_for_person(
     db: &D1Database,
     person_id: &str,
 ) -> Result<Vec<ParticipationLite>> {
-    db.prepare("SELECT activity_id, state FROM participations WHERE person_id = ?")
+    db.prepare("SELECT run_id, state FROM participations WHERE person_id = ?")
         .bind(&[s(person_id)])?
         .all()
         .await?
@@ -223,41 +373,53 @@ pub async fn participations_for_person(
 
 pub async fn participation_state(
     db: &D1Database,
-    activity_id: &str,
+    run_id: &str,
     person_id: &str,
 ) -> Result<Option<String>> {
     let row = db
-        .prepare("SELECT activity_id, state FROM participations WHERE activity_id = ? AND person_id = ?")
-        .bind(&[s(activity_id), s(person_id)])?
+        .prepare("SELECT run_id, state FROM participations WHERE run_id = ? AND person_id = ?")
+        .bind(&[s(run_id), s(person_id)])?
         .first::<ParticipationLite>(None)
         .await?;
     Ok(row.map(|r| r.state))
 }
 
-/// Returns the id of another activity the person is committed to, if any.
-pub async fn other_committed_activity(
+/// The other run (and its activity) a person is currently committed to, if
+/// any. Commit is exclusive globally: at most one committed run per person.
+pub struct OtherCommitment {
+    pub run_id: String,
+    pub activity_id: String,
+}
+
+pub async fn other_committed_run(
     db: &D1Database,
     person_id: &str,
-    exclude_activity_id: &str,
-) -> Result<Option<String>> {
+    exclude_run_id: &str,
+) -> Result<Option<OtherCommitment>> {
     #[derive(serde::Deserialize)]
     struct Row {
+        run_id: String,
         activity_id: String,
     }
     let row = db
         .prepare(
-            "SELECT activity_id FROM participations \
-             WHERE person_id = ? AND state = 'committed' AND activity_id != ? LIMIT 1",
+            "SELECT part.run_id AS run_id, r.activity_id AS activity_id \
+             FROM participations part \
+             JOIN runs r ON r.id = part.run_id \
+             WHERE part.person_id = ? AND part.state = 'committed' AND part.run_id != ? LIMIT 1",
         )
-        .bind(&[s(person_id), s(exclude_activity_id)])?
+        .bind(&[s(person_id), s(exclude_run_id)])?
         .first::<Row>(None)
         .await?;
-    Ok(row.map(|r| r.activity_id))
+    Ok(row.map(|r| OtherCommitment {
+        run_id: r.run_id,
+        activity_id: r.activity_id,
+    }))
 }
 
 pub async fn upsert_participation(
     db: &D1Database,
-    activity_id: &str,
+    run_id: &str,
     person_id: &str,
     state: &str,
     arrival_at: Option<i64>,
@@ -265,13 +427,13 @@ pub async fn upsert_participation(
 ) -> Result<()> {
     let id = crate::util::new_id();
     db.prepare(
-        "INSERT INTO participations (id, activity_id, person_id, state, arrival_at, created_at, updated_at) \
+        "INSERT INTO participations (id, run_id, person_id, state, arrival_at, created_at, updated_at) \
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6) \
-         ON CONFLICT(activity_id, person_id) DO UPDATE SET state = ?4, arrival_at = ?5, updated_at = ?6",
+         ON CONFLICT(run_id, person_id) DO UPDATE SET state = ?4, arrival_at = ?5, updated_at = ?6",
     )
     .bind(&[
         s(&id),
-        s(activity_id),
+        s(run_id),
         s(person_id),
         s(state),
         oi(arrival_at),
@@ -282,9 +444,9 @@ pub async fn upsert_participation(
     Ok(())
 }
 
-pub async fn participants_for_activity(
+pub async fn participants_for_run(
     db: &D1Database,
-    activity_id: &str,
+    run_id: &str,
     me_id: Option<&str>,
 ) -> Result<Vec<ParticipantView>> {
     #[derive(serde::Deserialize)]
@@ -300,10 +462,10 @@ pub async fn participants_for_activity(
             "SELECT part.id, part.person_id, p.color, part.state, part.arrival_at \
              FROM participations part \
              JOIN people p ON p.id = part.person_id \
-             WHERE part.activity_id = ? \
+             WHERE part.run_id = ? \
              ORDER BY part.updated_at ASC",
         )
-        .bind(&[s(activity_id)])?
+        .bind(&[s(run_id)])?
         .all()
         .await?
         .results::<Row>()?;
@@ -319,13 +481,9 @@ pub async fn participants_for_activity(
         .collect())
 }
 
-pub async fn delete_participation(
-    db: &D1Database,
-    activity_id: &str,
-    person_id: &str,
-) -> Result<()> {
-    db.prepare("DELETE FROM participations WHERE activity_id = ? AND person_id = ?")
-        .bind(&[s(activity_id), s(person_id)])?
+pub async fn delete_participation(db: &D1Database, run_id: &str, person_id: &str) -> Result<()> {
+    db.prepare("DELETE FROM participations WHERE run_id = ? AND person_id = ?")
+        .bind(&[s(run_id), s(person_id)])?
         .run()
         .await?;
     Ok(())
@@ -339,7 +497,7 @@ pub async fn unread_notifications(
     limit: i64,
 ) -> Result<Vec<NotificationRow>> {
     db.prepare(
-        "SELECT id, recipient_id, activity_id, kind, message, read_at, created_at \
+        "SELECT id, recipient_id, activity_id, run_id, kind, message, read_at, created_at \
          FROM notifications WHERE recipient_id = ? AND read_at IS NULL \
          ORDER BY created_at DESC LIMIT ?",
     )
@@ -354,41 +512,51 @@ pub async fn insert_notification(
     db: &D1Database,
     recipient_id: &str,
     activity_id: Option<&str>,
+    run_id: Option<&str>,
     kind: &str,
     message: &str,
     now: i64,
 ) -> Result<()> {
     let id = crate::util::new_id();
     db.prepare(
-        "INSERT INTO notifications (id, recipient_id, activity_id, kind, message, read_at, created_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6)",
+        "INSERT INTO notifications (id, recipient_id, activity_id, run_id, kind, message, read_at, created_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7)",
     )
-    .bind(&[s(&id), s(recipient_id), os(activity_id), s(kind), s(message), i(now)])?
+    .bind(&[
+        s(&id),
+        s(recipient_id),
+        os(activity_id),
+        os(run_id),
+        s(kind),
+        s(message),
+        i(now),
+    ])?
     .run()
     .await?;
     Ok(())
 }
 
-/// Notify every committed participant of an activity (optionally excluding one person).
+/// Notify every committed participant of a run (optionally excluding one person).
 pub async fn notify_committed(
     db: &D1Database,
     activity_id: &str,
+    run_id: &str,
     exclude_person: Option<&str>,
     kind: &str,
     message: &str,
     now: i64,
 ) -> Result<Vec<String>> {
-    let recipients = committed_person_ids(db, activity_id, exclude_person).await?;
+    let recipients = committed_person_ids(db, run_id, exclude_person).await?;
 
     let mut stmts = Vec::new();
     for person_id in &recipients {
         let id = crate::util::new_id();
         stmts.push(
             db.prepare(
-                "INSERT INTO notifications (id, recipient_id, activity_id, kind, message, read_at, created_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6)",
+                "INSERT INTO notifications (id, recipient_id, activity_id, run_id, kind, message, read_at, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7)",
             )
-            .bind(&[s(&id), s(person_id), s(activity_id), s(kind), s(message), i(now)])?,
+            .bind(&[s(&id), s(person_id), s(activity_id), s(run_id), s(kind), s(message), i(now)])?,
         );
     }
     if !stmts.is_empty() {
@@ -400,6 +568,7 @@ pub async fn notify_committed(
 pub async fn notify_interested(
     db: &D1Database,
     activity_id: &str,
+    run_id: &str,
     kind: &str,
     message: &str,
     now: i64,
@@ -409,8 +578,8 @@ pub async fn notify_interested(
         person_id: String,
     }
     let recipients = db
-        .prepare("SELECT person_id FROM participations WHERE activity_id = ? AND state = 'interested'")
-        .bind(&[s(activity_id)])?
+        .prepare("SELECT person_id FROM participations WHERE run_id = ? AND state = 'interested'")
+        .bind(&[s(run_id)])?
         .all()
         .await?
         .results::<Row>()?;
@@ -421,10 +590,10 @@ pub async fn notify_interested(
         let id = crate::util::new_id();
         stmts.push(
             db.prepare(
-                "INSERT INTO notifications (id, recipient_id, activity_id, kind, message, read_at, created_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6)",
+                "INSERT INTO notifications (id, recipient_id, activity_id, run_id, kind, message, read_at, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7)",
             )
-            .bind(&[s(&id), s(person_id), s(activity_id), s(kind), s(message), i(now)])?,
+            .bind(&[s(&id), s(person_id), s(activity_id), s(run_id), s(kind), s(message), i(now)])?,
         );
     }
     if !stmts.is_empty() {
@@ -438,6 +607,7 @@ pub async fn notify_all_except(
     db: &D1Database,
     exclude_person: &str,
     activity_id: Option<&str>,
+    run_id: Option<&str>,
     kind: &str,
     message: &str,
     now: i64,
@@ -458,10 +628,10 @@ pub async fn notify_all_except(
         let nid = crate::util::new_id();
         stmts.push(
             db.prepare(
-                "INSERT INTO notifications (id, recipient_id, activity_id, kind, message, read_at, created_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6)",
+                "INSERT INTO notifications (id, recipient_id, activity_id, run_id, kind, message, read_at, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7)",
             )
-            .bind(&[s(&nid), s(&p.id), os(activity_id), s(kind), s(message), i(now)])?,
+            .bind(&[s(&nid), s(&p.id), os(activity_id), os(run_id), s(kind), s(message), i(now)])?,
         );
     }
     if !stmts.is_empty() {
@@ -504,23 +674,19 @@ pub async fn mark_notifications_read(
 
 // ---- maintenance (cron) ----------------------------------------------------
 
-/// Minimal projection of an activity that has passed its expiry.
+/// Minimal projection of a run that has passed its expiry.
 #[derive(Debug, Clone, serde::Deserialize)]
-pub struct ExpiringActivity {
+pub struct ExpiringRun {
     pub id: String,
-    pub title: String,
+    pub activity_id: String,
 }
 
-/// Find activities whose `expires_at` has passed and are still active
+/// Find runs whose `expires_at` has passed and are still active
 /// (open/ready/scheduled). Bounded by `limit` to keep the cron run within
 /// the free-plan subrequest budget.
-pub async fn expiring_activities(
-    db: &D1Database,
-    now: i64,
-    limit: i64,
-) -> Result<Vec<ExpiringActivity>> {
+pub async fn expiring_runs(db: &D1Database, now: i64, limit: i64) -> Result<Vec<ExpiringRun>> {
     db.prepare(
-        "SELECT id, title FROM activities \
+        "SELECT id, activity_id FROM runs \
          WHERE expires_at IS NOT NULL AND expires_at <= ? \
            AND status IN ('open', 'ready', 'scheduled') \
          ORDER BY expires_at ASC LIMIT ?",
@@ -528,25 +694,7 @@ pub async fn expiring_activities(
     .bind(&[i(now), i(limit)])?
     .all()
     .await?
-    .results::<ExpiringActivity>()
-}
-
-/// Mark the given activities as expired in a single batch.
-pub async fn expire_activities(db: &D1Database, ids: &[String], now: i64) -> Result<()> {
-    let mut stmts = Vec::new();
-    for id in ids {
-        stmts.push(
-            db.prepare(
-                "UPDATE activities SET status = 'closed', updated_at = ? \
-                 WHERE id = ? AND status IN ('open', 'ready', 'scheduled')",
-            )
-            .bind(&[i(now), s(id)])?,
-        );
-    }
-    if !stmts.is_empty() {
-        db.batch(stmts).await?;
-    }
-    Ok(())
+    .results::<ExpiringRun>()
 }
 
 /// Delete notifications to keep the table small on the free plan:

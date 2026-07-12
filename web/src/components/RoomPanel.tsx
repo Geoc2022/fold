@@ -1,14 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
-import type { ActivityView, ParticipantView } from '../types'
+import type { ActivityView, ParticipantView, Person } from '../types'
 
 interface Props {
   activity: ActivityView
   myParticipant: ParticipantView | null
+  me: Person
+  onMeChanged: (p: Person) => void
   theme: 'light' | 'dark'
   onThemeToggle: () => void
   onInterested: () => Promise<void>
   onCommit: (etaMinutes: number) => Promise<void>
+  onProposeRun: () => void
   onAlert: (message: string) => void
 }
 
@@ -20,19 +23,25 @@ const HELP_URL = 'https://github.com/CHANGE_ME/fold'
 export function RoomPanel({
   activity,
   myParticipant,
+  me,
+  onMeChanged,
   theme,
   onThemeToggle,
   onInterested,
   onCommit,
+  onProposeRun,
   onAlert,
 }: Props) {
   const [busy, setBusy] = useState(false)
   const [holdMs, setHoldMs] = useState(0)
   const [now, setNow] = useState(Date.now())
+  const [namePrompt, setNamePrompt] = useState(false)
+  const [handleInput, setHandleInput] = useState('')
   const startRef = useRef<number | null>(null)
   const rafRef = useRef(0)
 
   const eta = etaFromHold(holdMs)
+  const run = activity.current_run
 
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 1000)
@@ -49,8 +58,32 @@ export function RoomPanel({
   }
 
   async function interested() {
+    // People are only asked for a handle the first time they express
+    // interest in a room, not up front.
+    if (me.handle.trim().toLowerCase() === 'guest') {
+      setHandleInput('')
+      setNamePrompt(true)
+      return
+    }
     setBusy(true)
     try {
+      await onInterested()
+    } catch (err) {
+      onAlert(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function confirmName(e: React.FormEvent) {
+    e.preventDefault()
+    const handle = handleInput.trim()
+    if (!handle) return
+    setBusy(true)
+    try {
+      const updated = await api.updateSession({ handle })
+      onMeChanged(updated)
+      setNamePrompt(false)
       await onInterested()
     } catch (err) {
       onAlert(err instanceof Error ? err.message : String(err))
@@ -85,7 +118,7 @@ export function RoomPanel({
   }
 
   async function share() {
-    const url = `${window.location.origin}/${activity.code ?? activity.id}`
+    const url = `${window.location.origin}/${activity.code}`
     try {
       if (navigator.share) {
         await navigator.share({ title: activity.title, url })
@@ -115,6 +148,13 @@ export function RoomPanel({
   }
 
   const action = (() => {
+    if (!run) {
+      return (
+        <button className="room-action propose" onClick={onProposeRun}>
+          Propose a run
+        </button>
+      )
+    }
     if (activity.my_state === 'committed') {
       const remaining = etaRemaining(myParticipant?.arrival_at ?? null, now)
       return (
@@ -145,29 +185,54 @@ export function RoomPanel({
   })()
 
   return (
-    <div className="global-panel">
-      <button className="panel-button icon" onClick={onThemeToggle} title="Toggle theme">
-        {theme === 'light' ? '◐' : '◑'}
-      </button>
-      <div className="panel-separator" />
-      {action}
-      <div className="panel-separator" />
-      <button className="panel-button icon" onClick={share} title="Share">
-        <ShareIcon />
-      </button>
-      <button className="panel-button icon" onClick={enablePush} title="Notifications">
-        <BellIcon />
-      </button>
-      <a
-        className="panel-button icon"
-        href={HELP_URL}
-        target="_blank"
-        rel="noopener noreferrer"
-        title="Help"
-      >
-        ?
-      </a>
-    </div>
+    <>
+      <div className="global-panel">
+        <button className="panel-button icon" onClick={onThemeToggle} title="Toggle theme">
+          {theme === 'light' ? '◐' : '◑'}
+        </button>
+        <div className="panel-separator" />
+        {action}
+        <div className="panel-separator" />
+        <button className="panel-button icon" onClick={share} title="Share">
+          <ShareIcon />
+        </button>
+        <button className="panel-button icon" onClick={enablePush} title="Notifications">
+          <BellIcon />
+        </button>
+        <a
+          className="panel-button icon"
+          href={HELP_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          title="Help"
+        >
+          ?
+        </a>
+      </div>
+
+      {namePrompt && (
+        <div className="modal-backdrop" onClick={() => setNamePrompt(false)}>
+          <form className="card name-prompt" onClick={(e) => e.stopPropagation()} onSubmit={confirmName}>
+            <h2>What should people call you?</h2>
+            <input
+              autoFocus
+              maxLength={40}
+              placeholder="e.g. Sam"
+              value={handleInput}
+              onChange={(e) => setHandleInput(e.target.value)}
+            />
+            <div className="row">
+              <button type="button" className="ghost" onClick={() => setNamePrompt(false)}>
+                Cancel
+              </button>
+              <button type="submit" className="primary" disabled={busy || !handleInput.trim()}>
+                {busy ? '…' : "That's me"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+    </>
   )
 }
 

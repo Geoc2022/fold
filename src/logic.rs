@@ -52,6 +52,26 @@ pub struct GroupState {
     pub spots_remaining: Option<u32>,
 }
 
+/// Whether a grouping configuration (min/max/step) can *ever* produce a
+/// complete group, independent of the current committed count. Used to
+/// reject nonsensical activity configs at creation time (e.g. tiling groups
+/// of 4 capped at a max of 3 people can never form a single group), and
+/// mirrored by the client-side group-size preview.
+pub fn grouping_is_feasible(mode: GroupingMode, min_people: u32, max_people: Option<u32>, group_multiple: u32) -> bool {
+    let min = min_people.max(1);
+    let step = group_multiple.max(1);
+    match mode {
+        // Single mode just needs the floor (min) to fit under the cap.
+        GroupingMode::Single => max_people.is_none_or(|cap| min <= cap),
+        // Tiling needs at least `step` committed people (and at least `min`)
+        // to fit under the cap for a single group to ever complete.
+        GroupingMode::Tiling => {
+            let needed = min.max(step);
+            max_people.is_none_or(|cap| needed <= cap)
+        }
+    }
+}
+
 /// Compute the group state for an activity from its (denormalized) committed count.
 pub fn compute_group_state(
     mode: GroupingMode,
@@ -264,5 +284,45 @@ mod tests {
         let s = compute_group_state(GroupingMode::Single, 1, None, 0, 3);
         assert!(s.is_ready);
         assert_eq!(s.group_sizes, vec![3]);
+    }
+
+    // ---- grouping feasibility ----------------------------------------------
+
+    #[test]
+    fn feasible_single_uncapped() {
+        assert!(grouping_is_feasible(GroupingMode::Single, 5, None, 1));
+    }
+
+    #[test]
+    fn feasible_single_min_under_cap() {
+        assert!(grouping_is_feasible(GroupingMode::Single, 5, Some(15), 1));
+    }
+
+    #[test]
+    fn infeasible_single_min_over_cap() {
+        // Can never reach the 5-person floor if capped at 3.
+        assert!(!grouping_is_feasible(GroupingMode::Single, 5, Some(3), 1));
+    }
+
+    #[test]
+    fn feasible_tiling_uncapped() {
+        assert!(grouping_is_feasible(GroupingMode::Tiling, 1, None, 4));
+    }
+
+    #[test]
+    fn infeasible_tiling_group_size_over_cap() {
+        // Doubles (groups of 4) can never fit under a cap of 3.
+        assert!(!grouping_is_feasible(GroupingMode::Tiling, 1, Some(3), 4));
+    }
+
+    #[test]
+    fn feasible_tiling_group_size_equals_cap() {
+        assert!(grouping_is_feasible(GroupingMode::Tiling, 1, Some(4), 4));
+    }
+
+    #[test]
+    fn infeasible_tiling_min_over_cap_even_if_step_fits() {
+        // min (6) exceeds the cap (5) even though step (2) alone would fit.
+        assert!(!grouping_is_feasible(GroupingMode::Tiling, 6, Some(5), 2));
     }
 }

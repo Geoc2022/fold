@@ -6,6 +6,7 @@
 import type {
   ActivityView,
   CreateActivityInput,
+  CreateRunInput,
   Person,
   RoomResponse,
   SyncResponse,
@@ -144,16 +145,11 @@ export const api = {
     return request<ActivityView>(`/api/activities/${id}`)
   },
 
-  interest(id: string): Promise<ActivityView> {
-    return request<ActivityView>(`/api/activities/${id}/interest`, {
+  /** Launch a new run on an activity whose room is currently empty. */
+  createRun(activityId: string, input: CreateRunInput): Promise<ActivityView> {
+    return request<ActivityView>(`/api/activities/${activityId}/runs`, {
       method: 'POST',
-    })
-  },
-
-  commit(id: string, eta_minutes?: number): Promise<ActivityView> {
-    return request<ActivityView>(`/api/activities/${id}/commit`, {
-      method: 'POST',
-      body: eta_minutes == null ? undefined : { eta_minutes },
+      body: input,
     })
   },
 
@@ -161,31 +157,44 @@ export const api = {
     return request<RoomResponse>(`/api/rooms/${code}`, { signal })
   },
 
-  withdraw(id: string): Promise<ActivityView> {
-    return request<ActivityView>(`/api/activities/${id}/participation`, {
+  interest(runId: string): Promise<ActivityView> {
+    return request<ActivityView>(`/api/runs/${runId}/interest`, {
+      method: 'POST',
+    })
+  },
+
+  commit(runId: string, eta_minutes?: number): Promise<ActivityView> {
+    return request<ActivityView>(`/api/runs/${runId}/commit`, {
+      method: 'POST',
+      body: eta_minutes == null ? undefined : { eta_minutes },
+    })
+  },
+
+  withdraw(runId: string): Promise<ActivityView> {
+    return request<ActivityView>(`/api/runs/${runId}/participation`, {
       method: 'DELETE',
     })
   },
 
   schedule(
-    id: string,
+    runId: string,
     scheduled_for: number,
     location?: string,
   ): Promise<ActivityView> {
-    return request<ActivityView>(`/api/activities/${id}/schedule`, {
+    return request<ActivityView>(`/api/runs/${runId}/schedule`, {
       method: 'POST',
       body: { scheduled_for, location },
     })
   },
 
-  close(id: string): Promise<ActivityView> {
-    return request<ActivityView>(`/api/activities/${id}/close`, {
+  close(runId: string): Promise<ActivityView> {
+    return request<ActivityView>(`/api/runs/${runId}/close`, {
       method: 'POST',
     })
   },
 
-  cancel(id: string): Promise<ActivityView> {
-    return request<ActivityView>(`/api/activities/${id}/cancel`, {
+  cancel(runId: string): Promise<ActivityView> {
+    return request<ActivityView>(`/api/runs/${runId}/cancel`, {
       method: 'POST',
     })
   },

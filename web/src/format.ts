@@ -51,3 +51,27 @@ export function localInputToMs(value: string): number | null {
   const ms = new Date(value).getTime()
   return Number.isNaN(ms) ? null : ms
 }
+
+/** Stack-Exchange-style compact stat number: 24m, 3.1k, 942. */
+export function compactNumber(n: number): string {
+  const abs = Math.abs(n)
+  if (abs >= 1_000_000) return trimZero(n / 1_000_000) + 'm'
+  if (abs >= 1_000) return trimZero(n / 1_000) + 'k'
+  return String(n)
+}
+
+function trimZero(n: number): string {
+  const rounded = Math.round(n * 10) / 10
+  return rounded % 1 === 0 ? String(rounded) : rounded.toFixed(1)
+}
+
+/** commit_pct (0..1) -> "70%", or "—" when there's no data yet. */
+export function formatPct(pct: number | null): string {
+  if (pct == null) return '—'
+  return `${Math.round(pct * 100)}%`
+}
+
+/** "board games" -> "Board Games". */
+export function titleCase(s: string): string {
+  return s.replace(/\w\S*/g, (w) => w[0].toUpperCase() + w.slice(1))
+}

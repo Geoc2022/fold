@@ -197,15 +197,16 @@ function draw(
 function computeTargets(activity: ActivityView, nodes: SimNode[], now: number) {
   const targets = new Map<string, { x: number; y: number }>()
   const committed = nodes.filter((n) => n.state === 'committed')
-  const placed = activity.group.group_sizes.reduce((a, b) => a + b, 0)
-  const clusterCenters = clusterCentersFor(activity.group.group_sizes.length)
+  const groupSizes = activity.current_run?.group.group_sizes ?? []
+  const placed = groupSizes.reduce((a, b) => a + b, 0)
+  const clusterCenters = clusterCentersFor(groupSizes.length)
 
   committed.forEach((n, i) => {
-    if (i < placed && activity.group.group_sizes.length > 0) {
-      const groupIndex = groupIndexFor(activity.group.group_sizes, i)
+    if (i < placed && groupSizes.length > 0) {
+      const groupIndex = groupIndexFor(groupSizes, i)
       const center = clusterCenters[groupIndex] ?? { x: 0, y: 0 }
-      const local = i - activity.group.group_sizes.slice(0, groupIndex).reduce((a, b) => a + b, 0)
-      const angle = (local / Math.max(1, activity.group.group_sizes[groupIndex])) * Math.PI * 2
+      const local = i - groupSizes.slice(0, groupIndex).reduce((a, b) => a + b, 0)
+      const angle = (local / Math.max(1, groupSizes[groupIndex])) * Math.PI * 2
       targets.set(n.id, {
         x: center.x + Math.cos(angle) * 9,
         y: center.y + Math.sin(angle) * 9,
@@ -264,7 +265,9 @@ function stateColor(state: 'lurker' | 'interested' | 'committed') {
 }
 
 function roomSubtitle(a: ActivityView) {
-  if (a.status === 'ready') return 'group ready'
-  if (a.group.spots_to_next != null) return `${a.group.spots_to_next} more to form`
-  return a.status
+  const run = a.current_run
+  if (!run) return 'room is empty — propose a run'
+  if (run.status === 'ready') return 'group ready'
+  if (run.group.spots_to_next != null) return `${run.group.spots_to_next} more to form`
+  return run.status
 }

@@ -1,13 +1,14 @@
 // TypeScript mirror of the Worker API views (src/models.rs, src/logic.rs).
+//
+// Activities are persistent tiles/templates (title, emoji, category, stable
+// room code, grouping shape, lifetime stats). Each gathering is a "run"
+// (time/location/status/participants). At most one run per activity is
+// "current"; `current_run` is null when the room is empty (prompting a new
+// proposal).
 
 export type GroupingMode = 'single' | 'tiling'
 
-export type ActivityStatus =
-  | 'open'
-  | 'ready'
-  | 'scheduled'
-  | 'closed'
-  | 'cancelled'
+export type RunStatus = 'open' | 'ready' | 'scheduled' | 'closed' | 'cancelled'
 
 export type MyState = 'interested' | 'committed' | null
 
@@ -28,19 +29,11 @@ export interface GroupState {
   spots_remaining: number | null
 }
 
-export interface ActivityView {
+export interface RunView {
   id: string
-  code: string | null
-  title: string
-  description: string | null
-  proposer_id: string
-  proposer_handle: string | null
-  min_people: number
-  max_people: number | null
-  group_multiple: number
-  grouping_mode: GroupingMode
-  status: ActivityStatus
+  status: RunStatus
   location: string | null
+  details: string | null
   scheduled_for: number | null
   expires_at: number | null
   interested_count: number
@@ -48,13 +41,42 @@ export interface ActivityView {
   created_at: number
   updated_at: number
   group: GroupState
+}
+
+export interface ActivityView {
+  id: string
+  code: string
+  emoji: string
+  title: string
+  description: string | null
+  category: string
+  proposer_id: string
+  proposer_handle: string | null
+  min_people: number
+  max_people: number | null
+  group_multiple: number
+  grouping_mode: GroupingMode
+  times_run: number
+  players_served: number
+  interest_total: number
+  commit_total: number
+  /** commit_total / (interest_total + commit_total), or null if nobody has ever participated. */
+  commit_pct: number | null
+  last_active_at: number
+  created_at: number
+  updated_at: number
+  /** The active/open run, or null when the room is currently empty. */
+  current_run: RunView | null
+  /** The requesting person's state in the current run: interested | committed | null. */
   my_state: MyState
 }
 
 export type NotificationKind =
   | 'activity_proposed'
-  | 'activity_interest'
-  | 'activity_commit'
+  | 'run_proposed'
+  | 'interest_added'
+  | 'commit_added'
+  | 'activity_interest_ready'
   | 'activity_ready'
   | 'activity_scheduled'
   | 'activity_closed'
@@ -65,6 +87,7 @@ export interface Notification {
   id: string
   recipient_id: string
   activity_id: string | null
+  run_id: string | null
   kind: NotificationKind
   message: string
   read_at: number | null
@@ -92,15 +115,28 @@ export interface RoomResponse {
   participants: ParticipantView[]
 }
 
+/** Creates a new activity (tile) plus its first run in one call. */
 export interface CreateActivityInput {
   code?: string | null
+  emoji?: string | null
   title: string
   description?: string | null
+  category?: string | null
   min_people: number
   max_people?: number | null
   group_multiple?: number | null
   grouping_mode?: GroupingMode
+  // First-run fields.
   location?: string | null
+  details?: string | null
+  scheduled_for?: number | null
+  expires_at?: number | null
+}
+
+/** Creates a new run on an existing activity whose room is currently empty. */
+export interface CreateRunInput {
+  location?: string | null
+  details?: string | null
   scheduled_for?: number | null
   expires_at?: number | null
 }

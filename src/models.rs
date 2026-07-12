@@ -1,4 +1,11 @@
 //! Data structures: D1 row shapes, request inputs, and API response views.
+//!
+//! Activities are persistent templates/tiles (title, emoji, category, stable
+//! room code, grouping shape, lifetime stats). Each gathering is a `Run`
+//! (time/location/status/participants) that belongs to an activity. At most
+//! one run per activity is "current" (`activities.current_run_id`); when it
+//! ends, its stats roll up onto the activity and the room goes back to
+//! "empty" (prompting a new proposal).
 
 use serde::{Deserialize, Serialize};
 
@@ -18,25 +25,44 @@ pub struct PersonRow {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ActivityRow {
     pub id: String,
-    pub code: Option<String>,
+    pub code: String,
+    pub emoji: String,
     pub title: String,
     pub description: Option<String>,
+    pub category: String,
     pub proposer_id: String,
     pub min_people: i64,
     pub max_people: Option<i64>,
     pub group_multiple: i64,
     pub grouping_mode: String,
+    pub current_run_id: Option<String>,
+    pub times_run: i64,
+    pub players_served: i64,
+    pub interest_total: i64,
+    pub commit_total: i64,
+    pub last_active_at: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+    /// Populated only by queries that JOIN the proposer.
+    #[serde(default)]
+    pub proposer_handle: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RunRow {
+    pub id: String,
+    pub activity_id: String,
     pub status: String,
     pub location: Option<String>,
+    pub details: Option<String>,
     pub scheduled_for: Option<i64>,
     pub expires_at: Option<i64>,
     pub interested_count: i64,
     pub committed_count: i64,
+    pub reached_ready: i64,
     pub created_at: i64,
     pub updated_at: i64,
-    /// Populated only by list/detail queries that JOIN the proposer.
-    #[serde(default)]
-    pub proposer_handle: Option<String>,
+    pub ended_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -44,6 +70,7 @@ pub struct NotificationRow {
     pub id: String,
     pub recipient_id: String,
     pub activity_id: Option<String>,
+    pub run_id: Option<String>,
     pub kind: String,
     pub message: String,
     pub read_at: Option<i64>,
@@ -53,7 +80,7 @@ pub struct NotificationRow {
 /// Minimal projection of a participation row.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ParticipationLite {
-    pub activity_id: String,
+    pub run_id: String,
     pub state: String,
 }
 
@@ -71,28 +98,43 @@ pub struct UpdateSession {
     pub color: Option<String>,
 }
 
+/// Creates a new activity (tile) plus its first run in one call.
 #[derive(Debug, Deserialize)]
 pub struct CreateActivity {
     pub code: Option<String>,
+    pub emoji: Option<String>,
     pub title: String,
     pub description: Option<String>,
+    pub category: Option<String>,
     pub min_people: u32,
     pub max_people: Option<u32>,
     pub group_multiple: Option<u32>,
     pub grouping_mode: Option<String>,
+    // First-run fields.
     pub location: Option<String>,
+    pub details: Option<String>,
+    pub scheduled_for: Option<i64>,
+    pub expires_at: Option<i64>,
+}
+
+/// Creates a new run on an existing activity whose room is currently empty
+/// (no active run). Grouping/code/emoji are inherited from the activity.
+#[derive(Debug, Deserialize)]
+pub struct CreateRun {
+    pub location: Option<String>,
+    pub details: Option<String>,
     pub scheduled_for: Option<i64>,
     pub expires_at: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ScheduleActivity {
+pub struct ScheduleRun {
     pub scheduled_for: i64,
     pub location: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct CommitActivity {
+pub struct CommitRun {
     /// Minutes from now until the participant can make it. Clamped to 5..=30.
     pub eta_minutes: Option<u32>,
 }
@@ -123,19 +165,11 @@ pub struct PushUnsubscribe {
 // ---- API views -------------------------------------------------------------
 
 #[derive(Debug, Serialize)]
-pub struct ActivityView {
+pub struct RunView {
     pub id: String,
-    pub code: Option<String>,
-    pub title: String,
-    pub description: Option<String>,
-    pub proposer_id: String,
-    pub proposer_handle: Option<String>,
-    pub min_people: i64,
-    pub max_people: Option<i64>,
-    pub group_multiple: i64,
-    pub grouping_mode: String,
     pub status: String,
     pub location: Option<String>,
+    pub details: Option<String>,
     pub scheduled_for: Option<i64>,
     pub expires_at: Option<i64>,
     pub interested_count: i64,
@@ -143,32 +177,22 @@ pub struct ActivityView {
     pub created_at: i64,
     pub updated_at: i64,
     pub group: GroupState,
-    /// The requesting person's state for this activity: interested | committed | null.
-    pub my_state: Option<String>,
 }
 
-impl ActivityView {
-    pub fn from_row(row: ActivityRow, my_state: Option<String>) -> ActivityView {
+impl RunView {
+    pub fn from_row(row: RunRow, activity: &ActivityRow) -> RunView {
         let group = compute_group_state(
-            GroupingMode::parse(&row.grouping_mode),
-            row.min_people.max(0) as u32,
-            row.max_people.map(|m| m.max(0) as u32),
-            row.group_multiple.max(0) as u32,
+            GroupingMode::parse(&activity.grouping_mode),
+            activity.min_people.max(0) as u32,
+            activity.max_people.map(|m| m.max(0) as u32),
+            activity.group_multiple.max(0) as u32,
             row.committed_count.max(0) as u32,
         );
-        ActivityView {
+        RunView {
             id: row.id,
-            code: row.code,
-            title: row.title,
-            description: row.description,
-            proposer_id: row.proposer_id,
-            proposer_handle: row.proposer_handle,
-            min_people: row.min_people,
-            max_people: row.max_people,
-            group_multiple: row.group_multiple,
-            grouping_mode: row.grouping_mode,
             status: row.status,
             location: row.location,
+            details: row.details,
             scheduled_for: row.scheduled_for,
             expires_at: row.expires_at,
             interested_count: row.interested_count,
@@ -176,6 +200,77 @@ impl ActivityView {
             created_at: row.created_at,
             updated_at: row.updated_at,
             group,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct ActivityView {
+    pub id: String,
+    pub code: String,
+    pub emoji: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub category: String,
+    pub proposer_id: String,
+    pub proposer_handle: Option<String>,
+    pub min_people: i64,
+    pub max_people: Option<i64>,
+    pub group_multiple: i64,
+    pub grouping_mode: String,
+    pub times_run: i64,
+    pub players_served: i64,
+    pub interest_total: i64,
+    pub commit_total: i64,
+    /// commit_total / (interest_total + commit_total), or null if nobody has
+    /// ever participated yet.
+    pub commit_pct: Option<f64>,
+    pub last_active_at: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+    /// The active/open run, if the room isn't currently empty.
+    pub current_run: Option<RunView>,
+    /// The requesting person's state in the current run: interested | committed | null.
+    pub my_state: Option<String>,
+}
+
+impl ActivityView {
+    pub fn from_row(
+        row: ActivityRow,
+        current_run: Option<RunRow>,
+        my_state: Option<String>,
+    ) -> ActivityView {
+        let commit_pct = {
+            let total = row.interest_total + row.commit_total;
+            if total > 0 {
+                Some(row.commit_total as f64 / total as f64)
+            } else {
+                None
+            }
+        };
+        let current_run_view = current_run.map(|r| RunView::from_row(r, &row));
+        ActivityView {
+            id: row.id,
+            code: row.code,
+            emoji: row.emoji,
+            title: row.title,
+            description: row.description,
+            category: row.category,
+            proposer_id: row.proposer_id,
+            proposer_handle: row.proposer_handle,
+            min_people: row.min_people,
+            max_people: row.max_people,
+            group_multiple: row.group_multiple,
+            grouping_mode: row.grouping_mode,
+            times_run: row.times_run,
+            players_served: row.players_served,
+            interest_total: row.interest_total,
+            commit_total: row.commit_total,
+            commit_pct,
+            last_active_at: row.last_active_at,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            current_run: current_run_view,
             my_state,
         }
     }

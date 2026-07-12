@@ -30,10 +30,10 @@ export interface UseSync extends SyncState {
 /** Stable signature of the parts of a sync response users care about. */
 function signature(s: SyncResponse): string {
   const acts = s.activities
-    .map(
-      (a) =>
-        `${a.id}:${a.status}:${a.updated_at}:${a.interested_count}:${a.committed_count}:${a.my_state ?? ''}`,
-    )
+    .map((a) => {
+      const r = a.current_run
+      return `${a.id}:${a.updated_at}:${r?.id ?? ''}:${r?.status ?? ''}:${r?.interested_count ?? 0}:${r?.committed_count ?? 0}:${a.my_state ?? ''}`
+    })
     .join('|')
   const notifs = s.notifications.map((n) => n.id).join(',')
   return `${acts}#${notifs}`

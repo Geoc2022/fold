@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, Navigate, useParams } from 'react-router-dom'
 import { api, ensureSession } from '../api'
 import { useRoom } from '../useRoom'
 import type { Person } from '../types'
+import { CreateRunForm } from '../components/CreateRunForm'
 import { RoomCanvas } from '../components/RoomCanvas'
 import { RoomPanel } from '../components/RoomPanel'
 
@@ -27,6 +28,7 @@ export function ActivityRoom() {
   const [me, setMe] = useState<Person | null>(null)
   const [theme, setTheme] = useState<Theme>(initialTheme)
   const [alert, setAlert] = useState<string | null>(null)
+  const [proposingRun, setProposingRun] = useState(true)
   const { data, error, loading, notFound, refresh } = useRoom(code, me !== null && code !== null)
 
   useEffect(() => {
@@ -55,12 +57,19 @@ export function ActivityRoom() {
     }
   }, [theme])
 
+  // Re-open the propose-run prompt any time the room becomes freshly empty.
+  useEffect(() => {
+    if (data && data.activity.current_run == null) setProposingRun(true)
+  }, [data])
+
   if (code === null) {
     return <RoomMessage title="Invalid link" message="Activity links are four letters." />
   }
 
+  // A nonexistent code prompts creating a brand-new activity with that code
+  // pre-filled, rather than a dead end.
   if (notFound) {
-    return <RoomMessage title="Not found" message={`No activity found for ${code}.`} />
+    return <Navigate to={`/?code=${code}`} replace />
   }
 
   if (!me || loading || !data) {
@@ -76,35 +85,49 @@ export function ActivityRoom() {
   }
 
   async function interest() {
-    await api.interest(activity.id)
+    if (!activity.current_run) return
+    await api.interest(activity.current_run.id)
     refresh()
   }
 
   async function commit(etaMinutes: number) {
-    await api.commit(activity.id, etaMinutes)
+    if (!activity.current_run) return
+    await api.commit(activity.current_run.id, etaMinutes)
     refresh()
   }
 
   return (
     <main className={`room-page room-${theme}`}>
-      <RoomCanvas
-        activity={activity}
-        participants={data.participants}
-        me={me}
-        theme={theme}
-      />
-      <div className="room-code">/{activity.code ?? code}</div>
+      <RoomCanvas activity={activity} participants={data.participants} me={me} theme={theme} />
+      <div className="room-code">/{activity.code}</div>
       {error && <div className="room-error">{error}</div>}
       {alert && <div className="room-alert">{alert}</div>}
       <RoomPanel
         activity={activity}
         myParticipant={myParticipant}
+        me={me}
+        onMeChanged={setMe}
         theme={theme}
         onThemeToggle={() => setTheme((t) => (t === 'light' ? 'dark' : 'light'))}
         onInterested={interest}
         onCommit={commit}
+        onProposeRun={() => setProposingRun(true)}
         onAlert={showAlert}
       />
+      {!activity.current_run && proposingRun && (
+        <div className="modal-backdrop" onClick={() => setProposingRun(false)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <CreateRunForm
+              activity={activity}
+              onCreated={() => {
+                setProposingRun(false)
+                refresh()
+              }}
+              onCancel={() => setProposingRun(false)}
+            />
+          </div>
+        </div>
+      )}
     </main>
   )
 }
