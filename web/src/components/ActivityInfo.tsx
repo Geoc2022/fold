@@ -34,10 +34,12 @@ export function ActivityInfo({ activity: a, now, cta }: Props) {
           {action}
         </div>
       </div>
-      {run && <GroupMeter run={run} groupingMode={a.grouping_mode} />}
-      <p className="tile-meta">
-        proposed by {a.proposer_handle ?? 'someone'} · active {relativeTime(a.last_active_at, now)}
-      </p>
+      <div className="info-foot">
+        {run && <GroupMeter run={run} groupingMode={a.grouping_mode} />}
+        <p className="tile-meta">
+          proposed by {a.proposer_handle ?? 'someone'} · active {relativeTime(a.last_active_at, now)}
+        </p>
+      </div>
     </div>
   )
 }

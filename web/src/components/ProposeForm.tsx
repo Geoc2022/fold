@@ -228,10 +228,10 @@ export function ProposeForm({ initialCode, onCreated, onClose }: Props) {
                 onChange={(e) => handleDurationChange(e.target.value)}
                 onBlur={() => setDurationInput(minutesToHuman(durationMinutes))}
               />
-              <span className="hint">How long someone stays arrived before fading</span>
+              <span className="hint">How long someone stays arrived</span>
             </label>
             <label>
-              Max arrival ETA
+              Max Commitment Time
               <input
                 type="text"
                 placeholder="30m"
