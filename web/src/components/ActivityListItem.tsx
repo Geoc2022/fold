@@ -1,8 +1,8 @@
 import { motion } from 'framer-motion'
 import { Link } from 'react-router-dom'
-import { compactNumber, formatPct } from '../format'
 import type { ActivityView } from '../types'
 import { EmojiGlyph } from './EmojiGlyph'
+import { ActivityStats } from './ActivityStats'
 
 interface Props {
   activity: ActivityView
@@ -25,15 +25,7 @@ export function ActivityListItem({ activity: a }: Props) {
         {a.description && <p className="list-desc">{a.description}</p>}
       </div>
       <div className="list-stats">
-        <div className="stat-box">
-          <span className="stat-num">{compactNumber(a.times_run)}</span> runs
-        </div>
-        <div className="stat-box">
-          <span className="stat-num">{compactNumber(a.players_served)}</span> served
-        </div>
-        <div className="stat-box">
-          <span className="stat-num">{formatPct(a.commit_pct)}</span> commit
-        </div>
+        <ActivityStats activity={a} variant="pill" />
       </div>
       <Link className="list-launch primary sm" to={`/${a.code}`}>
         Join

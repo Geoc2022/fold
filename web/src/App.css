@@ -402,41 +402,6 @@ label .opt {
 .tile:hover {
   box-shadow: 0 10px 28px var(--shadow);
 }
-.tile-face {
-  flex: 1;
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  align-items: center;
-  gap: 0.6rem;
-  /* background is set inline per-tile (hashed accent color); text/icon use
-     the page background color so they read as a solid, inverted swatch. */
-  color: var(--tile-text);
-  border: none;
-  border-radius: 0;
-  padding: 1rem;
-  text-align: center;
-}
-.tile-icon-box {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 0;
-}
-.tile-title {
-  font-weight: 650;
-  font-size: 0.85rem;
-  line-height: 1.15;
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-}
-.tile-emoji {
-  font-size: 1.4rem;
-  line-height: 1;
-}
 /* Icon size is O(n^2) in the tile's side length (n units), not linear, so
    bigger tiles get disproportionately bigger icons. */
 .tile.size-2 .tile-title {
@@ -622,6 +587,11 @@ label .opt {
   font-size: 0.78rem;
   color: var(--muted);
   text-align: center;
+}
+.activity-stats-pill {
+  display: flex;
+  gap: 0.9rem;
+  flex-wrap: wrap;
 }
 .stat-box {
   display: flex;
@@ -1263,4 +1233,49 @@ label .opt {
   letter-spacing: 0.06em;
   color: #9ca3af;
   margin-top: 0.2rem;
+}
+.activity-badge {
+  width: 100%;
+  border: none;
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 0.6rem;
+  color: var(--tile-text);
+  padding: 1rem;
+  text-align: center;
+}
+.activity-badge.card {
+  border-radius: var(--radius);
+  cursor: pointer;
+  min-height: 100%;
+}
+.activity-badge.square {
+  border-radius: 16px;
+  aspect-ratio: 1 / 1;
+  width: min(100%, 108px);
+  max-width: 108px;
+}
+.activity-badge-title {
+  font-weight: 650;
+  line-height: 1.2;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.activity-badge-emoji {
+  font-size: 3.2rem;
+  line-height: 1;
+}
+.activity-badge.size-1 .activity-badge-emoji {
+  font-size: 1.4rem;
+}
+.activity-badge.size-2 .activity-badge-emoji {
+  font-size: 5.6rem;
+}
+.activity-badge.size-3 .activity-badge-emoji {
+  font-size: 12.6rem;
 }

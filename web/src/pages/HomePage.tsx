@@ -138,7 +138,7 @@ export function HomePage() {
     if (!expandedId) return
     function onDocClick(e: MouseEvent) {
       const target = e.target as HTMLElement
-      if (target.closest('.tile-face')) return // the tile's own click handles this
+      if (target.closest('.activity-badge')) return // the tile's own click handles this
       if (target.closest('.tile.expanded')) return // click inside the expanded panel
       setExpandedId(null)
     }

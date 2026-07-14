@@ -1,9 +1,7 @@
 import { motion } from 'framer-motion'
-import { useMemo } from 'react'
-import { tileAccentColor } from '../tileAccent'
 import type { ActivityView } from '../types'
+import { ActivityBadge } from './ActivityBadge'
 import { ActivityInfo } from './ActivityInfo'
-import { EmojiGlyph } from './EmojiGlyph'
 
 interface Props {
   activity: ActivityView
@@ -18,8 +16,6 @@ interface Props {
  * panel with Join. Only one tile can be expanded at a time (controlled by
  * the parent). */
 export function ActivityTile({ activity: a, now, size, expanded, onToggle }: Props) {
-  const accent = useMemo(() => tileAccentColor(a.title), [a.title])
-
   const colSpan = expanded ? 4 : size
   const rowSpan = expanded ? 3 : size
 
@@ -33,20 +29,7 @@ export function ActivityTile({ activity: a, now, size, expanded, onToggle }: Pro
       className={`tile size-${size} ${expanded ? 'expanded' : ''}`}
       style={{ gridColumn: `span ${colSpan}`, gridRow: `span ${rowSpan}` }}
     >
-      {!expanded && (
-        <button
-          type="button"
-          className="tile-face"
-          onClick={onToggle}
-          aria-expanded={expanded}
-          style={{ background: accent }}
-        >
-          <span className="tile-title">{a.title}</span>
-          <span className="tile-icon-box">
-            <EmojiGlyph emoji={a.emoji} className="tile-emoji" />
-          </span>
-        </button>
-      )}
+      {!expanded && <ActivityBadge activity={a} variant="card" size={size} onClick={onToggle} ariaExpanded={expanded} />}
       {expanded && (
         <div className="tile-expanded">
           <ActivityInfo activity={a} now={now} />
