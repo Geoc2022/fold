@@ -36,6 +36,8 @@ pub struct ActivityRow {
     pub group_multiple: i64,
     pub grouping_mode: String,
     pub allow_guests: i64,
+    pub duration_minutes: i64,
+    pub max_commit_minutes: i64,
     pub current_run_id: Option<String>,
     pub times_run: i64,
     pub players_served: i64,
@@ -112,6 +114,8 @@ pub struct CreateActivity {
     pub group_multiple: Option<u32>,
     pub grouping_mode: Option<String>,
     pub allow_guests: Option<bool>,
+    pub duration_minutes: Option<u32>,
+    pub max_commit_minutes: Option<u32>,
     // First-run fields.
     pub location: Option<String>,
     pub details: Option<String>,
@@ -137,7 +141,8 @@ pub struct ScheduleRun {
 
 #[derive(Debug, Deserialize)]
 pub struct CommitRun {
-    /// Minutes from now until the participant can make it. Clamped to 0..=30.
+    /// Minutes from now until the participant can make it. Clamped to
+    /// 0..=activity.max_commit_minutes.
     pub eta_minutes: Option<u32>,
 }
 
@@ -221,6 +226,8 @@ pub struct ActivityView {
     pub group_multiple: i64,
     pub grouping_mode: String,
     pub allow_guests: bool,
+    pub duration_minutes: i64,
+    pub max_commit_minutes: i64,
     pub times_run: i64,
     pub players_served: i64,
     pub interest_total: i64,
@@ -266,6 +273,8 @@ impl ActivityView {
             group_multiple: row.group_multiple,
             grouping_mode: row.grouping_mode,
             allow_guests: row.allow_guests != 0,
+            duration_minutes: row.duration_minutes,
+            max_commit_minutes: row.max_commit_minutes,
             times_run: row.times_run,
             players_served: row.players_served,
             interest_total: row.interest_total,
@@ -304,4 +313,8 @@ pub struct RoomResponse {
     pub server_time: i64,
     pub activity: ActivityView,
     pub participants: Vec<ParticipantView>,
+    /// True if the requesting person is already committed to a *different*
+    /// run elsewhere -- lets the client block promoting to committed here
+    /// before even trying (commit is exclusive: at most one at a time).
+    pub already_committed_elsewhere: bool,
 }

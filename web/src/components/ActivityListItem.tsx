@@ -36,7 +36,7 @@ export function ActivityListItem({ activity: a }: Props) {
         </div>
       </div>
       <Link className="list-launch primary sm" to={`/${a.code}`}>
-        Launch
+        Join
       </Link>
     </motion.div>
   )

@@ -30,6 +30,8 @@ CREATE TABLE activities (
   grouping_mode    TEXT NOT NULL DEFAULT 'single'
                      CHECK (grouping_mode IN ('single', 'tiling')),
   allow_guests     INTEGER NOT NULL DEFAULT 1,
+  duration_minutes    INTEGER NOT NULL DEFAULT 30, -- how long, after arriving, before a participant fades out and expires
+  max_commit_minutes  INTEGER NOT NULL DEFAULT 30, -- max ETA (minutes) allowed when first committing
   current_run_id   TEXT,                      -- active/open run, if any (NULL = room is empty)
   times_run        INTEGER NOT NULL DEFAULT 0, -- runs that reached >=1 complete group
   players_served   INTEGER NOT NULL DEFAULT 0, -- lifetime distinct participants across ended runs

@@ -123,10 +123,6 @@ a.danger {
   color: var(--text);
   padding: 0.5rem 0.9rem;
   display: inline-block;
-  transition: background 0.12s ease;
-}
-button:hover:not(:disabled) {
-  background: var(--surface-3);
 }
 button:disabled {
   opacity: 0.55;
@@ -138,15 +134,9 @@ button:disabled {
   color: var(--on-accent);
   font-weight: 600;
 }
-.primary:hover:not(:disabled) {
-  filter: brightness(1.1);
-}
 .ghost {
   background: transparent;
   border-color: transparent;
-}
-.ghost:hover:not(:disabled) {
-  background: var(--surface-3);
 }
 .sm {
   padding: 0.3rem 0.6rem;
@@ -156,9 +146,6 @@ button:disabled {
 .danger {
   color: var(--danger);
   border-color: transparent;
-}
-.danger:hover:not(:disabled) {
-  background: transparent;
 }
 .icon-btn {
   padding: 0.3rem 0.5rem;
@@ -206,7 +193,7 @@ label .opt {
 
 .card {
   background: var(--panel);
-  border: 1px solid var(--border);
+  border: none;
   border-radius: var(--radius);
   padding: 1rem 1.1rem;
 }
@@ -337,7 +324,7 @@ label .opt {
 }
 .tag-pill {
   background: var(--panel-2);
-  border: 1px solid var(--border);
+  border: none;
   border-radius: 999px;
   padding: 0.3rem 0.8rem;
   font-size: 0.82rem;
@@ -354,13 +341,12 @@ label .opt {
 }
 .tag-pill.active {
   background: var(--accent-solid);
-  border-color: transparent;
-   color: var(--on-accent);
+  color: var(--on-accent);
   font-weight: 600;
 }
 .view-toggle {
   display: flex;
-  border: 1px solid var(--border);
+  border: none;
   border-radius: 10px;
   overflow: hidden;
 }
@@ -419,31 +405,24 @@ label .opt {
 .tile-face {
   flex: 1;
   width: 100%;
-  /* Two hard-partitioned rows (title, then icon) instead of a single
-     flex-centered stack -- grid tracks never overlap, so the title and
-     icon can't visually intersect even when a large glyph's painted
-     bounds exceed its own logical line-box. */
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
   align-items: center;
-  justify-items: center;
   gap: 0.6rem;
   /* background is set inline per-tile (hashed accent color); text/icon use
      the page background color so they read as a solid, inverted swatch. */
   color: var(--tile-text);
   border: none;
   border-radius: 0;
-  padding: 0.5rem;
+  padding: 1rem;
   text-align: center;
 }
 .tile-icon-box {
-  width: 100%;
-  height: 100%;
-  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  overflow: hidden;
+  min-height: 0;
 }
 .tile-title {
   font-weight: 650;
@@ -501,26 +480,71 @@ label .opt {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  padding: 0 0.9rem 0.7rem;
-  border-top: 1px solid var(--border);
-  padding-top: 0.6rem;
+  padding: 0.5rem 0.9rem 0.8rem;
   overflow: auto;
 }
-.tile-desc {
+.info-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+  align-items: start;
+}
+.info-left {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.info-face {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  border-radius: 16px;
+  padding: 1rem;
+  color: var(--tile-text);
+  min-height: 108px;
+  text-align: center;
+  aspect-ratio: 1 / 1;
+  width: min(100%, 108px);
+  max-width: 108px;
+}
+.info-face-title {
+  font-weight: 650;
+  font-size: 1rem;
+  line-height: 1.2;
+  max-width: 90%;
+}
+.info-face-icon {
+  font-size: 3.2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.info-location {
+  margin: 0;
+  font-weight: 700;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.info-right {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  align-items: flex-start;
+}
+.info-desc {
   margin: 0;
   color: var(--text);
   font-size: 0.85rem;
 }
 .tile-meta {
   margin: 0;
-  color: var(--muted);
+  color: color-mix(in srgb, var(--muted) 70%, var(--bg));
   font-size: 0.75rem;
-}
-.tile-stats-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
+  text-align: left;
 }
 .stats-table {
   border-collapse: collapse;
@@ -537,11 +561,18 @@ label .opt {
   font-weight: 700;
   padding: 0.15rem 0;
 }
-.tile-launch {
-  align-self: center;
+.activity-launch {
+  align-self: flex-start;
   text-decoration: none;
   font-weight: 650;
   white-space: nowrap;
+  padding: 0.9rem 1.4rem;
+  margin-top: 0.6rem;
+  border: none;
+}
+.activity-launch.primary,
+.list-launch.primary {
+  border: none;
 }
 
 /* ---- list view ---- */
@@ -607,10 +638,11 @@ label .opt {
   flex: 0 0 auto;
   text-decoration: none;
   font-weight: 650;
+  border: none;
 }
 .create-list-item {
   background: transparent;
-  border-style: dashed;
+  border: 1px dashed var(--border);
   color: var(--muted);
   cursor: pointer;
   justify-content: center;
@@ -692,6 +724,22 @@ label .opt {
   flex-direction: column;
   gap: 0.7rem;
   margin-bottom: 1rem;
+}
+.propose-form input,
+.propose-form textarea,
+.propose-form select {
+  border: none;
+  background: color-mix(in srgb, var(--panel) 84%, transparent);
+}
+.propose-form .num-field input,
+.propose-form .row input,
+.propose-form .row input[type='text'] {
+  margin: 0;
+}
+.propose-form .grouping-block,
+.propose-form .grouping-toggle button,
+.propose-form .check-row input {
+  border: none;
 }
 .propose-head {
   display: flex;
@@ -785,7 +833,7 @@ label .opt {
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
-  border: 1px solid var(--border);
+  border: none;
   border-radius: 12px;
   padding: 0.8rem 0.9rem;
 }
@@ -910,21 +958,28 @@ label .opt {
   width: 100vw;
   height: 100vh;
   touch-action: none;
+  /* CSS fallback for the first paint; JS then switches this dynamically
+     between grab / grabbing / crosshair based on hover and drag state. */
   cursor: grab;
-}
-.room-canvas:active {
-  cursor: grabbing;
 }
 .room-code {
   position: fixed;
-  top: 14px;
-  left: 16px;
-  z-index: 100;
-  color: var(--muted);
-  font-size: 13px;
-  letter-spacing: 0.12em;
+  top: 18px;
+  left: 20px;
+  z-index: 120;
+  color: var(--text);
+  font-size: 18px;
+  letter-spacing: 0.18em;
   text-transform: uppercase;
   user-select: none;
+  background: color-mix(in srgb, var(--panel) 90%, transparent);
+  border: none;
+  border-radius: 999px;
+  padding: 0.4rem 0.9rem 0.35rem;
+  cursor: pointer;
+}
+.room-code:focus-visible {
+  outline: 2px solid var(--accent);
 }
 .room-error {
   position: fixed;
@@ -936,27 +991,28 @@ label .opt {
 }
 .room-alert {
   position: fixed;
-  left: 16px;
-  bottom: 62px;
-  z-index: 120;
-  max-width: min(360px, calc(100vw - 32px));
-  background: var(--danger);
+  top: 22px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 130;
+  max-width: min(420px, calc(100vw - 32px));
+  background: color-mix(in srgb, var(--danger) 85%, var(--bg));
   color: var(--on-accent);
-  border: 1px solid var(--danger);
-  border-radius: 10px;
-  padding: 0.7rem 0.9rem;
+  border: 1px solid color-mix(in srgb, var(--danger) 60%, transparent);
+  border-radius: 999px;
+  padding: 0.55rem 1.4rem;
   font-size: 0.9rem;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.25);
   animation: room-alert-in 0.18s ease-out;
 }
 @keyframes room-alert-in {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translate(-50%, 8px);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: translate(-50%, 0);
   }
 }
 .room-message {
@@ -985,8 +1041,7 @@ label .opt {
   padding: 4px 12px;
   z-index: 101;
   background: color-mix(in srgb, var(--panel) 92%, var(--bg) 8%);
-  border: 1px solid var(--border);
-  border-bottom: none;
+  border: none;
   border-radius: 8px 8px 0 0;
   text-align: center;
   font-size: 14px;
@@ -995,7 +1050,7 @@ label .opt {
   align-items: center;
   justify-content: center;
   gap: 12px;
-  box-shadow: 0 -8px 28px rgba(0, 0, 0, 0.24);
+  box-shadow: 0 -4px 18px rgba(0, 0, 0, 0.22);
 }
 .panel-button,
 .room-action {
@@ -1007,11 +1062,6 @@ label .opt {
   padding: 6px 16px;
   cursor: pointer;
   font-size: 14px;
-  transition: background 0.2s ease, transform 0.12s ease;
-}
-.panel-button:hover:not(:disabled),
-.room-action:hover:not(:disabled) {
-  background: var(--surface-3);
 }
 .panel-button.icon {
   border: none;
@@ -1075,6 +1125,7 @@ label .opt {
   display: flex;
   flex-direction: column;
   gap: 0.8rem;
+  border: none;
 }
 .activity-info {
   display: flex;

@@ -26,6 +26,8 @@ interface LastProposal {
   grouping_mode?: GroupingMode
   allow_guests?: boolean
   location?: string
+  duration_minutes?: number
+  max_commit_minutes?: number
 }
 
 function loadLastProposal(): LastProposal {
@@ -76,6 +78,10 @@ export function ProposeForm({ initialCode, onCreated, onClose }: Props) {
   const [maxPeople, setMaxPeople] = useState<number | null>(last.max_people ?? null)
   const [groupMultiple, setGroupMultiple] = useState(last.group_multiple ?? 2)
   const [allowGuests, setAllowGuests] = useState(last.allow_guests ?? true)
+  const [durationMinutes, setDurationMinutes] = useState(last.duration_minutes ?? 30)
+  const [maxCommitMinutes, setMaxCommitMinutes] = useState(last.max_commit_minutes ?? 30)
+  const [durationInput, setDurationInput] = useState(() => minutesToHuman(last.duration_minutes ?? 30))
+  const [maxCommitInput, setMaxCommitInput] = useState(() => minutesToHuman(last.max_commit_minutes ?? 30))
   const [code, setCode] = useState(initialCode ?? '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -98,6 +104,18 @@ export function ProposeForm({ initialCode, onCreated, onClose }: Props) {
 
   const feasible = groupingIsFeasible(mode, minPeople, maxPeople, groupMultiple)
 
+  function handleDurationChange(value: string) {
+    setDurationInput(value)
+    const parsed = parseDuration(value)
+    if (parsed !== null) setDurationMinutes(clampMinutes(parsed, 5, 24 * 60))
+  }
+
+  function handleMaxEtaChange(value: string) {
+    setMaxCommitInput(value)
+    const parsed = parseDuration(value)
+    if (parsed !== null) setMaxCommitMinutes(clampMinutes(parsed, 0, 24 * 60))
+  }
+
   async function submit(e: React.FormEvent) {
     e.preventDefault()
     const t = title.trim()
@@ -114,6 +132,8 @@ export function ProposeForm({ initialCode, onCreated, onClose }: Props) {
       group_multiple: mode === 'tiling' ? groupMultiple : 1,
       grouping_mode: mode,
       allow_guests: allowGuests,
+      duration_minutes: durationMinutes,
+      max_commit_minutes: maxCommitMinutes,
       location: location.trim() || null,
       expires_at: null,
     }
@@ -134,6 +154,8 @@ export function ProposeForm({ initialCode, onCreated, onClose }: Props) {
         grouping_mode: mode,
         allow_guests: allowGuests,
         location: location.trim() || undefined,
+        duration_minutes: durationMinutes,
+        max_commit_minutes: maxCommitMinutes,
       })
       onCreated(activity)
       navigate(`/${activity.code}`)
@@ -196,6 +218,30 @@ export function ProposeForm({ initialCode, onCreated, onClose }: Props) {
             <input type="checkbox" checked={allowGuests} onChange={(e) => setAllowGuests(e.target.checked)} />
             <span>Allow Guests</span>
           </label>
+          <div className="row">
+            <label>
+              Duration
+              <input
+                type="text"
+                placeholder="10m 30s"
+                value={durationInput}
+                onChange={(e) => handleDurationChange(e.target.value)}
+                onBlur={() => setDurationInput(minutesToHuman(durationMinutes))}
+              />
+              <span className="hint">How long someone stays arrived before fading</span>
+            </label>
+            <label>
+              Max arrival ETA
+              <input
+                type="text"
+                placeholder="30m"
+                value={maxCommitInput}
+                onChange={(e) => handleMaxEtaChange(e.target.value)}
+                onBlur={() => setMaxCommitInput(minutesToHuman(maxCommitMinutes))}
+              />
+              <span className="hint">Farthest-out commitment allowed</span>
+            </label>
+          </div>
         </>
       )}
 
@@ -274,6 +320,63 @@ export function ProposeForm({ initialCode, onCreated, onClose }: Props) {
       </button>
     </form>
   )
+}
+
+function minutesToHuman(total: number) {
+  const clamped = Math.max(0, total)
+  const hours = Math.floor(clamped / 60)
+  const minutes = clamped % 60
+  if (hours > 0) return `${hours}h ${minutes}m`.trim()
+  return `${minutes}m`
+}
+
+function parseDuration(text: string): number | null {
+  const trimmed = text.trim().toLowerCase()
+  if (!trimmed) return null
+  const tokens = trimmed.split(/\s+/)
+  let seconds = 0
+  let matched = false
+  for (const token of tokens) {
+    if (!token) continue
+    const match = token.match(/^(?<val>\d+)(?<unit>h|hr|hrs|m|min|s|sec|seconds)?$/i)
+    if (match) {
+      const val = Number(match.groups?.val || 0)
+      const unit = (match.groups?.unit || 'm').toLowerCase()
+      if (unit.startsWith('h')) seconds += val * 3600
+      else if (unit.startsWith('s')) seconds += val
+      else seconds += val * 60
+      matched = true
+      continue
+    }
+    if (token.includes(':')) {
+      const parts = token.split(':').map((p) => (p === '' ? 0 : Number(p)))
+      if (parts.every((p) => Number.isNaN(p))) continue
+      if (parts.length === 2) {
+        const [mm = 0, ss = 0] = parts
+        seconds += (Number.isNaN(mm) ? 0 : mm) * 60 + (Number.isNaN(ss) ? 0 : ss)
+        matched = true
+        continue
+      }
+      if (parts.length === 3) {
+        const [hh = 0, mm = 0, ss = 0] = parts
+        seconds += (Number.isNaN(hh) ? 0 : hh) * 3600 + (Number.isNaN(mm) ? 0 : mm) * 60 + (Number.isNaN(ss) ? 0 : ss)
+        matched = true
+        continue
+      }
+    }
+    const plain = Number(token)
+    if (!Number.isNaN(plain)) {
+      seconds += plain * 60
+      matched = true
+    }
+  }
+  if (!matched) return null
+  return Math.max(0, Math.round(seconds / 60))
+}
+
+function clampMinutes(value: number, min: number, max: number) {
+  if (Number.isNaN(value)) return min
+  return Math.max(min, Math.min(max, value))
 }
 
 /** Distinguishes "that code is already taken" (retry with another candidate)

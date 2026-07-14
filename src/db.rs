@@ -42,7 +42,8 @@ pub fn oi(v: Option<i64>) -> JsValue {
 
 const ACTIVITY_COLS: &str = "a.id, a.code, a.emoji, a.title, a.description, a.category, \
     a.proposer_id, a.min_people, a.max_people, a.group_multiple, a.grouping_mode, \
-    a.allow_guests, a.current_run_id, a.times_run, a.players_served, a.interest_total, a.commit_total, \
+    a.allow_guests, a.duration_minutes, a.max_commit_minutes, \
+    a.current_run_id, a.times_run, a.players_served, a.interest_total, a.commit_total, \
     a.last_active_at, a.created_at, a.updated_at, p.handle AS proposer_handle";
 
 const RUN_COLS: &str = "id, activity_id, status, location, details, scheduled_for, expires_at, \
@@ -81,7 +82,14 @@ pub async fn upsert_push_subscription(
          VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
          ON CONFLICT(person_id, endpoint) DO UPDATE SET p256dh = ?4, auth = ?5",
     )
-    .bind(&[s(&id), s(person_id), s(endpoint), s(p256dh), s(auth), i(now)])?
+    .bind(&[
+        s(&id),
+        s(person_id),
+        s(endpoint),
+        s(p256dh),
+        s(auth),
+        i(now),
+    ])?
     .run()
     .await?;
     Ok(())
@@ -181,7 +189,10 @@ pub async fn get_activity(db: &D1Database, id: &str) -> Result<Option<ActivityRo
         "SELECT {ACTIVITY_COLS} FROM activities a \
          LEFT JOIN people p ON p.id = a.proposer_id WHERE a.id = ?"
     );
-    db.prepare(&sql).bind(&[s(id)])?.first::<ActivityRow>(None).await
+    db.prepare(&sql)
+        .bind(&[s(id)])?
+        .first::<ActivityRow>(None)
+        .await
 }
 
 pub async fn get_activity_by_code(db: &D1Database, code: &str) -> Result<Option<ActivityRow>> {
@@ -201,12 +212,19 @@ pub async fn get_activity_by_title(db: &D1Database, title: &str) -> Result<Optio
         "SELECT {ACTIVITY_COLS} FROM activities a \
          LEFT JOIN people p ON p.id = a.proposer_id WHERE LOWER(a.title) = LOWER(?)"
     );
-    db.prepare(&sql).bind(&[s(title)])?.first::<ActivityRow>(None).await
+    db.prepare(&sql)
+        .bind(&[s(title)])?
+        .first::<ActivityRow>(None)
+        .await
 }
 
 /// Bump `last_active_at` (and `updated_at`) -- resets the 7-day homepage
 /// visibility window. Called on run creation and on any interest/commit.
-pub async fn touch_activity_last_active(db: &D1Database, activity_id: &str, now: i64) -> Result<()> {
+pub async fn touch_activity_last_active(
+    db: &D1Database,
+    activity_id: &str,
+    now: i64,
+) -> Result<()> {
     db.prepare("UPDATE activities SET last_active_at = ?, updated_at = ? WHERE id = ?")
         .bind(&[i(now), i(now), s(activity_id)])?
         .run()
@@ -303,10 +321,17 @@ pub async fn get_runs_by_ids(db: &D1Database, ids: &[String]) -> Result<Vec<RunR
     if ids.is_empty() {
         return Ok(Vec::new());
     }
-    let placeholders = std::iter::repeat("?").take(ids.len()).collect::<Vec<_>>().join(",");
+    let placeholders = std::iter::repeat("?")
+        .take(ids.len())
+        .collect::<Vec<_>>()
+        .join(",");
     let sql = format!("SELECT {RUN_COLS} FROM runs WHERE id IN ({placeholders})");
     let values: Vec<JsValue> = ids.iter().map(|id| s(id)).collect();
-    db.prepare(&sql).bind(&values)?.all().await?.results::<RunRow>()
+    db.prepare(&sql)
+        .bind(&values)?
+        .all()
+        .await?
+        .results::<RunRow>()
 }
 
 /// Recompute denormalized counts from participations and refresh `updated_at`.
@@ -658,10 +683,12 @@ pub async fn mark_notifications_read(
 ) -> Result<()> {
     match ids {
         None => {
-            db.prepare("UPDATE notifications SET read_at = ? WHERE recipient_id = ? AND read_at IS NULL")
-                .bind(&[i(now), s(person_id)])?
-                .run()
-                .await?;
+            db.prepare(
+                "UPDATE notifications SET read_at = ? WHERE recipient_id = ? AND read_at IS NULL",
+            )
+            .bind(&[i(now), s(person_id)])?
+            .run()
+            .await?;
         }
         Some(ids) => {
             let mut stmts = Vec::new();
@@ -716,10 +743,8 @@ pub async fn prune_notifications(
     hard_ttl_ms: i64,
 ) -> Result<()> {
     db.batch(vec![
-        db.prepare(
-            "DELETE FROM notifications WHERE read_at IS NOT NULL AND created_at < ?",
-        )
-        .bind(&[i(now - read_ttl_ms)])?,
+        db.prepare("DELETE FROM notifications WHERE read_at IS NOT NULL AND created_at < ?")
+            .bind(&[i(now - read_ttl_ms)])?,
         db.prepare("DELETE FROM notifications WHERE created_at < ?")
             .bind(&[i(now - hard_ttl_ms)])?,
     ])

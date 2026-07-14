@@ -57,7 +57,12 @@ pub struct GroupState {
 /// reject nonsensical activity configs at creation time (e.g. tiling groups
 /// of 4 capped at a max of 3 people can never form a single group), and
 /// mirrored by the client-side group-size preview.
-pub fn grouping_is_feasible(mode: GroupingMode, min_people: u32, max_people: Option<u32>, group_multiple: u32) -> bool {
+pub fn grouping_is_feasible(
+    mode: GroupingMode,
+    min_people: u32,
+    max_people: Option<u32>,
+    group_multiple: u32,
+) -> bool {
     let min = min_people.max(1);
     let step = group_multiple.max(1);
     match mode {

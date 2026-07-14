@@ -15,7 +15,7 @@ interface Props {
 
 /** Grid tile: collapsed is a solid-color square (title + icon, sized
  * 1x1/2x2/3x3 units by popularity). Click expands to a fixed 4x3 stats
- * panel with Launch. Only one tile can be expanded at a time (controlled by
+ * panel with Join. Only one tile can be expanded at a time (controlled by
  * the parent). */
 export function ActivityTile({ activity: a, now, size, expanded, onToggle }: Props) {
   const accent = useMemo(() => tileAccentColor(a.title), [a.title])
@@ -33,19 +33,25 @@ export function ActivityTile({ activity: a, now, size, expanded, onToggle }: Pro
       className={`tile size-${size} ${expanded ? 'expanded' : ''}`}
       style={{ gridColumn: `span ${colSpan}`, gridRow: `span ${rowSpan}` }}
     >
-      <button
-        type="button"
-        className="tile-face"
-        onClick={onToggle}
-        aria-expanded={expanded}
-        style={{ background: accent }}
-      >
-        <span className="tile-title">{a.title}</span>
-        <span className="tile-icon-box">
-          <EmojiGlyph emoji={a.emoji} className="tile-emoji" />
-        </span>
-      </button>
-      {expanded && <div className="tile-expanded"><ActivityInfo activity={a} now={now} /></div>}
+      {!expanded && (
+        <button
+          type="button"
+          className="tile-face"
+          onClick={onToggle}
+          aria-expanded={expanded}
+          style={{ background: accent }}
+        >
+          <span className="tile-title">{a.title}</span>
+          <span className="tile-icon-box">
+            <EmojiGlyph emoji={a.emoji} className="tile-emoji" />
+          </span>
+        </button>
+      )}
+      {expanded && (
+        <div className="tile-expanded">
+          <ActivityInfo activity={a} now={now} />
+        </div>
+      )}
     </motion.article>
   )
 }

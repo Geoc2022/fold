@@ -83,11 +83,7 @@ fn vapid_jwt(cfg: &VapidConfig, endpoint: &str) -> Result<String> {
         "exp": exp,
         "sub": cfg.subject,
     });
-    let signing_input = format!(
-        "{}.{}",
-        b64_json(&header)?,
-        b64_json(&payload)?,
-    );
+    let signing_input = format!("{}.{}", b64_json(&header)?, b64_json(&payload)?,);
 
     let key_bytes = URL_SAFE_NO_PAD
         .decode(cfg.private_key.as_bytes())

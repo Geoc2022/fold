@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
 import { api, ensureSession } from '../api'
 import { ActivityInfo } from '../components/ActivityInfo'
@@ -32,6 +32,7 @@ export function ActivityRoom() {
   const [namePrompt, setNamePrompt] = useState(false)
   const [handleInput, setHandleInput] = useState('')
   const [visual, setVisual] = useState<VisualConfig>(() => readJson(VISUAL_KEY, DEFAULT_VISUAL_CONFIG))
+  const alertCooldownRef = useRef(0)
   const { data, error, loading, notFound, refresh } = useRoom(code, me !== null && code !== null)
 
   useEffect(() => {
@@ -90,8 +91,20 @@ export function ActivityRoom() {
   const person = me
   const activity = data.activity
   function showAlert(message: string) {
+    const now = Date.now()
+    if (alert === message && now - alertCooldownRef.current < 1000) return
+    alertCooldownRef.current = now
     setAlert(message)
     window.setTimeout(() => setAlert((current) => (current === message ? null : current)), 3600)
+  }
+
+  async function copyRoomLink() {
+    try {
+      await navigator.clipboard.writeText(`${window.location.origin}/${activity.code}`)
+      showAlert('Link copied')
+    } catch (err) {
+      showAlert(err instanceof Error ? err.message : String(err))
+    }
   }
 
   async function interest() {
@@ -129,6 +142,12 @@ export function ActivityRoom() {
     refresh()
   }
 
+  async function withdraw() {
+    if (!activity.current_run) return
+    await api.withdraw(activity.current_run.id)
+    refresh()
+  }
+
   return (
     <main className={`room-page room-${theme}`}>
       <RoomCanvas
@@ -138,9 +157,11 @@ export function ActivityRoom() {
         visual={visual}
         onInterested={interest}
         onCommit={commit}
+        onWithdraw={withdraw}
         onAlert={showAlert}
+        alreadyCommittedElsewhere={data.already_committed_elsewhere}
       />
-      <div className="room-code">/{activity.code}</div>
+      <button type="button" className="room-code" onClick={copyRoomLink}>/{activity.code}</button>
       {error && <div className="room-error">{error}</div>}
       {alert && <div className="room-alert">{alert}</div>}
       {showVisual && <VisualPanel visual={visual} onChange={setVisual} />}
@@ -156,9 +177,11 @@ export function ActivityRoom() {
         <div className="modal-backdrop" onClick={() => setShowInfo(false)}>
           <div className="modal-card" onClick={(e) => e.stopPropagation()}>
             <section className="card room-info-card">
-              <h2>{activity.title}</h2>
-              <ActivityInfo activity={activity} now={data.server_time} showLaunch={false} />
-              <button className="ghost" onClick={() => setShowInfo(false)}>Close</button>
+              <ActivityInfo
+                activity={activity}
+                now={data.server_time}
+                cta={<button className="activity-launch ghost" onClick={() => setShowInfo(false)}>Cancel</button>}
+              />
             </section>
           </div>
         </div>

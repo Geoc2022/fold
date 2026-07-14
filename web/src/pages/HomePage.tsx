@@ -156,7 +156,7 @@ export function HomePage() {
   // oversized text field.
   useLayoutEffect(() => {
     if (editingHandle && handleMeasureRef.current) {
-      setHandleWidth(Math.max(24, handleMeasureRef.current.scrollWidth + 4))
+      setHandleWidth(Math.max(16, handleMeasureRef.current.scrollWidth + 8))
     }
   }, [handleInput, editingHandle])
 
@@ -241,7 +241,13 @@ export function HomePage() {
         {loading && activities.length === 0 && <p className="pending">Loading activities...</p>}
 
         {view === 'grid' ? (
-          <div className="tile-grid">
+          // key="grid"/"list" below forces a full remount on view switch
+          // (instead of React reusing the same div/CreateTile DOM node with
+          // updated props) so framer-motion's `layout` FLIP has no previous
+          // position to glide from -- switching views is an instant swap,
+          // not an animated morph. Reordering/filtering within a view is
+          // unaffected since the key stays put there.
+          <div className="tile-grid" key="grid">
             <CreateTile view={view} onClick={() => setCreating(true)} />
             <AnimatePresence mode="popLayout">
               {gridOrder.map((a) => (
@@ -257,7 +263,7 @@ export function HomePage() {
             </AnimatePresence>
           </div>
         ) : (
-          <div className="list-view">
+          <div className="list-view" key="list">
             <CreateTile view={view} onClick={() => setCreating(true)} />
             <AnimatePresence mode="popLayout">
               {listOrder.map((a) => (

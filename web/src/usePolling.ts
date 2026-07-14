@@ -26,7 +26,6 @@ export function usePolling<T>({ enabled, load, signature, onNotFound, onSuccess 
   const sigRef = useRef<string | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const abortRef = useRef<AbortController | null>(null)
-  const inFlightRef = useRef(false)
 
   const clearTimer = () => {
     if (timerRef.current !== null) clearTimeout(timerRef.current)
@@ -41,8 +40,11 @@ export function usePolling<T>({ enabled, load, signature, onNotFound, onSuccess 
   }, [enabled])
 
   const poll = useCallback(async () => {
-    if (!enabled || inFlightRef.current || document.hidden) return
-    inFlightRef.current = true
+    if (!enabled || document.hidden) return
+    // Abort any in-flight request rather than skipping this call -- a
+    // refresh() right after a mutation (e.g. commit) must win over a
+    // stale request that was already pending, or its late response would
+    // overwrite the just-applied optimistic state with old data.
     abortRef.current?.abort()
     const ctrl = new AbortController()
     abortRef.current = ctrl
@@ -67,7 +69,6 @@ export function usePolling<T>({ enabled, load, signature, onNotFound, onSuccess 
         setState((s) => ({ ...s, loading: false, error: e instanceof Error ? e.message : String(e) }))
       }
     } finally {
-      inFlightRef.current = false
       schedule()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

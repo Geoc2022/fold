@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef } from 'react'
-import { hashUnit } from '../hash'
 import {
   DEFAULT_ETA_MIN,
   HOLD_MS,
@@ -20,7 +19,9 @@ interface Props {
   visual: VisualConfig
   onInterested: () => Promise<void>
   onCommit: (etaMinutes: number) => Promise<void>
+  onWithdraw: () => Promise<void>
   onAlert: (message: string) => void
+  alreadyCommittedElsewhere: boolean
 }
 
 interface SimNode {
@@ -33,8 +34,6 @@ interface SimNode {
   vx: number
   vy: number
   angle: number
-  targetX?: number
-  targetY?: number
 }
 
 interface PointerState {
@@ -44,6 +43,11 @@ interface PointerState {
   startY: number
   clientX: number
   clientY: number
+  /** Latest world position for the held node, updated on every move. Read
+   * every animation frame (not just on move events) so tug-of-war timing
+   * keeps counting even while the pointer holds perfectly still. */
+  worldX: number
+  worldY: number
   downAt: number
   dragging: boolean
 }
@@ -51,11 +55,74 @@ interface PointerState {
 interface Camera { x: number; y: number; scale: number }
 
 const WORLD_R = 280
-const VOGEL_C = 28
-const PHI_RECIP_SQ = 1 / (((1 + Math.sqrt(5)) / 2) ** 2)
-const VOGEL_N_MIN = Math.ceil((WORLD_R / VOGEL_C) ** 2)
+const ABS_MAX_ETA_MIN = 240
+const ABS_MAX_DURATION_MIN = 240
 
-export function RoomCanvas({ activity, participants, me, visual, onInterested, onCommit, onAlert }: Props) {
+// Each state boundary is a "tug of war" zone that works in both directions:
+// pulling a node past the boundary away from center clings toward the edge
+// (approaching, but never reaching, the outward asymptote) instead of
+// tracking the pointer directly. Pulling the node back past the boundary
+// toward center works the same way in reverse, clinging from the other
+// side. Winning a tug is based on accumulated *work* (force x time), not
+// time alone: "force" is how far past the boundary you're actually
+// pulling (the raw, unresisted pointer distance beyond it, not the
+// resisted on-screen position) -- pull harder and it wins faster; barely
+// cross the line and it can take a very long time, since force is nearly
+// zero. TUG_WIDTH_HOLD_MS is the time it takes to win while pulling at
+// exactly one TUG_WIDTH past the boundary, used only to calibrate the work
+// target to a familiar timescale.
+const TUG_WIDTH = 70
+const TUG_WIDTH_HOLD_MS = 850
+const WORK_NEEDED = TUG_WIDTH * TUG_WIDTH_HOLD_MS
+const COMMIT_MAX_R = WORLD_R
+const COMMIT_OUT_TUG_R = COMMIT_MAX_R + TUG_WIDTH
+const COMMIT_IN_TUG_R = Math.max(0, COMMIT_MAX_R - TUG_WIDTH)
+const INTERESTED_MAX_R = COMMIT_OUT_TUG_R + 160
+const INTERESTED_OUT_TUG_R = INTERESTED_MAX_R + TUG_WIDTH
+const INTERESTED_IN_TUG_R = Math.max(0, INTERESTED_MAX_R - TUG_WIDTH)
+
+/** Diminishing-returns rubber-band: as `rawR` moves past `maxR` (away from
+ * center), the returned radius approaches `tugR` but never reaches it --
+ * the further you pull, the harder it resists. At or under `maxR`, tracks
+ * `rawR` exactly. */
+function tugPositionOutward(rawR: number, maxR: number, tugR: number) {
+  if (rawR <= maxR) return rawR
+  const width = tugR - maxR
+  const extra = rawR - maxR
+  return maxR + width * (1 - Math.exp(-extra / width))
+}
+
+/** Mirror of `tugPositionOutward` for pulling a node back past a boundary
+ * toward center: at or over `minR`, tracks `rawR` exactly; under it, clings
+ * toward (but never reaches) `tugR`. */
+function tugPositionInward(rawR: number, minR: number, tugR: number) {
+  if (rawR >= minR) return rawR
+  const width = minR - tugR
+  const extra = minR - rawR
+  return minR - width * (1 - Math.exp(-extra / width))
+}
+
+// Same mass/damping a committed node uses to spring toward its target in
+// step() -- reused here so a tug settles with that identical easing,
+// including the moment it's won and the target radius jumps zones.
+const SPRING_MASS = 0.04
+const SPRING_DAMPING = 0.82
+function springToward(n: SimNode, targetX: number, targetY: number) {
+  n.vx += (targetX - n.x) * SPRING_MASS
+  n.vy += (targetY - n.y) * SPRING_MASS
+  n.vx *= SPRING_DAMPING
+  n.vy *= SPRING_DAMPING
+  n.x += n.vx
+  n.y += n.vy
+}
+
+/** After winning a tug, keep spring-easing (instead of snapping straight to
+ * 1:1 tracking) for this long, even if the new state's raw pointer distance
+ * already reads as "in bounds" -- otherwise winning right at a zone
+ * boundary could still jump. */
+const WIN_EASE_MS = 300
+
+export function RoomCanvas({ activity, participants, me, visual, onInterested, onCommit, onWithdraw, onAlert, alreadyCommittedElsewhere }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const nodesRef = useRef<SimNode[]>([])
   const pointerRef = useRef<PointerState | null>(null)
@@ -64,6 +131,20 @@ export function RoomCanvas({ activity, participants, me, visual, onInterested, o
   const visualRef = useRef(visual)
   const activityRef = useRef(activity)
   const busyRef = useRef(false)
+  /** Accumulated tug-of-war work (force x time, in world-units x ms) --
+   * reset to 0 whenever not currently tugging. */
+  const tugWorkRef = useRef(0)
+  /** performance.now() of the last frame that contributed to tugWorkRef --
+   * null right when a tug starts, so the first frame contributes no time
+   * (there's nothing to measure a duration against yet). */
+  const tugLastFrameRef = useRef<number | null>(null)
+  /** performance.now() deadline: while now is before this, keep spring-
+   * easing toward the target even if it reads as back in bounds -- sets
+   * right after winning a tug so the hand-off never snaps. */
+  const winEaseUntilRef = useRef(0)
+  const commitLockRef = useRef(alreadyCommittedElsewhere)
+  const guardAlertRef = useRef(0)
+  const expireNoticeRef = useRef(0)
   visualRef.current = visual
   activityRef.current = activity
 
@@ -79,8 +160,12 @@ export function RoomCanvas({ activity, participants, me, visual, onInterested, o
   }, [participants, me.id])
 
   useEffect(() => {
+    commitLockRef.current = alreadyCommittedElsewhere
+  }, [alreadyCommittedElsewhere])
+
+  useEffect(() => {
     const existing = new Map(nodesRef.current.map((n) => [n.id, n]))
-    nodesRef.current = source.map((s, i) => {
+    nodesRef.current = source.map((s) => {
       const old = existing.get(s.id)
       if (old) {
         const pointerOwnsNode = pointerRef.current?.node === old
@@ -91,18 +176,22 @@ export function RoomCanvas({ activity, participants, me, visual, onInterested, o
         old.isMe = s.isMe
         return old
       }
-      const angle = hashUnit(s.id) * Math.PI * 2
-      const n = VOGEL_N_MIN + i
+      // Initial resting spot: just outside the world ring, facing up --
+      // matches Biology's default angle for a node with no click position
+      // to derive one from. No spiral spacing needed since there's only
+      // ever one real node here.
+      const angle = -Math.PI / 2
+      const restR = WORLD_R + visual.nodeRadius + 40
       return {
         ...s,
-        x: Math.cos(n * 2 * Math.PI * PHI_RECIP_SQ) * VOGEL_C * Math.sqrt(n),
-        y: Math.sin(n * 2 * Math.PI * PHI_RECIP_SQ) * VOGEL_C * Math.sqrt(n),
+        x: Math.cos(angle) * restR,
+        y: Math.sin(angle) * restR,
         vx: 0,
         vy: 0,
         angle,
       }
     })
-  }, [source])
+  }, [source, visual.nodeRadius])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -136,6 +225,14 @@ export function RoomCanvas({ activity, participants, me, visual, onInterested, o
       return null
     }
 
+    // Grab hand everywhere else on the canvas, crosshair when hovering your
+    // own node, a closed fist while actively panning, and hidden entirely
+    // while actually holding/dragging the node (nothing useful to point at
+    // once you're moving it -- your view is on the node itself).
+    const setCursor = (cursor: 'grab' | 'grabbing' | 'crosshair' | 'none') => {
+      canvas.style.cursor = cursor
+    }
+
     const activePointers = new Map<number, PointerEvent>()
 
     const call = async (fn: () => Promise<void>) => {
@@ -150,6 +247,147 @@ export function RoomCanvas({ activity, participants, me, visual, onInterested, o
       }
     }
 
+    const resetTug = () => {
+      tugWorkRef.current = 0
+      tugLastFrameRef.current = null
+    }
+
+    /** Adds this frame's work (force x elapsed time) to the running total
+     * and reports whether the tug is won. `force` is how far past the
+     * boundary the raw pointer currently is (unresisted, world units). */
+    const advanceTugWork = (force: number) => {
+      const nowPerf = performance.now()
+      const last = tugLastFrameRef.current
+      tugLastFrameRef.current = nowPerf
+      if (last == null) return false // first frame of this tug: no elapsed time to measure yet
+      tugWorkRef.current += force * (nowPerf - last)
+      return tugWorkRef.current >= WORK_NEEDED
+    }
+
+    const guardCommit = () => {
+      if (!commitLockRef.current) return false
+      if (performance.now() - guardAlertRef.current > 900) {
+        guardAlertRef.current = performance.now()
+        onAlert('Already committed elsewhere — withdraw there first.')
+      }
+      resetTug()
+      winEaseUntilRef.current = performance.now() + WIN_EASE_MS
+      return true
+    }
+
+    // Runs every animation frame (not just on pointer-move events) so a tug
+    // of war keeps accumulating work even while the pointer holds
+    // perfectly still at the stretched position -- matching "hold it out
+    // there to win", not "keep wiggling it to win". Pulling farther still
+    // wins faster, since force scales with distance past the boundary.
+    const processHeldNode = (now: number) => {
+      const ps = pointerRef.current
+      if (!ps || !ps.node) return
+      const activity = activityRef.current
+      const maxEta = activityMaxEta(activity)
+      const rawR = Math.hypot(ps.worldX, ps.worldY)
+      const angle = rawR > 1 ? Math.atan2(ps.worldY, ps.worldX) : ps.node.angle
+      ps.node.angle = angle
+      const easing = performance.now() < winEaseUntilRef.current
+
+      if (ps.node.state === 'committed' || ps.node.state === 'arrived') {
+        // Committed/arrived has no inward tug -- it's already the innermost
+        // tier, and closer to center just means a sooner ETA.
+        if (rawR <= COMMIT_MAX_R && !easing) {
+          ps.node.x = ps.worldX
+          ps.node.y = ps.worldY
+          ps.node.vx = 0
+          ps.node.vy = 0
+          resetTug()
+          const newArrivalAt = now + etaFromDistance(ps.worldX, ps.worldY, maxEta) * 60_000
+          ps.node.arrivalAt = newArrivalAt
+          if (ps.node.state === 'arrived' && newArrivalAt > now) ps.node.state = 'committed'
+          return
+        }
+        // Tug of war: spring toward the resisted edge (same easing as a
+        // committed node's normal homing animation) instead of snapping --
+        // this also covers the moment the tug is won, when the target
+        // jumps zones. Pinned at the max ETA while it clings to the edge.
+        const targetR = tugPositionOutward(rawR, COMMIT_MAX_R, COMMIT_OUT_TUG_R)
+        springToward(ps.node, Math.cos(angle) * targetR, Math.sin(angle) * targetR)
+        if (rawR <= COMMIT_MAX_R) return // easing back in from a just-won transition
+        ps.node.state = 'committed'
+        ps.node.arrivalAt = now + maxEta * 60_000
+        if (advanceTugWork(rawR - COMMIT_MAX_R)) {
+          ps.node.state = 'interested'
+          resetTug()
+          winEaseUntilRef.current = performance.now() + WIN_EASE_MS
+          void call(onInterested)
+        }
+        return
+      }
+
+      if (ps.node.state === 'interested') {
+        const inBounds = rawR >= COMMIT_MAX_R && rawR <= INTERESTED_MAX_R
+        if (inBounds && !easing) {
+          ps.node.x = ps.worldX
+          ps.node.y = ps.worldY
+          ps.node.vx = 0
+          ps.node.vy = 0
+          resetTug()
+          return
+        }
+        if (rawR < COMMIT_MAX_R) {
+          // Pulled in toward center past the commit boundary: tug of war
+          // in reverse -- winning promotes to committed.
+          const targetR = tugPositionInward(rawR, COMMIT_MAX_R, COMMIT_IN_TUG_R)
+          springToward(ps.node, Math.cos(angle) * targetR, Math.sin(angle) * targetR)
+          if (rawR >= COMMIT_MAX_R) return
+           if (advanceTugWork(COMMIT_MAX_R - rawR)) {
+             if (commitLockRef.current) {
+               guardCommit()
+               return
+             }
+             const eta = etaFromDistance(ps.worldX, ps.worldY, maxEta)
+             ps.node.state = 'committed'
+             ps.node.arrivalAt = now + eta * 60_000
+             resetTug()
+             winEaseUntilRef.current = performance.now() + WIN_EASE_MS
+             void call(() => onCommit(eta))
+           }
+          return
+        }
+        // Pulled out past the lurker boundary (or easing back in from a
+        // just-won transition): normal outward tug -- winning demotes.
+        const targetR = tugPositionOutward(rawR, INTERESTED_MAX_R, INTERESTED_OUT_TUG_R)
+        springToward(ps.node, Math.cos(angle) * targetR, Math.sin(angle) * targetR)
+        if (rawR <= INTERESTED_MAX_R) return
+        if (advanceTugWork(rawR - INTERESTED_MAX_R)) {
+          ps.node.state = 'lurker'
+          resetTug()
+          winEaseUntilRef.current = performance.now() + WIN_EASE_MS
+          void call(onWithdraw)
+        }
+        return
+      }
+
+      // Lurker: free 1:1 tracking above the interested boundary, no further
+      // demotion below this state. Pulled in past the boundary, the same
+      // reverse tug of war applies -- winning promotes to interested.
+      if (rawR >= INTERESTED_MAX_R && !easing) {
+        ps.node.x = ps.worldX
+        ps.node.y = ps.worldY
+        ps.node.vx = 0
+        ps.node.vy = 0
+        resetTug()
+        return
+      }
+      const targetR = tugPositionInward(rawR, INTERESTED_MAX_R, INTERESTED_IN_TUG_R)
+      springToward(ps.node, Math.cos(angle) * targetR, Math.sin(angle) * targetR)
+      if (rawR >= INTERESTED_MAX_R) return
+      if (advanceTugWork(INTERESTED_MAX_R - rawR)) {
+        ps.node.state = 'interested'
+        resetTug()
+        winEaseUntilRef.current = performance.now() + WIN_EASE_MS
+        void call(onInterested)
+      }
+    }
+
     const onPointerDown = (e: PointerEvent) => {
       activePointers.set(e.pointerId, e)
       canvas.setPointerCapture(e.pointerId)
@@ -160,16 +398,21 @@ export function RoomCanvas({ activity, participants, me, visual, onInterested, o
         return
       }
       const p = toWorld(e.clientX, e.clientY)
+      const node = hitMe(p.x, p.y)
+      resetTug()
       pointerRef.current = {
         id: e.pointerId,
-        node: hitMe(p.x, p.y),
+        node,
         startX: p.x,
         startY: p.y,
         clientX: e.clientX,
         clientY: e.clientY,
+        worldX: p.x,
+        worldY: p.y,
         downAt: performance.now(),
         dragging: false,
       }
+      setCursor(node ? 'none' : 'grabbing')
     }
 
     const onPointerMove = (e: PointerEvent) => {
@@ -183,7 +426,15 @@ export function RoomCanvas({ activity, participants, me, visual, onInterested, o
       }
 
       const ps = pointerRef.current
-      if (!ps || ps.id !== e.pointerId) return
+      if (!ps || ps.id !== e.pointerId) {
+        // Hover only (no active gesture for this pointer): keep the cursor
+        // in sync with whether we're over the node right now.
+        if (e.pointerType === 'mouse') {
+          const p = toWorld(e.clientX, e.clientY)
+          setCursor(hitMe(p.x, p.y) ? 'crosshair' : 'grab')
+        }
+        return
+      }
       if (!ps.node) {
         const dx = e.clientX - ps.clientX
         const dy = e.clientY - ps.clientY
@@ -192,20 +443,18 @@ export function RoomCanvas({ activity, participants, me, visual, onInterested, o
         cameraRef.current.y += dy
         ps.clientX = e.clientX
         ps.clientY = e.clientY
+        setCursor('grabbing')
         return
       }
 
+      setCursor('none')
       const p = toWorld(e.clientX, e.clientY)
       if (Math.hypot(p.x - ps.startX, p.y - ps.startY) > 6) ps.dragging = true
-      ps.node.x = p.x
-      ps.node.y = p.y
-      ps.node.vx = 0
-      ps.node.vy = 0
-      if (Math.hypot(p.x, p.y) > 1) ps.node.angle = Math.atan2(p.y, p.x)
-      if (ps.node.state === 'committed' || ps.node.state === 'arrived') {
-        ps.node.state = 'committed'
-        ps.node.arrivalAt = Date.now() + etaFromDistance(p.x, p.y) * 60_000
-      }
+      // Just record where the pointer is in world space -- processHeldNode
+      // (run every animation frame) does the actual positioning/state work,
+      // so tugging keeps progressing even if the pointer stops moving.
+      ps.worldX = p.x
+      ps.worldY = p.y
     }
 
     const onPointerUp = (e: PointerEvent) => {
@@ -214,12 +463,19 @@ export function RoomCanvas({ activity, participants, me, visual, onInterested, o
       const ps = pointerRef.current
       if (!ps || ps.id !== e.pointerId) return
       pointerRef.current = null
+      resetTug()
+      if (e.pointerType === 'mouse') {
+        const p = toWorld(e.clientX, e.clientY)
+        setCursor(hitMe(p.x, p.y) ? 'crosshair' : 'grab')
+      }
       if (!ps.node) return
 
       const held = performance.now() - ps.downAt
       if (ps.dragging) {
+        // If a tug of war demoted the node mid-drag, that already made its
+        // own API call -- only committed/arrived still needs its ETA saved.
         if (ps.node.state !== 'committed' && ps.node.state !== 'arrived') return
-        const eta = etaFromDistance(ps.node.x, ps.node.y)
+        const eta = etaFromDistance(ps.node.x, ps.node.y, activityMaxEta(activityRef.current))
         void call(() => onCommit(eta))
         return
       }
@@ -227,7 +483,12 @@ export function RoomCanvas({ activity, participants, me, visual, onInterested, o
         ps.node.state = 'interested'
         void call(onInterested)
       } else if (ps.node.state === 'interested' && held > 200) {
-        const eta = etaFromHold(held)
+        if (commitLockRef.current) {
+          guardCommit()
+          ps.node.state = 'interested'
+          return
+        }
+        const eta = scaleHoldEta(etaFromHold(held), activityMaxEta(activityRef.current))
         ps.node.state = 'committed'
         ps.node.arrivalAt = Date.now() + eta * 60_000
         void call(() => onCommit(eta))
@@ -239,24 +500,39 @@ export function RoomCanvas({ activity, participants, me, visual, onInterested, o
       cameraRef.current.scale = Math.min(4, Math.max(0.2, cameraRef.current.scale * (e.deltaY < 0 ? 1.08 : 0.92)))
     }
 
+    const onPointerLeave = () => {
+      if (!pointerRef.current) setCursor('grab')
+    }
+
     canvas.addEventListener('pointerdown', onPointerDown)
     canvas.addEventListener('pointermove', onPointerMove)
     canvas.addEventListener('pointerup', onPointerUp)
     canvas.addEventListener('pointercancel', onPointerUp)
+    canvas.addEventListener('pointerleave', onPointerLeave)
     canvas.addEventListener('wheel', onWheel, { passive: false })
 
     let raf = 0
-    let last = performance.now()
     const frame = () => {
       const now = Date.now()
-      const perf = performance.now()
-      const dt = Math.min(0.2, (perf - last) / 1000)
-      last = perf
       for (const n of nodesRef.current) {
         if (n.state === 'committed' && n.arrivalAt != null && n.arrivalAt <= now) n.state = 'arrived'
       }
-      step(nodesRef.current, pointerRef.current, activityRef.current, visualRef.current, now, dt)
-      draw(ctx, canvas, nodesRef.current, pointerRef.current, cameraRef.current, visualRef.current, now)
+      processHeldNode(now)
+      const durationMs = activityDuration(activityRef.current) * 60_000
+      for (const n of nodesRef.current) {
+        if (pointerRef.current?.node === n) continue
+        if (n.state === 'arrived' && n.arrivalAt != null && now - n.arrivalAt >= durationMs) {
+          n.state = 'lurker'
+          n.arrivalAt = null
+          if (performance.now() - expireNoticeRef.current > 1200) {
+            expireNoticeRef.current = performance.now()
+            onAlert('Your spot expired — commit again to rejoin')
+          }
+          void call(onWithdraw)
+        }
+      }
+      step(nodesRef.current, pointerRef.current, activityRef.current, visualRef.current, now)
+      draw(ctx, canvas, nodesRef.current, pointerRef.current, cameraRef.current, visualRef.current, activityRef.current, now)
       raf = requestAnimationFrame(frame)
     }
     raf = requestAnimationFrame(frame)
@@ -267,15 +543,16 @@ export function RoomCanvas({ activity, participants, me, visual, onInterested, o
       canvas.removeEventListener('pointermove', onPointerMove)
       canvas.removeEventListener('pointerup', onPointerUp)
       canvas.removeEventListener('pointercancel', onPointerUp)
+      canvas.removeEventListener('pointerleave', onPointerLeave)
       canvas.removeEventListener('wheel', onWheel)
       cancelAnimationFrame(raf)
     }
-  }, [onAlert, onCommit, onInterested])
+  }, [onAlert, onCommit, onInterested, onWithdraw])
 
   return <canvas ref={canvasRef} className="room-canvas" />
 }
 
-function step(nodes: SimNode[], pointer: PointerState | null, activity: ActivityView, vis: VisualConfig, now: number, dt: number) {
+function step(nodes: SimNode[], pointer: PointerState | null, activity: ActivityView, vis: VisualConfig, now: number) {
   const targets = computeTargets(nodes, activity, vis, now)
   const arrived = nodes.filter((n) => n.state === 'arrived')
   for (const n of nodes) {
@@ -301,10 +578,6 @@ function step(nodes: SimNode[], pointer: PointerState | null, activity: Activity
         n.vy += (dy / dist) * force
       }
     }
-    if (n.state === 'lurker') {
-      n.vx += Math.cos(n.angle) * 2 * dt
-      n.vy += Math.sin(n.angle) * 2 * dt
-    }
     n.vx *= 0.88
     n.vy *= 0.88
     n.x += n.vx
@@ -319,6 +592,9 @@ function computeTargets(nodes: SimNode[], activity: ActivityView, vis: VisualCon
   const inFlight = committed.filter((n) => n.state === 'committed')
   const groupSizes = activity.current_run?.group.group_sizes ?? []
   const orbitR = vis.nodeRadius * vis.clusterTightness
+  const maxEta = activityMaxEta(activity)
+  const etaSpanMs = Math.max(1, maxEta * 60_000)
+  const defaultEtaMs = Math.min(maxEta, DEFAULT_ETA_MIN) * 60_000
 
   if (activity.grouping_mode === 'single') {
     placeGroup(targets, arrived, { x: 0, y: 0 }, orbitR)
@@ -329,8 +605,8 @@ function computeTargets(nodes: SimNode[], activity: ActivityView, vis: VisualCon
   }
 
   for (const n of inFlight) {
-    const remaining = n.arrivalAt == null ? DEFAULT_ETA_MIN * 60_000 : Math.max(0, n.arrivalAt - now)
-    const r = (remaining / (MAX_ETA_MIN * 60_000)) * WORLD_R
+    const remaining = n.arrivalAt == null ? defaultEtaMs : Math.max(0, Math.min(etaSpanMs, n.arrivalAt - now))
+    const r = (remaining / etaSpanMs) * WORLD_R
     targets.set(n.id, { x: Math.cos(n.angle) * r, y: Math.sin(n.angle) * r })
   }
   return targets
@@ -371,6 +647,7 @@ function draw(
   pointer: PointerState | null,
   camera: Camera,
   vis: VisualConfig,
+  activity: ActivityView,
   now: number,
 ) {
   const w = canvas.clientWidth
@@ -379,16 +656,22 @@ function draw(
   ctx.fillStyle = getCss('--bg')
   ctx.fillRect(0, 0, w, h)
 
+  const isDragging = !!pointer?.dragging
   ctx.save()
   ctx.translate(w / 2 + camera.x, h / 2 + camera.y)
   ctx.scale(camera.scale, camera.scale)
-  ctx.strokeStyle = getCss('--bg') === '#000000' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)'
+  // Rings are drawn in --text at a low alpha (not a hardcoded rgba string)
+  // so they read correctly against either theme's background, and fade in
+  // while manipulating a node -- same as Biology's isDragging-based alpha.
+  ctx.globalAlpha = isDragging ? 0.08 : 0.02
+  ctx.strokeStyle = getCss('--text')
   ctx.lineWidth = 1 / camera.scale
   for (let r = 80; r <= WORLD_R; r += 80) {
     ctx.beginPath()
     ctx.arc(0, 0, r, 0, Math.PI * 2)
     ctx.stroke()
   }
+  ctx.globalAlpha = 1
   ctx.restore()
 
   const dpr = canvas.width / Math.max(1, w)
@@ -408,9 +691,10 @@ function draw(
     lctx.fill()
   }
   lctx.globalCompositeOperation = 'destination-out'
+  lctx.strokeStyle = '#000'
+  lctx.fillStyle = '#000'
   if (vis.outlineWidth > 0) {
     lctx.lineWidth = vis.outlineWidth
-    lctx.strokeStyle = '#000'
     for (const n of nodes) {
       lctx.beginPath()
       lctx.arc(n.x, n.y, vis.nodeRadius, 0, Math.PI * 2)
@@ -418,20 +702,23 @@ function draw(
     }
   }
 
-  const labelNode = pointer?.node && !pointer.dragging && pointer.node.state === 'interested'
-    ? pointer.node
-    : pointer?.node && pointer.dragging && (pointer.node.state === 'committed' || pointer.node.state === 'arrived')
-      ? pointer.node
-      : null
+  const labelNode: SimNode | null = (() => {
+    if (!pointer) return null
+    if (pointer.dragging && (pointer.node?.state === 'committed' || pointer.node?.state === 'arrived')) return pointer.node
+    if (!pointer.dragging && pointer.node?.state === 'interested' && performance.now() - pointer.downAt > 50) return pointer.node
+    return null
+  })()
   if (labelNode) {
-    lctx.globalCompositeOperation = 'source-over'
+    // Left in 'destination-out' (not reset to source-over): the label is
+    // punched through the node's fill as a cutout, exactly like Biology --
+    // not drawn as solid text on top.
     const fs = Math.max(9, Math.round(vis.nodeRadius * 0.52))
     lctx.font = `700 ${fs}px Manrope, sans-serif`
     lctx.textAlign = 'center'
     lctx.textBaseline = 'middle'
-    lctx.fillStyle = '#fff'
+    const maxEta = activityMaxEta(activity)
     const eta = labelNode.state === 'interested'
-      ? etaFromHold(Math.min(HOLD_MS, performance.now() - pointer!.downAt))
+      ? scaleHoldEta(etaFromHold(Math.min(HOLD_MS, performance.now() - pointer!.downAt)), maxEta)
       : etaRemainingMinutes(labelNode.arrivalAt, now)
     lctx.fillText(`${eta}m`, labelNode.x, labelNode.y)
   }
@@ -442,9 +729,30 @@ function draw(
   ctx.restore()
 }
 
-function etaFromDistance(x: number, y: number) {
+function etaFromDistance(x: number, y: number, maxEta: number) {
+  const span = Math.max(MIN_ETA_MIN, maxEta)
+  if (span === 0) return 0
   const t = Math.min(1, Math.max(0, Math.hypot(x, y) / WORLD_R))
-  return Math.max(MIN_ETA_MIN, Math.min(MAX_ETA_MIN, Math.round(t * MAX_ETA_MIN)))
+  return Math.max(MIN_ETA_MIN, Math.min(span, Math.round(t * span)))
+}
+
+function scaleHoldEta(raw: number, maxEta: number) {
+  if (maxEta <= 0) return 0
+  return Math.round((raw / MAX_ETA_MIN) * maxEta)
+}
+
+function activityMaxEta(activity: ActivityView) {
+  return clampNumber(activity.max_commit_minutes ?? MAX_ETA_MIN, 0, ABS_MAX_ETA_MIN)
+}
+
+function activityDuration(activity: ActivityView) {
+  return clampNumber(activity.duration_minutes ?? DEFAULT_ETA_MIN, 1, ABS_MAX_DURATION_MIN)
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  if (value < min) return min
+  if (value > max) return max
+  return value
 }
 
 function etaRemainingMinutes(arrivalAt: number | null, now: number) {

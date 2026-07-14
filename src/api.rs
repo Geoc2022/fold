@@ -12,20 +12,27 @@ const ACTIVITY_LIST_LIMIT: i64 = 100;
 const NOTIFICATION_LIMIT: i64 = 50;
 const DEFAULT_EMOJI: &str = "🎲";
 const DEFAULT_CATEGORY: &str = "general";
+const DEFAULT_COMMIT_MINUTES: i64 = 30;
 /// Activities disappear from the homepage after this long without a run;
 /// running the activity again resets the clock.
 const ACTIVITY_VISIBLE_WINDOW_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 
 // ---- helpers ---------------------------------------------------------------
 
-async fn require_person(db: &D1Database, req: &Request) -> Result<std::result::Result<PersonRow, Response>> {
+async fn require_person(
+    db: &D1Database,
+    req: &Request,
+) -> Result<std::result::Result<PersonRow, Response>> {
     let pid = match person_id(req) {
         Some(p) => p,
         None => return Ok(Err(err_json("missing X-Person-Id header", 401)?)),
     };
     match db::get_person(db, &pid).await? {
         Some(p) => Ok(Ok(p)),
-        None => Ok(Err(err_json("unknown person; create a session first", 401)?)),
+        None => Ok(Err(err_json(
+            "unknown person; create a session first",
+            401,
+        )?)),
     }
 }
 
@@ -43,7 +50,9 @@ async fn unique_activity_code(db: &D1Database) -> Result<String> {
             return Ok(code);
         }
     }
-    Err(Error::RustError("could not generate unique activity code".into()))
+    Err(Error::RustError(
+        "could not generate unique activity code".into(),
+    ))
 }
 
 async fn validate_or_generate_activity_code(
@@ -88,7 +97,12 @@ fn clean_category(raw: Option<&str>) -> String {
 /// Recompute a run's counts, reconcile open/ready status against the
 /// activity's grouping config, latch `reached_ready`, and return the fresh
 /// row plus whether it just transitioned into "ready".
-async fn refresh_run(db: &D1Database, run_id: &str, activity: &ActivityRow, now: i64) -> Result<(RunRow, bool)> {
+async fn refresh_run(
+    db: &D1Database,
+    run_id: &str,
+    activity: &ActivityRow,
+    now: i64,
+) -> Result<(RunRow, bool)> {
     db::recompute_run_counts(db, run_id, now).await?;
     let mut run = db::get_run(db, run_id)
         .await?
@@ -122,7 +136,12 @@ async fn refresh_run(db: &D1Database, run_id: &str, activity: &ActivityRow, now:
 /// onto the activity's lifetime stats, and clear the activity's
 /// `current_run_id` if it still points at this run (room goes back to
 /// "empty", prompting a new proposal).
-pub(crate) async fn end_run(db: &D1Database, run_id: &str, new_status: &str, now: i64) -> Result<Option<(RunRow, ActivityRow)>> {
+pub(crate) async fn end_run(
+    db: &D1Database,
+    run_id: &str,
+    new_status: &str,
+    now: i64,
+) -> Result<Option<(RunRow, ActivityRow)>> {
     let Some(run) = db::get_run(db, run_id).await? else {
         return Ok(None);
     };
@@ -193,7 +212,11 @@ pub async fn session_create(mut req: Request, ctx: RouteContext<()>) -> Result<R
         Err(_) => return err_json("invalid JSON body", 400),
     };
     let raw_handle = body.handle.trim();
-    let handle = if raw_handle.is_empty() { "guest" } else { raw_handle };
+    let handle = if raw_handle.is_empty() {
+        "guest"
+    } else {
+        raw_handle
+    };
     if handle.chars().count() > 40 {
         return err_json("handle must be <= 40 characters", 400);
     }
@@ -318,6 +341,8 @@ pub async fn activity_create(mut req: Request, ctx: RouteContext<()>) -> Result<
 
     let emoji = clean_emoji(body.emoji.as_deref());
     let category = clean_category(body.category.as_deref());
+    let duration_minutes = body.duration_minutes.unwrap_or(30).clamp(1, 24 * 60);
+    let max_commit_minutes = body.max_commit_minutes.unwrap_or(30).clamp(0, 24 * 60);
 
     let now = now_ms();
     let id = new_id();
@@ -330,9 +355,9 @@ pub async fn activity_create(mut req: Request, ctx: RouteContext<()>) -> Result<
     db.prepare(
         "INSERT INTO activities \
           (id, code, emoji, title, description, category, proposer_id, min_people, max_people, group_multiple, \
-            grouping_mode, allow_guests, current_run_id, times_run, players_served, interest_total, commit_total, \
-            last_active_at, created_at, updated_at) \
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 0, 0, 0, 0, ?14, ?14, ?14)",
+            grouping_mode, allow_guests, duration_minutes, max_commit_minutes, current_run_id, times_run, \
+            players_served, interest_total, commit_total, last_active_at, created_at, updated_at) \
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 0, 0, 0, 0, ?16, ?16, ?16)",
     )
     .bind(&[
         db::s(&id),
@@ -347,6 +372,8 @@ pub async fn activity_create(mut req: Request, ctx: RouteContext<()>) -> Result<
         db::i(group_multiple as i64),
         db::s(grouping_mode),
         db::i(if body.allow_guests.unwrap_or(true) { 1 } else { 0 }),
+        db::i(duration_minutes as i64),
+        db::i(max_commit_minutes as i64),
         db::s(&run_id),
         db::i(now),
     ])?
@@ -367,8 +394,16 @@ pub async fn activity_create(mut req: Request, ctx: RouteContext<()>) -> Result<
 
     // Broadcast to everyone else so the new activity is discoverable.
     let msg = format!("{} proposed \"{}\"", proposer.handle, title);
-    let recipients =
-        db::notify_all_except(&db, &proposer.id, Some(&id), Some(&run_id), "activity_proposed", &msg, now).await?;
+    let recipients = db::notify_all_except(
+        &db,
+        &proposer.id,
+        Some(&id),
+        Some(&run_id),
+        "activity_proposed",
+        &msg,
+        now,
+    )
+    .await?;
     push_people(&ctx.env, &db, recipients).await?;
 
     let view = build_activity_view(&db, &id, None)
@@ -425,7 +460,10 @@ pub async fn activity_create_run(mut req: Request, ctx: RouteContext<()>) -> Res
     db::set_activity_current_run(&db, &activity.id, Some(&run_id), now).await?;
     db::touch_activity_last_active(&db, &activity.id, now).await?;
 
-    let msg = format!("{} proposed a new run of \"{}\"", proposer.handle, activity.title);
+    let msg = format!(
+        "{} proposed a new run of \"{}\"",
+        proposer.handle, activity.title
+    );
     let recipients = db::notify_all_except(
         &db,
         &proposer.id,
@@ -490,8 +528,15 @@ pub async fn run_interest(req: Request, ctx: RouteContext<()>) -> Result<Respons
 
     if prior_interested < activity.min_people && fresh_run.interested_count >= activity.min_people {
         let msg = format!("\"{}\" has enough interested people", activity.title);
-        let recipients =
-            db::notify_interested(&db, &activity.id, &run.id, "activity_interest_ready", &msg, now).await?;
+        let recipients = db::notify_interested(
+            &db,
+            &activity.id,
+            &run.id,
+            "activity_interest_ready",
+            &msg,
+            now,
+        )
+        .await?;
         push_people(&ctx.env, &db, recipients).await?;
     }
 
@@ -551,7 +596,10 @@ pub async fn run_commit(mut req: Request, ctx: RouteContext<()>) -> Result<Respo
     };
 
     let now = now_ms();
-    let eta = body.eta_minutes.unwrap_or(30).min(30) as i64;
+    let max_commit = activity.max_commit_minutes.max(0);
+    let default_eta = max_commit.min(DEFAULT_COMMIT_MINUTES);
+    let requested_eta = body.eta_minutes.map(|v| v as i64).unwrap_or(default_eta);
+    let eta = requested_eta.clamp(0, max_commit);
     let arrival_at = now + eta * 60 * 1000;
     db::upsert_participation(&db, &run.id, &person.id, "committed", Some(arrival_at), now).await?;
     db::touch_person(&db, &person.id, now).await?;
@@ -575,8 +623,16 @@ pub async fn run_commit(mut req: Request, ctx: RouteContext<()>) -> Result<Respo
     }
     if newly_ready {
         let msg = format!("\"{}\" has enough people — it's on!", activity.title);
-        let mut recipients =
-            db::notify_committed(&db, &activity.id, &run.id, None, "activity_ready", &msg, now).await?;
+        let mut recipients = db::notify_committed(
+            &db,
+            &activity.id,
+            &run.id,
+            None,
+            "activity_ready",
+            &msg,
+            now,
+        )
+        .await?;
         if activity.proposer_id != person.id {
             db::insert_notification(
                 &db,
@@ -662,7 +718,15 @@ async fn proposer_run_action(
     let now = now_ms();
     if new_status == "scheduled" {
         let sched = schedule.ok_or_else(|| Error::RustError("schedule payload required".into()))?;
-        db::set_run_schedule(&db, &run.id, "scheduled", sched.scheduled_for, sched.location.as_deref(), now).await?;
+        db::set_run_schedule(
+            &db,
+            &run.id,
+            "scheduled",
+            sched.scheduled_for,
+            sched.location.as_deref(),
+            now,
+        )
+        .await?;
     } else {
         // closed or cancelled -- ends the run and rolls its stats onto the activity.
         if end_run(&db, &run.id, new_status, now).await?.is_none() {
@@ -676,7 +740,16 @@ async fn proposer_run_action(
         "closed" => format!("\"{}\" was closed", activity.title),
         _ => format!("\"{}\" was updated", activity.title),
     };
-    let recipients = db::notify_committed(&db, &activity.id, &run.id, Some(&person.id), notify_kind, &msg, now).await?;
+    let recipients = db::notify_committed(
+        &db,
+        &activity.id,
+        &run.id,
+        Some(&person.id),
+        notify_kind,
+        &msg,
+        now,
+    )
+    .await?;
     push_people(&ctx.env, &db, recipients).await?;
 
     let view = build_activity_view(&db, &activity.id, Some(&person.id))
@@ -789,10 +862,15 @@ pub async fn room_get(req: Request, ctx: RouteContext<()>) -> Result<Response> {
         Some(r) => db::participants_for_run(&db, &r.id, me_id.as_deref()).await?,
         None => Vec::new(),
     };
+    let already_committed_elsewhere = match (&view.current_run, &me_id) {
+        (Some(r), Some(pid)) => db::other_committed_run(&db, pid, &r.id).await?.is_some(),
+        _ => false,
+    };
     let resp = RoomResponse {
         server_time: now_ms(),
         activity: view,
         participants,
+        already_committed_elsewhere,
     };
     Response::from_json(&resp)
 }
@@ -812,7 +890,10 @@ pub async fn sync(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let since = now - ACTIVITY_VISIBLE_WINDOW_MS;
     let activities = db::list_activities(&db, since, ACTIVITY_LIST_LIMIT).await?;
 
-    let run_ids: Vec<String> = activities.iter().filter_map(|a| a.current_run_id.clone()).collect();
+    let run_ids: Vec<String> = activities
+        .iter()
+        .filter_map(|a| a.current_run_id.clone())
+        .collect();
     let runs = db::get_runs_by_ids(&db, &run_ids).await?;
     let run_by_id: std::collections::HashMap<String, RunRow> =
         runs.into_iter().map(|r| (r.id.clone(), r)).collect();
@@ -831,7 +912,10 @@ pub async fn sync(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let views: Vec<ActivityView> = activities
         .into_iter()
         .map(|row| {
-            let run = row.current_run_id.as_ref().and_then(|rid| run_by_id.get(rid).cloned());
+            let run = row
+                .current_run_id
+                .as_ref()
+                .and_then(|rid| run_by_id.get(rid).cloned());
             let my_state = run.as_ref().and_then(|r| my_states.get(&r.id).cloned());
             ActivityView::from_row(row, run, my_state)
         })

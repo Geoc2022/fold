@@ -57,6 +57,8 @@ export interface ActivityView {
   group_multiple: number
   grouping_mode: GroupingMode
   allow_guests: boolean
+  duration_minutes: number
+  max_commit_minutes: number
   times_run: number
   players_served: number
   interest_total: number
@@ -114,6 +116,7 @@ export interface RoomResponse {
   server_time: number
   activity: ActivityView
   participants: ParticipantView[]
+  already_committed_elsewhere: boolean
 }
 
 /** Creates a new activity (tile) plus its first run in one call. */
@@ -128,6 +131,8 @@ export interface CreateActivityInput {
   group_multiple?: number | null
   grouping_mode?: GroupingMode
   allow_guests?: boolean
+  duration_minutes?: number | null
+  max_commit_minutes?: number | null
   // First-run fields.
   location?: string | null
   details?: string | null
