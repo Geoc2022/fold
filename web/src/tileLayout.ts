@@ -25,12 +25,27 @@ export function popularityOrder(list: ActivityView[]): ActivityView[] {
 /** 1x1 / 2x2 / 3x3 unit size per activity, ranked by raw popularity (not the
  * jittered display order, so a "lucky" small activity doesn't look huge). */
 export function tileSizes(list: ActivityView[]): Map<string, TileSize> {
-  const byPopularity = [...list].sort((x, y) => popularity(y) - popularity(x))
-  const n = byPopularity.length
+  if (list.length === 0) return new Map()
+  const sorted = [...list].sort((a, b) => popularity(b) - popularity(a) || hashString(b.title) - hashString(a.title))
+  const top = sorted[0]?.id
+  const cutoff = Math.max(1, Math.ceil(sorted.length * 0.3))
   const sizes = new Map<string, TileSize>()
-  byPopularity.forEach((a, i) => {
-    const rank = n <= 1 ? 0 : i / (n - 1)
-    sizes.set(a.id, rank < 0.12 ? 3 : rank < 0.4 ? 2 : 1)
+  sorted.forEach((activity, index) => {
+    if (activity.id === top) {
+      sizes.set(activity.id, 3)
+    } else if (index < cutoff) {
+      sizes.set(activity.id, 2)
+    } else {
+      sizes.set(activity.id, 1)
+    }
   })
   return sizes
+}
+
+function hashString(value: string) {
+  let hash = 0
+  for (let i = 0; i < value.length; i += 1) {
+    hash = (hash * 31 + value.charCodeAt(i)) % 1000
+  }
+  return hash
 }

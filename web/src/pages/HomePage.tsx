@@ -17,6 +17,12 @@ import { ViewToggle, type HomeView } from '../components/ViewToggle'
 const CODE_PATTERN = /^[a-zA-Z]{4}$/
 const SORT_KEYS: SortKey[] = ['newest', 'oldest', 'runs', 'served', 'commit', 'name']
 const EMPTY_ACTIVITIES: ActivityView[] = []
+const CATEGORY_PRESETS = [
+  { value: 'board game', label: 'Board Game' },
+  { value: 'video game', label: 'Video Game' },
+  { value: 'tabletop', label: 'Tabletop' },
+  { value: 'outside', label: 'Outside' },
+]
 
 function sortActivities(list: ActivityView[], key: SortKey): ActivityView[] {
   const arr = [...list]
@@ -34,6 +40,10 @@ function sortActivities(list: ActivityView[], key: SortKey): ActivityView[] {
     case 'name':
       return arr.sort((a, b) => a.title.localeCompare(b.title))
   }
+}
+
+function normalizeCategory(value: string) {
+  return value.trim().toLowerCase()
 }
 
 export function HomePage() {
@@ -121,6 +131,18 @@ export function HomePage() {
     const set = new Set<string>()
     for (const a of activities) set.add(a.category)
     return Array.from(set).sort()
+  }, [activities])
+
+  const categoryOptions = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const preset of CATEGORY_PRESETS) counts.set(preset.value, 0)
+    for (const a of activities) {
+      const key = normalizeCategory(a.category)
+      if (counts.has(key)) counts.set(key, (counts.get(key) ?? 0) + 1)
+    }
+    return [...CATEGORY_PRESETS]
+      .map((preset) => ({ ...preset, count: counts.get(preset.value) ?? 0 }))
+      .sort((a, b) => (b.count - a.count) || a.label.localeCompare(b.label))
   }, [activities])
 
   const filtered = useMemo(
@@ -283,6 +305,7 @@ export function HomePage() {
           <div className="modal-card" onClick={(e) => e.stopPropagation()}>
             <ProposeForm
               initialCode={prefillCode}
+              categoryOptions={categoryOptions}
               onCreated={() => {
                 setCreating(false)
                 setPrefillCode(null)

@@ -150,13 +150,21 @@ export function RoomCanvas({ activity, participants, me, visual, onInterested, o
 
   const source = useMemo(() => {
     const now = Date.now()
-    const mine = participants.find((p) => p.is_me)
-    return [{
-      id: `me-${me.id}`,
-      state: mine ? visualState(mine, now) : 'lurker' as const,
-      arrivalAt: mine?.arrival_at ?? null,
-      isMe: true,
-    }]
+    const nodes = participants.map((p) => ({
+      id: p.id,
+      state: visualState(p, now),
+      arrivalAt: p.arrival_at,
+      isMe: p.is_me,
+    }))
+    if (!nodes.some((n) => n.isMe)) {
+      nodes.unshift({
+        id: `me-${me.id}`,
+        state: 'lurker' as const,
+        arrivalAt: null,
+        isMe: true,
+      })
+    }
+    return nodes
   }, [participants, me.id])
 
   useEffect(() => {
@@ -165,7 +173,7 @@ export function RoomCanvas({ activity, participants, me, visual, onInterested, o
 
   useEffect(() => {
     const existing = new Map(nodesRef.current.map((n) => [n.id, n]))
-    nodesRef.current = source.map((s) => {
+    nodesRef.current = source.map((s, index) => {
       const old = existing.get(s.id)
       if (old) {
         const pointerOwnsNode = pointerRef.current?.node === old
@@ -176,12 +184,8 @@ export function RoomCanvas({ activity, participants, me, visual, onInterested, o
         old.isMe = s.isMe
         return old
       }
-      // Initial resting spot: just outside the world ring, facing up --
-      // matches Biology's default angle for a node with no click position
-      // to derive one from. No spiral spacing needed since there's only
-      // ever one real node here.
-      const angle = -Math.PI / 2
-      const restR = WORLD_R + visual.nodeRadius + 40
+      const angle = s.isMe ? -Math.PI / 2 : (index / Math.max(1, source.length)) * Math.PI * 2
+      const restR = s.isMe ? WORLD_R + visual.nodeRadius + 40 : WORLD_R * 0.6
       return {
         ...s,
         x: Math.cos(angle) * restR,

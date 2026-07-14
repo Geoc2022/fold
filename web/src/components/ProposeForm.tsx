@@ -7,9 +7,16 @@ import type { ActivityView, GroupingMode } from '../types'
 import { EmojiPicker } from './EmojiPicker'
 import { GroupPreview } from './GroupPreview'
 
+interface CategoryOption {
+  value: string
+  label: string
+  count: number
+}
+
 interface Props {
   /** Prefills the code field, e.g. when arriving at a nonexistent /CODE. */
   initialCode?: string | null
+  categoryOptions: CategoryOption[]
   onCreated: (activity: ActivityView) => void
   onClose: () => void
 }
@@ -28,6 +35,7 @@ interface LastProposal {
   location?: string
   duration_minutes?: number
   max_commit_minutes?: number
+  category?: string
 }
 
 function loadLastProposal(): LastProposal {
@@ -64,7 +72,7 @@ function deriveCodeCandidates(title: string): string[] {
   return candidates
 }
 
-export function ProposeForm({ initialCode, onCreated, onClose }: Props) {
+export function ProposeForm({ initialCode, categoryOptions, onCreated, onClose }: Props) {
   const navigate = useNavigate()
   const [last] = useState(loadLastProposal)
 
@@ -78,6 +86,7 @@ export function ProposeForm({ initialCode, onCreated, onClose }: Props) {
   const [maxPeople, setMaxPeople] = useState<number | null>(last.max_people ?? null)
   const [groupMultiple, setGroupMultiple] = useState(last.group_multiple ?? 2)
   const [allowGuests, setAllowGuests] = useState(last.allow_guests ?? true)
+  const [category, setCategory] = useState(last.category ?? categoryOptions[0]?.value ?? 'board game')
   const [durationMinutes, setDurationMinutes] = useState(last.duration_minutes ?? 30)
   const [maxCommitMinutes, setMaxCommitMinutes] = useState(last.max_commit_minutes ?? 30)
   const [durationInput, setDurationInput] = useState(() => minutesToHuman(last.duration_minutes ?? 30))
@@ -103,6 +112,13 @@ export function ProposeForm({ initialCode, onCreated, onClose }: Props) {
   }, [onClose])
 
   const feasible = groupingIsFeasible(mode, minPeople, maxPeople, groupMultiple)
+
+  useEffect(() => {
+    if (categoryOptions.length === 0) return
+    if (!categoryOptions.some((opt) => opt.value === category)) {
+      setCategory(categoryOptions[0].value)
+    }
+  }, [categoryOptions, category])
 
   function handleDurationChange(value: string) {
     setDurationInput(value)
@@ -132,6 +148,7 @@ export function ProposeForm({ initialCode, onCreated, onClose }: Props) {
       group_multiple: mode === 'tiling' ? groupMultiple : 1,
       grouping_mode: mode,
       allow_guests: allowGuests,
+      category,
       duration_minutes: durationMinutes,
       max_commit_minutes: maxCommitMinutes,
       location: location.trim() || null,
@@ -156,6 +173,7 @@ export function ProposeForm({ initialCode, onCreated, onClose }: Props) {
         location: location.trim() || undefined,
         duration_minutes: durationMinutes,
         max_commit_minutes: maxCommitMinutes,
+        category,
       })
       onCreated(activity)
       navigate(`/${activity.code}`)
@@ -217,6 +235,16 @@ export function ProposeForm({ initialCode, onCreated, onClose }: Props) {
           <label className="check-row">
             <input type="checkbox" checked={allowGuests} onChange={(e) => setAllowGuests(e.target.checked)} />
             <span>Allow Guests</span>
+          </label>
+          <label>
+            Category
+            <select value={category} onChange={(e) => setCategory(e.target.value)}>
+              {categoryOptions.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label} ({opt.count})
+                </option>
+              ))}
+            </select>
           </label>
           <div className="row">
             <label>
