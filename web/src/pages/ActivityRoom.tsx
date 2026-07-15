@@ -6,7 +6,7 @@ import { useTheme } from '../theme'
 import { useRoom } from '../useRoom'
 import type { Person } from '../types'
 import { CreateRunForm } from '../components/CreateRunForm'
-import { RoomCanvas } from '../components/RoomCanvas'
+import { RoomCanvas, type RoomAlertInput } from '../components/RoomCanvas'
 import { RoomPanel } from '../components/RoomPanel'
 import { DEFAULT_VISUAL_CONFIG, type VisualConfig } from '../nodeVisual'
 import { readJson, writeJson } from '../storage'
@@ -14,6 +14,12 @@ import { readJson, writeJson } from '../storage'
 const VISUAL_KEY = 'fold.room_visual'
 const ALERT_COOLDOWN_MS = 1000
 const ALERT_VISIBLE_MS = 3600
+
+interface RoomAlert {
+  message: string
+  href?: string
+  hrefLabel?: string
+}
 
 export function ActivityRoom() {
   const params = useParams()
@@ -27,7 +33,7 @@ export function ActivityRoom() {
   }, [rawParam])
   const [me, setMe] = useState<Person | null>(null)
   const { theme, toggleTheme } = useTheme()
-  const [alert, setAlert] = useState<string | null>(null)
+  const [alert, setAlert] = useState<RoomAlert | null>(null)
   const [proposingRun, setProposingRun] = useState(true)
   const [showInfo, setShowInfo] = useState(false)
   const [showVisual, setShowVisual] = useState(false)
@@ -36,8 +42,8 @@ export function ActivityRoom() {
   const [visual, setVisual] = useState<VisualConfig>(() => readJson(VISUAL_KEY, DEFAULT_VISUAL_CONFIG))
   const alertTimerRef = useRef<number | null>(null)
   const alertLastShownRef = useRef(new Map<string, number>())
-  const alertQueueRef = useRef<string[]>([])
-  const currentAlertRef = useRef<string | null>(null)
+  const alertQueueRef = useRef<RoomAlert[]>([])
+  const currentAlertRef = useRef<RoomAlert | null>(null)
   const { data, error, loading, notFound, refresh } = useRoom(code, me !== null && code !== null)
 
   useEffect(() => {
@@ -123,15 +129,24 @@ export function ActivityRoom() {
     }, ALERT_VISIBLE_MS)
   }
 
-  function showAlert(message: string) {
+  function showAlert(nextAlert: string | RoomAlertInput) {
+    const normalized: RoomAlert =
+      typeof nextAlert === 'string'
+        ? { message: nextAlert }
+        : {
+            message: nextAlert.message,
+            href: nextAlert.href,
+            hrefLabel: nextAlert.hrefLabel,
+          }
+    const key = `${normalized.message}|${normalized.href ?? ''}|${normalized.hrefLabel ?? ''}`
     const now = Date.now()
-    const last = alertLastShownRef.current.get(message) ?? 0
+    const last = alertLastShownRef.current.get(key) ?? 0
     if (now - last < ALERT_COOLDOWN_MS) return
-    alertLastShownRef.current.set(message, now)
+    alertLastShownRef.current.set(key, now)
 
     if (currentAlertRef.current == null && alertTimerRef.current == null) {
-      currentAlertRef.current = message
-      setAlert(message)
+      currentAlertRef.current = normalized
+      setAlert(normalized)
       alertTimerRef.current = window.setTimeout(() => {
         alertTimerRef.current = null
         currentAlertRef.current = null
@@ -142,7 +157,15 @@ export function ActivityRoom() {
     }
 
     const queue = alertQueueRef.current
-    if (queue.length === 0 || queue[queue.length - 1] !== message) queue.push(message)
+    const lastQueued = queue[queue.length - 1]
+    if (
+      !lastQueued
+      || lastQueued.message !== normalized.message
+      || lastQueued.href !== normalized.href
+      || lastQueued.hrefLabel !== normalized.hrefLabel
+    ) {
+      queue.push(normalized)
+    }
   }
 
   async function copyRoomLink() {
@@ -207,10 +230,39 @@ export function ActivityRoom() {
         onWithdraw={withdraw}
         onAlert={showAlert}
         alreadyCommittedElsewhere={data.already_committed_elsewhere}
+        otherCommittedRoomCode={data.other_committed_room_code}
       />
       <button type="button" className="room-code" onClick={copyRoomLink}>/{activity.code}</button>
       {error && <div className="room-error">{error}</div>}
-      {alert && <div className="room-alert">{alert}</div>}
+      {alert && (
+        <div className="room-alert">
+          {alert.href && alert.message.includes('{link}') ? (
+            <>
+              {alert.message.split('{link}')[0]}
+              <Link className="room-alert-link" to={alert.href}>
+                {alert.hrefLabel ?? alert.href}
+              </Link>
+              {alert.message.split('{link}')[1]}
+            </>
+          ) : alert.href && alert.hrefLabel === alert.message ? (
+            <Link className="room-alert-link" to={alert.href}>
+              {alert.message}
+            </Link>
+          ) : (
+            <>
+              {alert.message}
+              {alert.href && (
+                <>
+                  {' '}
+                  <Link className="room-alert-link" to={alert.href}>
+                    {alert.hrefLabel ?? alert.href}
+                  </Link>
+                </>
+              )}
+            </>
+          )}
+        </div>
+      )}
       {showVisual && <VisualPanel visual={visual} onChange={setVisual} />}
       <RoomPanel
         activity={activity}

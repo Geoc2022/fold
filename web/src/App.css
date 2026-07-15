@@ -962,6 +962,15 @@ label .opt {
   box-shadow: 0 14px 36px rgba(0, 0, 0, 0.25);
   animation: room-alert-in 0.18s ease-out;
 }
+.room-alert-link {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  font-weight: 700;
+}
+.room-alert-link:visited {
+  color: inherit;
+}
 @keyframes room-alert-in {
   from {
     opacity: 0;

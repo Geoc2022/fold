@@ -321,4 +321,8 @@ pub struct RoomResponse {
     /// run elsewhere -- lets the client block promoting to committed here
     /// before even trying (commit is exclusive: at most one at a time).
     pub already_committed_elsewhere: bool,
+    /// The other activity room code where the requester is currently committed.
+    pub other_committed_room_code: Option<String>,
+    /// Title of the other activity room where the requester is currently committed.
+    pub other_committed_activity_title: Option<String>,
 }

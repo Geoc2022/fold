@@ -118,6 +118,8 @@ export interface RoomResponse {
   activity: ActivityView
   participants: ParticipantView[]
   already_committed_elsewhere: boolean
+  other_committed_room_code: string | null
+  other_committed_activity_title: string | null
 }
 
 /** Creates a new activity (tile) plus its first run in one call. */

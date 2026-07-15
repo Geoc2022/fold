@@ -423,6 +423,8 @@ pub async fn participation_state(
 pub struct OtherCommitment {
     pub run_id: String,
     pub activity_id: String,
+    pub activity_code: String,
+    pub activity_title: String,
 }
 
 pub async fn other_committed_run(
@@ -434,12 +436,16 @@ pub async fn other_committed_run(
     struct Row {
         run_id: String,
         activity_id: String,
+        activity_code: String,
+        activity_title: String,
     }
     let row = db
         .prepare(
-            "SELECT part.run_id AS run_id, r.activity_id AS activity_id \
+            "SELECT part.run_id AS run_id, r.activity_id AS activity_id, \
+                    a.code AS activity_code, a.title AS activity_title \
              FROM participations part \
              JOIN runs r ON r.id = part.run_id \
+             JOIN activities a ON a.id = r.activity_id \
              WHERE part.person_id = ? AND part.state = 'committed' AND part.run_id != ? LIMIT 1",
         )
         .bind(&[s(person_id), s(exclude_run_id)])?
@@ -448,6 +454,8 @@ pub async fn other_committed_run(
     Ok(row.map(|r| OtherCommitment {
         run_id: r.run_id,
         activity_id: r.activity_id,
+        activity_code: r.activity_code,
+        activity_title: r.activity_title,
     }))
 }
 

@@ -13,6 +13,12 @@ import {
 import { createTugModel, tugPositionInward, tugPositionOutward } from '../tugOfWar'
 import type { ActivityView, ParticipantView, Person } from '../types'
 
+export interface RoomAlertInput {
+  message: string
+  href?: string
+  hrefLabel?: string
+}
+
 interface Props {
   activity: ActivityView
   participants: ParticipantView[]
@@ -21,8 +27,9 @@ interface Props {
   onInterested: () => Promise<void>
   onCommit: (etaMinutes: number) => Promise<void>
   onWithdraw: () => Promise<void>
-  onAlert: (message: string) => void
+  onAlert: (message: string | RoomAlertInput) => void
   alreadyCommittedElsewhere: boolean
+  otherCommittedRoomCode?: string | null
 }
 
 interface SimNode {
@@ -93,7 +100,18 @@ function springToward(n: SimNode, targetX: number, targetY: number) {
  * boundary could still jump. */
 const WIN_EASE_MS = 300
 
-export function RoomCanvas({ activity, participants, me, visual, onInterested, onCommit, onWithdraw, onAlert, alreadyCommittedElsewhere }: Props) {
+export function RoomCanvas({
+  activity,
+  participants,
+  me,
+  visual,
+  onInterested,
+  onCommit,
+  onWithdraw,
+  onAlert,
+  alreadyCommittedElsewhere,
+  otherCommittedRoomCode,
+}: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const nodesRef = useRef<SimNode[]>([])
   const pointerRef = useRef<PointerState | null>(null)
@@ -114,6 +132,7 @@ export function RoomCanvas({ activity, participants, me, visual, onInterested, o
    * right after winning a tug so the hand-off never snaps. */
   const winEaseUntilRef = useRef(0)
   const commitLockRef = useRef(alreadyCommittedElsewhere)
+  const otherCommittedRoomCodeRef = useRef<string | null | undefined>(otherCommittedRoomCode)
   const guardAlertRef = useRef(0)
   const expireNoticeArrivalRef = useRef<number | null>(null)
   const myStableNodeIdRef = useRef(`me-${me.id}`)
@@ -144,6 +163,10 @@ export function RoomCanvas({ activity, participants, me, visual, onInterested, o
   useEffect(() => {
     commitLockRef.current = alreadyCommittedElsewhere
   }, [alreadyCommittedElsewhere])
+
+  useEffect(() => {
+    otherCommittedRoomCodeRef.current = otherCommittedRoomCode
+  }, [otherCommittedRoomCode])
 
   useEffect(() => {
     const existing = new Map(nodesRef.current.map((n) => [n.id, n]))
@@ -249,7 +272,16 @@ export function RoomCanvas({ activity, participants, me, visual, onInterested, o
       if (!commitLockRef.current) return false
       if (performance.now() - guardAlertRef.current > 900) {
         guardAlertRef.current = performance.now()
-        onAlert('Already committed elsewhere — withdraw there first.')
+        const code = otherCommittedRoomCodeRef.current
+        if (code) {
+          onAlert({
+            message: 'Already committed at {link} — withdraw there first.',
+            href: `/${code}`,
+            hrefLabel: code,
+          })
+        } else {
+          onAlert('Already committed elsewhere — withdraw there first.')
+        }
       }
       resetTug()
       winEaseUntilRef.current = performance.now() + WIN_EASE_MS

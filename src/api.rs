@@ -871,15 +871,20 @@ pub async fn room_get(req: Request, ctx: RouteContext<()>) -> Result<Response> {
         Some(r) => db::participants_for_run(&db, &r.id, me_id.as_deref()).await?,
         None => Vec::new(),
     };
-    let already_committed_elsewhere = match (&view.current_run, &me_id) {
-        (Some(r), Some(pid)) => db::other_committed_run(&db, pid, &r.id).await?.is_some(),
-        _ => false,
+    let other_commitment = match (&view.current_run, &me_id) {
+        (Some(r), Some(pid)) => db::other_committed_run(&db, pid, &r.id).await?,
+        _ => None,
     };
+    let already_committed_elsewhere = other_commitment.is_some();
     let resp = RoomResponse {
         server_time: now_ms(),
         activity: view,
         participants,
         already_committed_elsewhere,
+        other_committed_room_code: other_commitment.as_ref().map(|c| c.activity_code.clone()),
+        other_committed_activity_title: other_commitment
+            .as_ref()
+            .map(|c| c.activity_title.clone()),
     };
     Response::from_json(&resp)
 }
