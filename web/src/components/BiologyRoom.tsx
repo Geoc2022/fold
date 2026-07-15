@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { nodeColor } from '../nodeVisual'
+import { createTugModel, tugPositionInward, tugPositionOutward } from '../tugOfWar'
 
 export type NodeState = 'lurker' | 'interested' | 'committed' | 'arrived'
 type GroupingMode = 'single' | 'parallel'
@@ -64,10 +65,6 @@ interface BiologyRoomProps {
   onSnapshot?: (snapshot: BiologySnapshot) => void
   /** Externally-driven state for the "self" node (set by fired policy actions). */
   selfState?: NodeState
-  /** Optional external run-state control (used by /math toolbar). */
-  running?: boolean
-  onRunningChange?: (running: boolean) => void
-  showPlayToggle?: boolean
   showLabels?: boolean
   includeSelfNode?: boolean
 }
@@ -78,15 +75,7 @@ const MAX_ETA_MS = 60 * 1000
 const WORLD_R = 280
 const MAX_NODES = 26
 const SELF_ID = 0
-const TUG_WIDTH = 70
-const TUG_WIDTH_HOLD_MS = 850
-const WORK_NEEDED = TUG_WIDTH * TUG_WIDTH_HOLD_MS
-const COMMIT_MAX_R = WORLD_R
-const COMMIT_OUT_TUG_R = COMMIT_MAX_R + TUG_WIDTH
-const COMMIT_IN_TUG_R = Math.max(0, COMMIT_MAX_R - TUG_WIDTH)
-const INTERESTED_MAX_R = COMMIT_OUT_TUG_R + 90
-const INTERESTED_OUT_TUG_R = INTERESTED_MAX_R + TUG_WIDTH
-const INTERESTED_IN_TUG_R = Math.max(0, INTERESTED_MAX_R - TUG_WIDTH)
+const TUG = createTugModel(WORLD_R)
 const VOGEL_C = 28
 const PHI_RECIP_SQ = 1 / (((1 + Math.sqrt(5)) / 2) ** 2)
 const VOGEL_N_MIN = Math.ceil((WORLD_R / VOGEL_C) ** 2)
@@ -95,13 +84,9 @@ export function BiologyRoom({
   embedded = false,
   onSnapshot,
   selfState,
-  running,
-  onRunningChange,
-  showPlayToggle = true,
   showLabels = false,
   includeSelfNode = false,
 }: BiologyRoomProps) {
-  const [runningInternal, setRunningInternal] = useState(true)
   const [mode, setMode] = useState<GroupingMode>('single')
   const [perGroup, setPerGroup] = useState(3)
   const [sim, setSim] = useState<SimConfig>({
@@ -122,8 +107,6 @@ export function BiologyRoom({
   const simRef = useRef(sim)
   const visRef = useRef(vis)
   const snapshotRef = useRef(onSnapshot)
-  const runningValue = running ?? runningInternal
-  const runningRef = useRef(runningValue)
   const lastSnapshotAtRef = useRef(0)
   const selfStateRef = useRef<NodeState | undefined>(selfState)
   const showLabelsRef = useRef(showLabels)
@@ -133,14 +116,8 @@ export function BiologyRoom({
   simRef.current = sim
   visRef.current = vis
   snapshotRef.current = onSnapshot
-  runningRef.current = runningValue
   showLabelsRef.current = showLabels
   includeSelfNodeRef.current = includeSelfNode
-
-  const setRunningValue = (next: boolean) => {
-    if (running == null) setRunningInternal(next)
-    onRunningChange?.(next)
-  }
   selfStateRef.current = selfState
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -168,7 +145,7 @@ export function BiologyRoom({
     tugLastFrameRef.current = nowPerf
     if (last == null) return false
     tugWorkRef.current += force * (nowPerf - last)
-    return tugWorkRef.current >= WORK_NEEDED
+    return tugWorkRef.current >= TUG.workNeeded
   }
 
   useEffect(() => {
@@ -260,10 +237,10 @@ export function BiologyRoom({
       const nowPerf = performance.now()
 
       if (ps.node.state === 'committed' || ps.node.state === 'arrived') {
-        const targetR = tugPositionOutward(rawR, COMMIT_MAX_R, COMMIT_OUT_TUG_R)
+        const targetR = tugPositionOutward(rawR, TUG.commitMaxR, TUG.commitOutTugR)
         setNodeRadius(ps.node, targetR, angle)
-        if (rawR > COMMIT_MAX_R) {
-          if (advanceTugWork(rawR - COMMIT_MAX_R, nowPerf)) {
+        if (rawR > TUG.commitMaxR) {
+          if (advanceTugWork(rawR - TUG.commitMaxR, nowPerf)) {
             ps.node.state = 'interested'
             ps.node.arrivalAt = null
             resetTug()
@@ -272,18 +249,18 @@ export function BiologyRoom({
           resetTug()
         }
       } else if (ps.node.state === 'interested') {
-        if (rawR < COMMIT_MAX_R) {
-          const targetR = tugPositionInward(rawR, COMMIT_MAX_R, COMMIT_IN_TUG_R)
+        if (rawR < TUG.commitMaxR) {
+          const targetR = tugPositionInward(rawR, TUG.commitMaxR, TUG.commitInTugR)
           setNodeRadius(ps.node, targetR, angle)
-          if (advanceTugWork(COMMIT_MAX_R - rawR, nowPerf)) {
+          if (advanceTugWork(TUG.commitMaxR - rawR, nowPerf)) {
             ps.node.state = 'committed'
             ps.node.arrivalAt = nowMs + etaFromDistance(ps.node.x, ps.node.y)
             resetTug()
           }
-        } else if (rawR > INTERESTED_MAX_R) {
-          const targetR = tugPositionOutward(rawR, INTERESTED_MAX_R, INTERESTED_OUT_TUG_R)
+        } else if (rawR > TUG.interestedMaxR) {
+          const targetR = tugPositionOutward(rawR, TUG.interestedMaxR, TUG.interestedOutTugR)
           setNodeRadius(ps.node, targetR, angle)
-          if (advanceTugWork(rawR - INTERESTED_MAX_R, nowPerf)) {
+          if (advanceTugWork(rawR - TUG.interestedMaxR, nowPerf)) {
             ps.node.state = 'lurker'
             ps.node.arrivalAt = null
             resetTug()
@@ -293,10 +270,10 @@ export function BiologyRoom({
           resetTug()
         }
       } else {
-        if (rawR < INTERESTED_MAX_R) {
-          const targetR = tugPositionInward(rawR, INTERESTED_MAX_R, INTERESTED_IN_TUG_R)
+        if (rawR < TUG.interestedMaxR) {
+          const targetR = tugPositionInward(rawR, TUG.interestedMaxR, TUG.interestedInTugR)
           setNodeRadius(ps.node, targetR, angle)
-          if (advanceTugWork(INTERESTED_MAX_R - rawR, nowPerf)) {
+          if (advanceTugWork(TUG.interestedMaxR - rawR, nowPerf)) {
             ps.node.state = 'interested'
             resetTug()
           }
@@ -399,34 +376,31 @@ export function BiologyRoom({
       ensureSelf(now)
       const nodes = nodesRef.current
 
-      if (runningRef.current) {
-        if (nodes.length >= Math.min(c.maxNodes, MAX_NODES)) {
-          nodesRef.current = includeSelfNodeRef.current ? nodes.filter((n) => n.isSelf) : []
-          vogelCounterRef.current = VOGEL_N_MIN
-          spawnAccRef.current = 0
-        }
-
-        spawnAccRef.current += c.spawnPerSec * dt
-        while (spawnAccRef.current >= 1) {
-          vogelSpawn()
-          spawnAccRef.current -= 1
-        }
-
-        for (const n of nodes) {
-          if (!n.simulated) continue
-          if (n.state === 'committed' && n.arrivalAt != null && n.arrivalAt <= now) n.state = 'arrived'
-          if (n.state === 'lurker' && n.targetX == null && Math.random() < c.interestRate * dt) n.state = 'interested'
-          else if (n.state === 'interested' && Math.random() < c.commitRate * dt) {
-            n.state = 'committed'
-            n.arrivalAt = now + Math.min(MAX_ETA_MS, Math.max(MIN_ETA_MS, -c.avgEtaSec * Math.log(Math.max(0.001, Math.random())) * 1000))
-          }
-        }
-        for (const n of nodes) {
-          if (n.state === 'committed' && n.arrivalAt != null && n.arrivalAt <= now) n.state = 'arrived'
-        }
-
-        step(nodes, pointerRef.current, modeRef.current, perGroupRef.current, visRef.current, now)
+      if (nodes.length >= Math.min(c.maxNodes, MAX_NODES)) {
+        nodesRef.current = includeSelfNodeRef.current ? nodes.filter((n) => n.isSelf) : []
+        vogelCounterRef.current = VOGEL_N_MIN
+        spawnAccRef.current = 0
       }
+
+      spawnAccRef.current += c.spawnPerSec * dt
+      while (spawnAccRef.current >= 1) {
+        vogelSpawn()
+        spawnAccRef.current -= 1
+      }
+
+      for (const n of nodes) {
+        if (!n.simulated) continue
+        if (n.state === 'committed' && n.arrivalAt != null && n.arrivalAt <= now) n.state = 'arrived'
+        if (n.state === 'lurker' && n.targetX == null && Math.random() < c.interestRate * dt) n.state = 'interested'
+        else if (n.state === 'interested' && Math.random() < c.commitRate * dt) {
+          n.state = 'committed'
+          n.arrivalAt = now + Math.min(MAX_ETA_MS, Math.max(MIN_ETA_MS, -c.avgEtaSec * Math.log(Math.max(0.001, Math.random())) * 1000))
+        }
+      }
+      for (const n of nodes) {
+        if (n.state === 'committed' && n.arrivalAt != null && n.arrivalAt <= now) n.state = 'arrived'
+      }
+      step(nodes, pointerRef.current, modeRef.current, perGroupRef.current, visRef.current, now)
       draw(ctx, canvas, nodes, cameraRef.current, visRef.current, showLabelsRef.current, includeSelfNodeRef.current)
 
       const snapshotCb = snapshotRef.current
@@ -457,17 +431,6 @@ export function BiologyRoom({
   return (
     <main className={rootClass}>
       <canvas ref={canvasRef} className="biology-canvas" />
-      {showPlayToggle && (
-        <button
-          type="button"
-          className="biology-play-toggle"
-          onClick={() => setRunningValue(!runningValue)}
-          title={runningValue ? 'Pause simulation' : 'Play simulation'}
-          aria-label={runningValue ? 'Pause simulation' : 'Play simulation'}
-        >
-          <span className="noto-emoji" aria-hidden="true">{runningValue ? '⏸️' : '▶️'}</span>
-        </button>
-      )}
       <div className={helpClass}>
         <div className="bio-section-title">Simulation</div>
         <div className="bio-sliders">
@@ -661,19 +624,19 @@ function draw(
   ctx.setLineDash([])
   ctx.lineWidth = 1.3 / camera.scale
   ctx.beginPath()
-  ctx.arc(0, 0, COMMIT_MAX_R, 0, Math.PI * 2)
+  ctx.arc(0, 0, TUG.commitMaxR, 0, Math.PI * 2)
   ctx.stroke()
   ctx.beginPath()
-  ctx.arc(0, 0, INTERESTED_MAX_R, 0, Math.PI * 2)
+  ctx.arc(0, 0, TUG.interestedMaxR, 0, Math.PI * 2)
   ctx.stroke()
   ctx.globalAlpha = 0.08
   ctx.setLineDash([5 / camera.scale, 7 / camera.scale])
   ctx.lineWidth = 1 / camera.scale
   ctx.beginPath()
-  ctx.arc(0, 0, COMMIT_OUT_TUG_R, 0, Math.PI * 2)
+  ctx.arc(0, 0, TUG.commitOutTugR, 0, Math.PI * 2)
   ctx.stroke()
   ctx.beginPath()
-  ctx.arc(0, 0, INTERESTED_OUT_TUG_R, 0, Math.PI * 2)
+  ctx.arc(0, 0, TUG.interestedOutTugR, 0, Math.PI * 2)
   ctx.stroke()
   ctx.setLineDash([])
   ctx.globalAlpha = 1
@@ -736,20 +699,6 @@ function draw(
   ctx.setTransform(1, 0, 0, 1, 0, 0)
   ctx.drawImage(layer, 0, 0)
   ctx.restore()
-}
-
-function tugPositionOutward(rawR: number, maxR: number, tugR: number) {
-  if (rawR <= maxR) return rawR
-  const width = tugR - maxR
-  const extra = rawR - maxR
-  return maxR + width * (1 - Math.exp(-extra / width))
-}
-
-function tugPositionInward(rawR: number, minR: number, tugR: number) {
-  if (rawR >= minR) return rawR
-  const width = minR - tugR
-  const extra = minR - rawR
-  return minR - width * (1 - Math.exp(-extra / width))
 }
 
 function setNodeRadius(node: Node, r: number, angle: number) {

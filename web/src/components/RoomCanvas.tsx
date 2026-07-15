@@ -10,6 +10,7 @@ import {
   type VisualConfig,
   type VisualNodeState,
 } from '../nodeVisual'
+import { createTugModel, tugPositionInward, tugPositionOutward } from '../tugOfWar'
 import type { ActivityView, ParticipantView, Person } from '../types'
 
 interface Props {
@@ -57,6 +58,7 @@ interface Camera { x: number; y: number; scale: number }
 const WORLD_R = 280
 const ABS_MAX_ETA_MIN = 240
 const ABS_MAX_DURATION_MIN = 240
+const TUG = createTugModel(WORLD_R)
 
 // Each state boundary is a "tug of war" zone that works in both directions:
 // pulling a node past the boundary away from center clings toward the edge
@@ -71,37 +73,6 @@ const ABS_MAX_DURATION_MIN = 240
 // zero. TUG_WIDTH_HOLD_MS is the time it takes to win while pulling at
 // exactly one TUG_WIDTH past the boundary, used only to calibrate the work
 // target to a familiar timescale.
-const TUG_WIDTH = 70
-const TUG_WIDTH_HOLD_MS = 850
-const WORK_NEEDED = TUG_WIDTH * TUG_WIDTH_HOLD_MS
-const COMMIT_MAX_R = WORLD_R
-const COMMIT_OUT_TUG_R = COMMIT_MAX_R + TUG_WIDTH
-const COMMIT_IN_TUG_R = Math.max(0, COMMIT_MAX_R - TUG_WIDTH)
-const INTERESTED_MAX_R = COMMIT_OUT_TUG_R + 90
-const INTERESTED_OUT_TUG_R = INTERESTED_MAX_R + TUG_WIDTH
-const INTERESTED_IN_TUG_R = Math.max(0, INTERESTED_MAX_R - TUG_WIDTH)
-
-/** Diminishing-returns rubber-band: as `rawR` moves past `maxR` (away from
- * center), the returned radius approaches `tugR` but never reaches it --
- * the further you pull, the harder it resists. At or under `maxR`, tracks
- * `rawR` exactly. */
-function tugPositionOutward(rawR: number, maxR: number, tugR: number) {
-  if (rawR <= maxR) return rawR
-  const width = tugR - maxR
-  const extra = rawR - maxR
-  return maxR + width * (1 - Math.exp(-extra / width))
-}
-
-/** Mirror of `tugPositionOutward` for pulling a node back past a boundary
- * toward center: at or over `minR`, tracks `rawR` exactly; under it, clings
- * toward (but never reaches) `tugR`. */
-function tugPositionInward(rawR: number, minR: number, tugR: number) {
-  if (rawR >= minR) return rawR
-  const width = minR - tugR
-  const extra = minR - rawR
-  return minR - width * (1 - Math.exp(-extra / width))
-}
-
 // Same mass/damping a committed node uses to spring toward its target in
 // step() -- reused here so a tug settles with that identical easing,
 // including the moment it's won and the target radius jumps zones.
@@ -271,7 +242,7 @@ export function RoomCanvas({ activity, participants, me, visual, onInterested, o
       tugLastFrameRef.current = nowPerf
       if (last == null) return false // first frame of this tug: no elapsed time to measure yet
       tugWorkRef.current += force * (nowPerf - last)
-      return tugWorkRef.current >= WORK_NEEDED
+      return tugWorkRef.current >= TUG.workNeeded
     }
 
     const guardCommit = () => {
@@ -303,7 +274,7 @@ export function RoomCanvas({ activity, participants, me, visual, onInterested, o
       if (ps.node.state === 'committed' || ps.node.state === 'arrived') {
         // Committed/arrived has no inward tug -- it's already the innermost
         // tier, and closer to center just means a sooner ETA.
-        if (rawR <= COMMIT_MAX_R && !easing) {
+        if (rawR <= TUG.commitMaxR && !easing) {
           ps.node.x = ps.worldX
           ps.node.y = ps.worldY
           ps.node.vx = 0
@@ -318,12 +289,12 @@ export function RoomCanvas({ activity, participants, me, visual, onInterested, o
         // committed node's normal homing animation) instead of snapping --
         // this also covers the moment the tug is won, when the target
         // jumps zones. Pinned at the max ETA while it clings to the edge.
-        const targetR = tugPositionOutward(rawR, COMMIT_MAX_R, COMMIT_OUT_TUG_R)
+        const targetR = tugPositionOutward(rawR, TUG.commitMaxR, TUG.commitOutTugR)
         springToward(ps.node, Math.cos(angle) * targetR, Math.sin(angle) * targetR)
-        if (rawR <= COMMIT_MAX_R) return // easing back in from a just-won transition
+        if (rawR <= TUG.commitMaxR) return // easing back in from a just-won transition
         ps.node.state = 'committed'
         ps.node.arrivalAt = now + maxEta * 60_000
-        if (advanceTugWork(rawR - COMMIT_MAX_R)) {
+        if (advanceTugWork(rawR - TUG.commitMaxR)) {
           ps.node.state = 'interested'
           resetTug()
           winEaseUntilRef.current = performance.now() + WIN_EASE_MS
@@ -333,7 +304,7 @@ export function RoomCanvas({ activity, participants, me, visual, onInterested, o
       }
 
       if (ps.node.state === 'interested') {
-        const inBounds = rawR >= COMMIT_MAX_R && rawR <= INTERESTED_MAX_R
+        const inBounds = rawR >= TUG.commitMaxR && rawR <= TUG.interestedMaxR
         if (inBounds && !easing) {
           ps.node.x = ps.worldX
           ps.node.y = ps.worldY
@@ -342,13 +313,13 @@ export function RoomCanvas({ activity, participants, me, visual, onInterested, o
           resetTug()
           return
         }
-        if (rawR < COMMIT_MAX_R) {
+        if (rawR < TUG.commitMaxR) {
           // Pulled in toward center past the commit boundary: tug of war
           // in reverse -- winning promotes to committed.
-          const targetR = tugPositionInward(rawR, COMMIT_MAX_R, COMMIT_IN_TUG_R)
+          const targetR = tugPositionInward(rawR, TUG.commitMaxR, TUG.commitInTugR)
           springToward(ps.node, Math.cos(angle) * targetR, Math.sin(angle) * targetR)
-          if (rawR >= COMMIT_MAX_R) return
-           if (advanceTugWork(COMMIT_MAX_R - rawR)) {
+          if (rawR >= TUG.commitMaxR) return
+           if (advanceTugWork(TUG.commitMaxR - rawR)) {
              if (commitLockRef.current) {
                guardCommit()
                return
@@ -364,10 +335,10 @@ export function RoomCanvas({ activity, participants, me, visual, onInterested, o
         }
         // Pulled out past the lurker boundary (or easing back in from a
         // just-won transition): normal outward tug -- winning demotes.
-        const targetR = tugPositionOutward(rawR, INTERESTED_MAX_R, INTERESTED_OUT_TUG_R)
+        const targetR = tugPositionOutward(rawR, TUG.interestedMaxR, TUG.interestedOutTugR)
         springToward(ps.node, Math.cos(angle) * targetR, Math.sin(angle) * targetR)
-        if (rawR <= INTERESTED_MAX_R) return
-        if (advanceTugWork(rawR - INTERESTED_MAX_R)) {
+        if (rawR <= TUG.interestedMaxR) return
+        if (advanceTugWork(rawR - TUG.interestedMaxR)) {
           ps.node.state = 'lurker'
           resetTug()
           winEaseUntilRef.current = performance.now() + WIN_EASE_MS
@@ -379,7 +350,7 @@ export function RoomCanvas({ activity, participants, me, visual, onInterested, o
       // Lurker: free 1:1 tracking above the interested boundary, no further
       // demotion below this state. Pulled in past the boundary, the same
       // reverse tug of war applies -- winning promotes to interested.
-      if (rawR >= INTERESTED_MAX_R && !easing) {
+      if (rawR >= TUG.interestedMaxR && !easing) {
         ps.node.x = ps.worldX
         ps.node.y = ps.worldY
         ps.node.vx = 0
@@ -387,10 +358,10 @@ export function RoomCanvas({ activity, participants, me, visual, onInterested, o
         resetTug()
         return
       }
-      const targetR = tugPositionInward(rawR, INTERESTED_MAX_R, INTERESTED_IN_TUG_R)
+      const targetR = tugPositionInward(rawR, TUG.interestedMaxR, TUG.interestedInTugR)
       springToward(ps.node, Math.cos(angle) * targetR, Math.sin(angle) * targetR)
-      if (rawR >= INTERESTED_MAX_R) return
-      if (advanceTugWork(INTERESTED_MAX_R - rawR)) {
+      if (rawR >= TUG.interestedMaxR) return
+      if (advanceTugWork(TUG.interestedMaxR - rawR)) {
         ps.node.state = 'interested'
         resetTug()
         winEaseUntilRef.current = performance.now() + WIN_EASE_MS

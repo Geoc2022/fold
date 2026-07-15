@@ -4,6 +4,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { nodeColor } from '../nodeVisual'
+import { useForceTheme } from '../useForceTheme'
 
 type NodeState = 'lurker' | 'interested' | 'committed'
 type GroupingMode = 'single' | 'parallel'
@@ -37,6 +38,7 @@ const MAX_ETA_MS = 60 * 1000
 const WORLD_R = 300
 
 export function ChemistryPage() {
+  useForceTheme('light')
   const [mode, setMode] = useState<GroupingMode>('single')
   const [perGroup, setPerGroup] = useState(3)
   const modeRef = useRef<GroupingMode>('single')

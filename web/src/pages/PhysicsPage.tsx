@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { nodeColor } from '../nodeVisual'
+import { useForceTheme } from '../useForceTheme'
 
 type NodeState = 'lurker' | 'interested' | 'committed'
 
@@ -33,6 +34,7 @@ const MAX_ETA_MS = 60 * 1000
 const WORLD_R = 320
 
 export function PhysicsPage() {
+  useForceTheme('light')
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const nodesRef = useRef<Node[]>([])
   const nextIdRef = useRef(1)

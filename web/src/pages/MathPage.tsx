@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as R
 import { BiologyRoom, type BiologySnapshot, type BioParticipant, type NodeState } from '../components/BiologyRoom'
 import { compileAndEvaluate, evaluateExpression, highlightPolicy, type HighlightToken, type JsonValue } from '../policy/engine'
 import { readString, writeString } from '../storage'
+import { useForceTheme } from '../useForceTheme'
 
 const DEFAULT_POLICY = '#interested + #committed > 3 => notify "critical mass" in 15s'
 const LEFT_WIDTH_KEY = 'fold.math.left_width'
@@ -31,13 +32,13 @@ interface TerminalEntry {
 }
 
 export function MathPage() {
+  useForceTheme('light')
   const [policySource, setPolicySource] = useState(DEFAULT_POLICY)
   const [activePolicy, setActivePolicy] = useState(DEFAULT_POLICY)
   const [tokens, setTokens] = useState<HighlightToken[]>([])
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [policyStatus, setPolicyStatus] = useState('ready')
   const [snapshot, setSnapshot] = useState<BiologySnapshot>({ now: Date.now(), participants: [] })
-  const [roomRunning, setRoomRunning] = useState(true)
   const [selfState, setSelfState] = useState<NodeState>('lurker')
   const [showHelp, setShowHelp] = useState(false)
   const [terminalInput, setTerminalInput] = useState('')
@@ -178,6 +179,26 @@ export function MathPage() {
     writeString(CONSOLE_HEIGHT_KEY, String(consoleHeight))
   }, [consoleHeight])
 
+  useEffect(() => {
+    const normalizeDockHeights = () => {
+      const maxCombined = Math.max(260, window.innerHeight - 220)
+      let nextTerminal = clamp(terminalHeight, 120, 420)
+      let nextConsole = clamp(consoleHeight, 120, 420)
+      if (nextTerminal + nextConsole > maxCombined) {
+        nextConsole = maxCombined - nextTerminal
+        if (nextConsole < 120) {
+          nextConsole = 120
+          nextTerminal = clamp(maxCombined - nextConsole, 120, 420)
+        }
+      }
+      if (nextTerminal !== terminalHeight) setTerminalHeight(nextTerminal)
+      if (nextConsole !== consoleHeight) setConsoleHeight(nextConsole)
+    }
+    normalizeDockHeights()
+    window.addEventListener('resize', normalizeDockHeights)
+    return () => window.removeEventListener('resize', normalizeDockHeights)
+  }, [terminalHeight, consoleHeight])
+
   const beginResizeLeft = (e: ReactMouseEvent) => {
     e.preventDefault()
     const startX = e.clientX
@@ -201,7 +222,9 @@ export function MathPage() {
     const startHeight = terminalHeight
     const onMove = (ev: MouseEvent) => {
       const delta = startY - ev.clientY
-      setTerminalHeight(clamp(startHeight + delta, 120, 420))
+      const maxCombined = Math.max(260, window.innerHeight - 220)
+      const maxTerminal = Math.min(420, maxCombined - consoleHeight)
+      setTerminalHeight(clamp(startHeight + delta, 120, Math.max(120, maxTerminal)))
     }
     const onUp = () => {
       window.removeEventListener('mousemove', onMove)
@@ -217,7 +240,9 @@ export function MathPage() {
     const startHeight = consoleHeight
     const onMove = (ev: MouseEvent) => {
       const delta = startY - ev.clientY
-      setConsoleHeight(clamp(startHeight + delta, 120, 420))
+      const maxCombined = Math.max(260, window.innerHeight - 220)
+      const maxConsole = Math.min(420, maxCombined - terminalHeight)
+      setConsoleHeight(clamp(startHeight + delta, 120, Math.max(120, maxConsole)))
     }
     const onUp = () => {
       window.removeEventListener('mousemove', onMove)
@@ -262,7 +287,7 @@ export function MathPage() {
   return (
     <>
       <main className="math-page" style={{ gridTemplateColumns: `${leftWidth}px 3px 1fr` }}>
-      <section className="math-left" style={{ gridTemplateRows: `auto auto minmax(220px, 1fr) 3px ${terminalHeight}px 3px ${consoleHeight}px` }}>
+      <section className="math-left" style={{ gridTemplateRows: `auto auto minmax(0, 1fr) 3px ${terminalHeight}px 3px ${consoleHeight}px` }}>
         <header className="math-head">
           <span className="math-status">{policySource === activePolicy ? policyStatus : `${policyStatus} (unsaved)`}</span>
         </header>
@@ -272,14 +297,6 @@ export function MathPage() {
           </button>
           <button type="button" onClick={() => setShowHelp(true)} title="Help" aria-label="Help">
             <span className="noto-emoji" aria-hidden="true">❓</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setRoomRunning((v) => !v)}
-            title={roomRunning ? 'Pause simulation' : 'Play simulation'}
-            aria-label={roomRunning ? 'Pause simulation' : 'Play simulation'}
-          >
-            <span className="noto-emoji" aria-hidden="true">{roomRunning ? '⏸️' : '▶️'}</span>
           </button>
         </div>
         <div className="math-editor-shell">
@@ -342,8 +359,6 @@ export function MathPage() {
             embedded
             onSnapshot={onSnapshot}
             selfState={selfState}
-            running={roomRunning}
-            showPlayToggle={false}
             showLabels
             includeSelfNode
           />
