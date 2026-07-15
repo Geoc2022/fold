@@ -1,16 +1,34 @@
 use crate::diag::{Diagnostic, Span};
 
+/// A part of an interpolated string literal. `"hi {name}!"` lexes to
+/// `[Lit("hi "), Hole("name"), Lit("!")]`. Holes carry the raw source of the
+/// embedded expression, which the parser re-parses.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StrPart {
+    Lit(String),
+    Hole(String),
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
+    /// Lowercase-initial identifier (value / field name).
     Ident(String),
-    Str(String),
+    /// Uppercase-initial identifier (type / variant / trait name).
+    UIdent(String),
+    /// Interpolated string literal.
+    Str(Vec<StrPart>),
     Number(f64),
     DurationSecs(i64),
     Hash,
     Dot,
     LParen,
     RParen,
+    LBracket,
+    RBracket,
+    LBrace,
+    RBrace,
     Colon,
+    ColonColon,
     Comma,
     Plus,
     Minus,
@@ -26,10 +44,7 @@ pub enum TokenKind {
     Eq,
     FatArrow,
     Arrow,
-    LBrace,
-    RBrace,
     Pipe,
-    Semi,
     And,
     Or,
     Not,
@@ -38,8 +53,18 @@ pub enum TokenKind {
     False,
     Fun,
     Match,
+    With,
+    If,
+    Then,
+    Else,
+    Before,
+    By,
     Type,
+    Trait,
+    Impl,
     Underscore,
+    /// `(** ... *)` documentation comment (attached to following declaration).
+    DocComment(String),
     Newline,
     Indent,
     Dedent,
@@ -55,46 +80,50 @@ pub struct Token {
 /// Off-side-rule lexer (indentation from Python; token set from ML/Rust).
 ///
 /// Emits `Newline`/`Indent`/`Dedent` so the parser can handle multi-statement
-/// programs and indented `match` arms. Newlines are suppressed inside
-/// parentheses (implicit line continuation, as in Python).
+/// programs and indented `match` arms. Layout tokens are suppressed inside
+/// `()`, `[]`, and `{}` (implicit line continuation, as in Python).
 pub fn lex(input: &str) -> Result<Vec<Token>, Vec<Diagnostic>> {
     let mut out = Vec::new();
     let mut errors = Vec::new();
     let bytes = input.as_bytes();
     let mut i = 0;
+    // `()` suppress newlines (implicit continuation). Any open bracket
+    // suppresses Indent/Dedent. Inside `[]`/`{}` newlines act as separators.
     let mut paren_depth: i32 = 0;
-    let mut brace_depth: i32 = 0;
+    let mut layout_depth: i32 = 0;
     let mut indent_stack: Vec<usize> = vec![0];
-    // Are we at the beginning of a fresh logical line (need to measure indent)?
     let mut at_line_start = true;
-    // Did the current logical line emit any real token yet?
     let mut line_has_content = false;
 
     while i < bytes.len() {
-        // Handle line starts. Indentation (Indent/Dedent) is only significant at
-        // the top level; inside braces/parens we just consume leading whitespace.
         if at_line_start && paren_depth == 0 {
             let mut col = 0;
             let mut j = i;
             while j < bytes.len() {
                 match bytes[j] as char {
-                    ' ' | '\t' => {
+                    ' ' => {
+                        col += 1;
+                        j += 1;
+                    }
+                    '\t' => {
                         col += 1;
                         j += 1;
                     }
                     _ => break,
                 }
             }
-            // Blank line (only whitespace then newline or EOF): skip it.
+            // Blank line: skip.
             if j >= bytes.len() || bytes[j] as char == '\n' || bytes[j] as char == '\r' {
                 i = j;
                 if i < bytes.len() {
-                    i += 1; // consume the newline
+                    i += 1;
                 }
                 continue;
             }
-            if brace_depth == 0 {
-                // Reconcile indentation.
+            // Skip layout reconciliation if the line opens with a comment.
+            let is_comment =
+                bytes[j] as char == '(' && j + 1 < bytes.len() && bytes[j + 1] as char == '*';
+            if !is_comment && layout_depth == 0 {
                 let top = *indent_stack.last().unwrap();
                 if col > top {
                     indent_stack.push(col);
@@ -121,17 +150,31 @@ pub fn lex(input: &str) -> Result<Vec<Token>, Vec<Diagnostic>> {
 
         let ch = bytes[i] as char;
 
-        // OCaml-style comments `(* ... *)`, nestable.
+        // Comments `(* ... *)` (nestable) and doc comments `(** ... *)`.
         if ch == '(' && i + 1 < bytes.len() && bytes[i + 1] as char == '*' {
             let start = i;
+            let is_doc = i + 2 < bytes.len()
+                && bytes[i + 2] as char == '*'
+                && !(i + 3 < bytes.len() && bytes[i + 3] as char == ')');
             i += 2;
+            if is_doc {
+                i += 1; // skip the third '*' of "(**"
+            }
             let mut depth = 1;
+            let text_start = i;
+            let mut text_end = i;
             while i < bytes.len() && depth > 0 {
                 if i + 1 < bytes.len() && bytes[i] as char == '(' && bytes[i + 1] as char == '*' {
                     depth += 1;
                     i += 2;
-                } else if i + 1 < bytes.len() && bytes[i] as char == '*' && bytes[i + 1] as char == ')' {
+                } else if i + 1 < bytes.len()
+                    && bytes[i] as char == '*'
+                    && bytes[i + 1] as char == ')'
+                {
                     depth -= 1;
+                    if depth == 0 {
+                        text_end = i;
+                    }
                     i += 2;
                 } else {
                     i += 1;
@@ -139,6 +182,17 @@ pub fn lex(input: &str) -> Result<Vec<Token>, Vec<Diagnostic>> {
             }
             if depth > 0 {
                 errors.push(Diagnostic::new(Span::new(start, i), "unterminated comment"));
+                continue;
+            }
+            if is_doc {
+                // Strip the leading '*' of "(**" already consumed; text starts after it.
+                let raw = &input[text_start..text_end];
+                let text = raw.trim().to_string();
+                out.push(Token {
+                    kind: TokenKind::DocComment(text),
+                    span: Span::new(start, i),
+                });
+                line_has_content = true;
             }
             continue;
         }
@@ -176,34 +230,47 @@ pub fn lex(input: &str) -> Result<Vec<Token>, Vec<Diagnostic>> {
             '(' => {
                 i += 1;
                 paren_depth += 1;
+                layout_depth += 1;
                 TokenKind::LParen
             }
             ')' => {
                 i += 1;
                 paren_depth = (paren_depth - 1).max(0);
+                layout_depth = (layout_depth - 1).max(0);
                 TokenKind::RParen
+            }
+            '[' => {
+                i += 1;
+                layout_depth += 1;
+                TokenKind::LBracket
+            }
+            ']' => {
+                i += 1;
+                layout_depth = (layout_depth - 1).max(0);
+                TokenKind::RBracket
             }
             '{' => {
                 i += 1;
-                brace_depth += 1;
+                layout_depth += 1;
                 TokenKind::LBrace
             }
             '}' => {
                 i += 1;
-                brace_depth = (brace_depth - 1).max(0);
+                layout_depth = (layout_depth - 1).max(0);
                 TokenKind::RBrace
             }
             '|' => {
                 i += 1;
                 TokenKind::Pipe
             }
-            ';' => {
-                i += 1;
-                TokenKind::Semi
-            }
             ':' => {
-                i += 1;
-                TokenKind::Colon
+                if i + 1 < bytes.len() && bytes[i + 1] as char == ':' {
+                    i += 2;
+                    TokenKind::ColonColon
+                } else {
+                    i += 1;
+                    TokenKind::Colon
+                }
             }
             ',' => {
                 i += 1;
@@ -264,67 +331,41 @@ pub fn lex(input: &str) -> Result<Vec<Token>, Vec<Diagnostic>> {
                     TokenKind::Eq
                 }
             }
-            '"' => {
-                i += 1;
-                let mut s = String::new();
-                let mut closed = false;
-                while i < bytes.len() {
-                    let c = bytes[i] as char;
-                    if c == '"' {
-                        i += 1;
-                        closed = true;
-                        break;
-                    }
-                    if c == '\\' {
-                        if i + 1 >= bytes.len() {
-                            break;
-                        }
-                        let e = bytes[i + 1] as char;
-                        match e {
-                            '"' => s.push('"'),
-                            '\\' => s.push('\\'),
-                            'n' => s.push('\n'),
-                            't' => s.push('\t'),
-                            _ => s.push(e),
-                        }
-                        i += 2;
-                        continue;
-                    }
-                    s.push(c);
-                    i += 1;
+            '"' => match scan_string(input, bytes, i) {
+                Ok((parts, next)) => {
+                    i = next;
+                    TokenKind::Str(parts)
                 }
-                if !closed {
-                    errors.push(Diagnostic::new(
-                        Span::new(start, i),
-                        "unterminated string literal",
-                    ));
+                Err((span, msg)) => {
+                    errors.push(Diagnostic::new(span, msg));
+                    i = span.end.max(start + 1);
                     continue;
                 }
-                TokenKind::Str(s)
-            }
+            },
             '!' => {
                 if i + 1 < bytes.len() && bytes[i + 1] as char == '=' {
                     i += 2;
                     TokenKind::Neq
                 } else {
-                    errors.push(Diagnostic::new(Span::new(start, start + 1), "expected '!='"));
+                    errors.push(Diagnostic::new(
+                        Span::new(start, start + 1),
+                        "expected '!='",
+                    ));
                     i += 1;
                     continue;
                 }
             }
-            c if c.is_ascii_digit() => {
-                match scan_number(input, bytes, i) {
-                    Ok((kind, next)) => {
-                        i = next;
-                        kind
-                    }
-                    Err((span, msg)) => {
-                        errors.push(Diagnostic::new(span, msg));
-                        i = span.end;
-                        continue;
-                    }
+            c if c.is_ascii_digit() => match scan_number(input, bytes, i) {
+                Ok((kind, next)) => {
+                    i = next;
+                    kind
                 }
-            }
+                Err((span, msg)) => {
+                    errors.push(Diagnostic::new(span, msg));
+                    i = span.end;
+                    continue;
+                }
+            },
             c if c.is_ascii_alphabetic() || c == '_' => {
                 let mut end = i + 1;
                 while end < bytes.len() {
@@ -346,8 +387,17 @@ pub fn lex(input: &str) -> Result<Vec<Token>, Vec<Diagnostic>> {
                     "false" => TokenKind::False,
                     "fun" => TokenKind::Fun,
                     "match" => TokenKind::Match,
+                    "with" => TokenKind::With,
+                    "if" => TokenKind::If,
+                    "then" => TokenKind::Then,
+                    "else" => TokenKind::Else,
+                    "before" => TokenKind::Before,
+                    "by" => TokenKind::By,
                     "type" => TokenKind::Type,
+                    "trait" => TokenKind::Trait,
+                    "impl" => TokenKind::Impl,
                     "_" => TokenKind::Underscore,
+                    _ if c.is_ascii_uppercase() => TokenKind::UIdent(s.to_string()),
                     _ => TokenKind::Ident(s.to_string()),
                 }
             }
@@ -367,14 +417,12 @@ pub fn lex(input: &str) -> Result<Vec<Token>, Vec<Diagnostic>> {
         });
     }
 
-    // Trailing newline for the last logical line.
     if line_has_content {
         out.push(Token {
             kind: TokenKind::Newline,
             span: Span::new(input.len(), input.len()),
         });
     }
-    // Close out any open indentation levels.
     while *indent_stack.last().unwrap() > 0 {
         indent_stack.pop();
         out.push(Token {
@@ -391,6 +439,116 @@ pub fn lex(input: &str) -> Result<Vec<Token>, Vec<Diagnostic>> {
     } else {
         Err(errors)
     }
+}
+
+/// Scan a `"..."` string with `{expr}` interpolation holes. `{{` / `}}` escape
+/// literal braces.
+fn scan_string(
+    input: &str,
+    bytes: &[u8],
+    start: usize,
+) -> Result<(Vec<StrPart>, usize), (Span, String)> {
+    let mut i = start + 1;
+    let mut parts: Vec<StrPart> = Vec::new();
+    let mut lit = String::new();
+    let mut closed = false;
+    while i < bytes.len() {
+        let c = bytes[i] as char;
+        if c == '"' {
+            i += 1;
+            closed = true;
+            break;
+        }
+        if c == '\\' {
+            if i + 1 >= bytes.len() {
+                break;
+            }
+            let e = bytes[i + 1] as char;
+            match e {
+                '"' => lit.push('"'),
+                '\\' => lit.push('\\'),
+                'n' => lit.push('\n'),
+                't' => lit.push('\t'),
+                _ => lit.push(e),
+            }
+            i += 2;
+            continue;
+        }
+        if c == '{' {
+            if i + 1 < bytes.len() && bytes[i + 1] as char == '{' {
+                lit.push('{');
+                i += 2;
+                continue;
+            }
+            if !lit.is_empty() {
+                parts.push(StrPart::Lit(std::mem::take(&mut lit)));
+            }
+            i += 1;
+            let hole_start = i;
+            let mut depth = 1;
+            while i < bytes.len() && depth > 0 {
+                let d = bytes[i] as char;
+                if d == '{' {
+                    depth += 1;
+                    i += 1;
+                } else if d == '}' {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                    i += 1;
+                } else if d == '"' {
+                    return Err((
+                        Span::new(start, i),
+                        "unterminated interpolation hole".to_string(),
+                    ));
+                } else {
+                    i += 1;
+                }
+            }
+            if depth > 0 {
+                return Err((
+                    Span::new(start, i),
+                    "unterminated interpolation hole".to_string(),
+                ));
+            }
+            let expr = input[hole_start..i].trim().to_string();
+            i += 1; // consume '}'
+            if expr.is_empty() {
+                return Err((
+                    Span::new(hole_start, i),
+                    "empty interpolation hole".to_string(),
+                ));
+            }
+            parts.push(StrPart::Hole(expr));
+            continue;
+        }
+        if c == '}' {
+            if i + 1 < bytes.len() && bytes[i + 1] as char == '}' {
+                lit.push('}');
+                i += 2;
+                continue;
+            }
+            lit.push('}');
+            i += 1;
+            continue;
+        }
+        lit.push(c);
+        i += 1;
+    }
+    if !closed {
+        return Err((
+            Span::new(start, i),
+            "unterminated string literal".to_string(),
+        ));
+    }
+    if !lit.is_empty() {
+        parts.push(StrPart::Lit(lit));
+    }
+    if parts.is_empty() {
+        parts.push(StrPart::Lit(String::new()));
+    }
+    Ok((parts, i))
 }
 
 /// Scan a numeric literal, possibly a (compound) duration like `1m2s`.
@@ -413,7 +571,6 @@ fn scan_number(
         Ok(v) => v,
         Err(_) => return Err((Span::new(start, end), "invalid number literal".to_string())),
     };
-    // Optional unit -> duration.
     let mut unit_end = end;
     while unit_end < bytes.len() && (bytes[unit_end] as char).is_ascii_alphabetic() {
         unit_end += 1;
@@ -432,7 +589,6 @@ fn scan_number(
         }
     };
     let mut cursor = unit_end;
-    // Compound durations with no separating whitespace, e.g. `1m2s`, `1h30m`.
     while cursor < bytes.len() && (bytes[cursor] as char).is_ascii_digit() {
         let mut num_end = cursor + 1;
         while num_end < bytes.len() && (bytes[num_end] as char).is_ascii_digit() {
@@ -456,7 +612,12 @@ fn scan_number(
         }
         let part_num = match input[cursor..num_end].parse::<f64>() {
             Ok(v) => v,
-            Err(_) => return Err((Span::new(cursor, num_end), "invalid number literal".to_string())),
+            Err(_) => {
+                return Err((
+                    Span::new(cursor, num_end),
+                    "invalid number literal".to_string(),
+                ))
+            }
         };
         let part_unit = &input[num_end..u_end];
         match duration_secs(part_num, part_unit) {

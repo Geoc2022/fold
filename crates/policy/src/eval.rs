@@ -1,75 +1,921 @@
+//! Tree-walking evaluator. Produces a structured **effect program** (see
+//! [`Effect`]) that the host executes against the simulation. Trait methods are
+//! resolved by runtime dispatch on the type tag of the first argument
+//! (built-in `Eq`/`Ord`/`Display`/`Arith` are handled structurally; user
+//! `impl`s dispatch to their bindings). A step limit bounds recursion so the
+//! self-hosted prelude cannot hang the playground.
+
+use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{
-    ActionSpec, BinaryOp, Binding, Decl, Expr, MatchArm, Pattern, TypedProgram, UnaryOp,
+    BinaryOp, Binding, Decl, Expr, MatchArm, Pattern, StrSeg, TypeBody, TypedProgram, UnaryOp,
 };
+use crate::prelude::PRELUDE_SRC;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+const STEP_LIMIT: u64 = 200_000;
+
+/// A runtime value. Data variants are (de)serialisable so the host can pass
+/// globals in and read results out. Closures/methods are runtime-only.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "value")]
 pub enum Value {
     Num(f64),
     Bool(bool),
-    DurSecs(i64),
+    Dur(i64),
     Str(String),
     List(Vec<Value>),
     Tuple(Vec<Value>),
-    Record(HashMap<String, Value>),
-    Variant(String),
-    Closure {
-        param: String,
-        body: Box<Expr>,
-        env: HashMap<String, Value>,
+    Record {
+        #[serde(rename = "type")]
+        type_name: String,
+        fields: BTreeMap<String, Value>,
     },
-    Builtin(String),
+    Variant {
+        #[serde(rename = "type")]
+        type_name: String,
+        name: String,
+        values: Vec<Value>,
+    },
+    Action(Effect),
+    #[serde(skip)]
+    Closure(Rc<Closure>),
+    #[serde(skip)]
+    Ctor {
+        type_name: String,
+        name: String,
+        arity: usize,
+        args: Vec<Value>,
+    },
+    #[serde(skip)]
+    Builtin {
+        name: String,
+        arity: usize,
+        args: Vec<Value>,
+    },
+    #[serde(skip)]
+    Method {
+        name: String,
+        trait_name: String,
+        arity: usize,
+        args: Vec<Value>,
+    },
+    #[serde(skip)]
+    #[default]
+    Unit,
 }
 
+#[derive(Debug, Clone)]
+pub struct Closure {
+    pub param: String,
+    pub body: Expr,
+    pub env: HashMap<String, Value>,
+    pub rec_name: Option<String>,
+}
+
+/// The structured effect program produced by evaluating a policy action.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "op")]
+pub enum Effect {
+    #[serde(rename = "notify")]
+    Notify { message: String },
+    #[serde(rename = "state")]
+    SetState { state: String },
+    #[serde(rename = "sleep")]
+    Sleep { secs: i64 },
+    #[serde(rename = "seq")]
+    Seq { steps: Vec<Effect> },
+    #[serde(rename = "noop")]
+    Noop,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvalError(pub String);
+
+/// The evaluation environment supplied by the host: global variable values.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EvalEnv {
+    #[serde(default)]
     pub vars: HashMap<String, Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum FiredAction {
-    Notify {
-        message: Option<String>,
-        after_secs: Option<i64>,
-    },
-    Commit,
-    Interest,
-    Lurk,
+struct Evaluator {
+    steps: u64,
+    ctors: HashMap<String, (String, usize)>, // ctor name -> (enum type, arity)
+    enum_order: HashMap<String, Vec<String>>, // enum type -> variant names in order
+    record_fields: HashMap<String, Vec<String>>, // record type -> field names
+    field_owner: HashMap<String, Vec<String>>,
+    impls: HashMap<(String, String), HashMap<String, Value>>, // (trait, type head) -> methods
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct EvalError(pub String);
+impl Evaluator {
+    fn new() -> Self {
+        Evaluator {
+            steps: 0,
+            ctors: HashMap::new(),
+            enum_order: HashMap::new(),
+            record_fields: HashMap::new(),
+            field_owner: HashMap::new(),
+            impls: HashMap::new(),
+        }
+    }
 
-/// Human-readable rendering of a value (used by the terminal/REPL).
-pub fn format_value(value: &Value) -> String {
-    match value {
-        Value::Num(n) => format_num(*n),
-        Value::Bool(b) => b.to_string(),
-        Value::DurSecs(s) => format_dur(*s),
-        Value::Str(s) => format!("\"{s}\""),
-        Value::List(items) => {
-            let inner: Vec<String> = items.iter().map(format_value).collect();
-            format!("[{}]", inner.join(", "))
+    fn tick(&mut self) -> Result<(), EvalError> {
+        self.steps += 1;
+        if self.steps > STEP_LIMIT {
+            Err(EvalError("evaluation step limit exceeded".to_string()))
+        } else {
+            Ok(())
         }
-        Value::Tuple(items) => {
-            let inner: Vec<String> = items.iter().map(format_value).collect();
-            format!("({})", inner.join(", "))
+    }
+
+    fn register_builtin_types(&mut self) {
+        for decl in crate::types::builtin_type_decls() {
+            self.register_type(&decl);
         }
-        Value::Record(map) => {
-            let mut keys: Vec<&String> = map.keys().collect();
-            keys.sort();
-            let inner: Vec<String> = keys
-                .iter()
-                .map(|k| format!("{k} = {}", format_value(&map[*k])))
-                .collect();
-            format!("{{ {} }}", inner.join("; "))
+    }
+
+    fn register_type(&mut self, decl: &crate::ast::TypeDecl) {
+        match &decl.body {
+            TypeBody::Variant(variants) => {
+                let names: Vec<String> = variants.iter().map(|v| v.name.clone()).collect();
+                self.enum_order.insert(decl.name.clone(), names);
+                for v in variants {
+                    self.ctors
+                        .insert(v.name.clone(), (decl.name.clone(), v.args.len()));
+                }
+            }
+            TypeBody::Record(fields) => {
+                let names: Vec<String> = fields.iter().map(|(n, _)| n.clone()).collect();
+                for n in &names {
+                    self.field_owner
+                        .entry(n.clone())
+                        .or_default()
+                        .push(decl.name.clone());
+                }
+                self.record_fields.insert(decl.name.clone(), names);
+            }
+            TypeBody::Alias(_) => {}
         }
-        Value::Variant(name) => name.clone(),
-        Value::Closure { .. } => "<fun>".to_string(),
-        Value::Builtin(name) => format!("<builtin {name}>"),
+    }
+
+    fn register_decl(&mut self, decl: &Decl, env: &HashMap<String, Value>) {
+        match decl {
+            Decl::Type(t) => self.register_type(t),
+            Decl::Impl(i) => {
+                if let Some(head) = crate::types::ty_head(&i.ty) {
+                    let mut methods = HashMap::new();
+                    for b in &i.methods {
+                        if let Pattern::Var(name) = &b.pattern {
+                            if let Ok(v) = self.make_binding_value(name, &b.value, env) {
+                                methods.insert(name.clone(), v);
+                            }
+                        }
+                    }
+                    self.impls.insert((i.trait_name.clone(), head), methods);
+                }
+            }
+            Decl::Trait(_) => {}
+        }
+    }
+
+    fn make_binding_value(
+        &mut self,
+        name: &str,
+        value: &Expr,
+        env: &HashMap<String, Value>,
+    ) -> Result<Value, EvalError> {
+        if let Expr::Lambda { param, body } = value {
+            Ok(Value::Closure(Rc::new(Closure {
+                param: param.clone(),
+                body: (**body).clone(),
+                env: env.clone(),
+                rec_name: Some(name.to_string()),
+            })))
+        } else {
+            self.eval(value, env)
+        }
+    }
+
+    fn eval_bindings(
+        &mut self,
+        bindings: &[Binding],
+        mut env: HashMap<String, Value>,
+    ) -> Result<HashMap<String, Value>, EvalError> {
+        for b in bindings {
+            match &b.pattern {
+                Pattern::Var(name) => {
+                    let v = self.make_binding_value(name, &b.value, &env)?;
+                    env.insert(name.clone(), v);
+                }
+                pat => {
+                    let v = self.eval(&b.value, &env)?;
+                    let mut binds = HashMap::new();
+                    if !self.match_pattern(pat, &v, &mut binds) {
+                        return Err(EvalError("binding pattern did not match".to_string()));
+                    }
+                    env.extend(binds);
+                }
+            }
+        }
+        Ok(env)
+    }
+
+    fn eval(&mut self, expr: &Expr, env: &HashMap<String, Value>) -> Result<Value, EvalError> {
+        self.tick()?;
+        match expr {
+            Expr::Num(n) => Ok(Value::Num(*n)),
+            Expr::Bool(b) => Ok(Value::Bool(*b)),
+            Expr::DurationSecs(s) => Ok(Value::Dur(*s)),
+            Expr::Str(segs) => {
+                let mut out = String::new();
+                for seg in segs {
+                    match seg {
+                        StrSeg::Lit(s) => out.push_str(s),
+                        StrSeg::Expr(e) => {
+                            let v = self.eval(e, env)?;
+                            out.push_str(&self.display(&v));
+                        }
+                    }
+                }
+                Ok(Value::Str(out))
+            }
+            Expr::Var(name) => env
+                .get(name)
+                .cloned()
+                .ok_or_else(|| EvalError(format!("unbound variable '{name}'"))),
+            Expr::Ctor(name) => {
+                let (type_name, arity) = self
+                    .ctors
+                    .get(name)
+                    .cloned()
+                    .ok_or_else(|| EvalError(format!("unknown constructor '{name}'")))?;
+                if arity == 0 {
+                    Ok(Value::Variant {
+                        type_name,
+                        name: name.clone(),
+                        values: vec![],
+                    })
+                } else {
+                    Ok(Value::Ctor {
+                        type_name,
+                        name: name.clone(),
+                        arity,
+                        args: vec![],
+                    })
+                }
+            }
+            Expr::List(items) => {
+                let mut out = Vec::with_capacity(items.len());
+                for it in items {
+                    out.push(self.eval(it, env)?);
+                }
+                Ok(Value::List(out))
+            }
+            Expr::Tuple(items) => {
+                let mut out = Vec::with_capacity(items.len());
+                for it in items {
+                    out.push(self.eval(it, env)?);
+                }
+                Ok(Value::Tuple(out))
+            }
+            Expr::Cons(head, tail) => {
+                let h = self.eval(head, env)?;
+                let t = self.eval(tail, env)?;
+                match t {
+                    Value::List(mut xs) => {
+                        xs.insert(0, h);
+                        Ok(Value::List(xs))
+                    }
+                    _ => Err(EvalError("'::' expects a list on the right".to_string())),
+                }
+            }
+            Expr::Record(fields) => {
+                let mut map = BTreeMap::new();
+                for (name, e) in fields {
+                    map.insert(name.clone(), self.eval(e, env)?);
+                }
+                let labels: Vec<String> = fields.iter().map(|(n, _)| n.clone()).collect();
+                let type_name = self.record_type_for(&labels);
+                Ok(Value::Record {
+                    type_name,
+                    fields: map,
+                })
+            }
+            Expr::Field { base, field } => {
+                let b = self.eval(base, env)?;
+                match b {
+                    Value::Record { fields, .. } => fields
+                        .get(field)
+                        .cloned()
+                        .ok_or_else(|| EvalError(format!("no field '{field}'"))),
+                    _ => Err(EvalError(format!("cannot read field '{field}'"))),
+                }
+            }
+            Expr::TupleIndex { base, index } => {
+                let b = self.eval(base, env)?;
+                match b {
+                    Value::Tuple(items) if *index < items.len() => Ok(items[*index].clone()),
+                    _ => Err(EvalError(format!("cannot take .{index}"))),
+                }
+            }
+            Expr::Lambda { param, body } => Ok(Value::Closure(Rc::new(Closure {
+                param: param.clone(),
+                body: (**body).clone(),
+                env: env.clone(),
+                rec_name: None,
+            }))),
+            Expr::Apply { func, arg } => {
+                let f = self.eval(func, env)?;
+                let a = self.eval(arg, env)?;
+                self.apply(f, a)
+            }
+            Expr::If { cond, then, els } => {
+                let c = self.eval(cond, env)?;
+                match c {
+                    Value::Bool(true) => self.eval(then, env),
+                    Value::Bool(false) => self.eval(els, env),
+                    _ => Err(EvalError("if condition must be Bool".to_string())),
+                }
+            }
+            Expr::Match { scrutinee, arms } => self.eval_match(scrutinee, arms, env),
+            Expr::Block(items) => {
+                let mut effects = Vec::new();
+                for it in items {
+                    let v = self.eval(it, env)?;
+                    effects.push(self.as_effect(v)?);
+                }
+                Ok(Value::Action(flatten_seq(effects)))
+            }
+            Expr::Unary { op, expr } => {
+                let v = self.eval(expr, env)?;
+                match (op, v) {
+                    (UnaryOp::Not, Value::Bool(b)) => Ok(Value::Bool(!b)),
+                    (UnaryOp::Neg, Value::Num(n)) => Ok(Value::Num(-n)),
+                    (UnaryOp::Neg, Value::Dur(d)) => Ok(Value::Dur(-d)),
+                    _ => Err(EvalError("bad operand for unary operator".to_string())),
+                }
+            }
+            Expr::Binary { op, left, right } => {
+                if matches!(op, BinaryOp::And | BinaryOp::Or) {
+                    // Short-circuit.
+                    let l = self.eval(left, env)?;
+                    let lb = as_bool(&l)?;
+                    return match op {
+                        BinaryOp::And if !lb => Ok(Value::Bool(false)),
+                        BinaryOp::Or if lb => Ok(Value::Bool(true)),
+                        _ => {
+                            let r = self.eval(right, env)?;
+                            Ok(Value::Bool(as_bool(&r)?))
+                        }
+                    };
+                }
+                let l = self.eval(left, env)?;
+                let r = self.eval(right, env)?;
+                self.binary(*op, l, r)
+            }
+        }
+    }
+
+    fn apply(&mut self, func: Value, arg: Value) -> Result<Value, EvalError> {
+        match func {
+            Value::Closure(clo) => {
+                let mut call_env = clo.env.clone();
+                if let Some(name) = &clo.rec_name {
+                    call_env.insert(name.clone(), Value::Closure(clo.clone()));
+                }
+                call_env.insert(clo.param.clone(), arg);
+                self.eval(&clo.body, &call_env)
+            }
+            Value::Ctor {
+                type_name,
+                name,
+                arity,
+                mut args,
+            } => {
+                args.push(arg);
+                if args.len() == arity {
+                    Ok(Value::Variant {
+                        type_name,
+                        name,
+                        values: args,
+                    })
+                } else {
+                    Ok(Value::Ctor {
+                        type_name,
+                        name,
+                        arity,
+                        args,
+                    })
+                }
+            }
+            Value::Builtin {
+                name,
+                arity,
+                mut args,
+            } => {
+                args.push(arg);
+                if args.len() == arity {
+                    self.run_builtin(&name, args)
+                } else {
+                    Ok(Value::Builtin { name, arity, args })
+                }
+            }
+            Value::Method {
+                name,
+                trait_name,
+                arity,
+                mut args,
+            } => {
+                args.push(arg);
+                if args.len() == arity {
+                    self.run_method(&trait_name, &name, args)
+                } else {
+                    Ok(Value::Method {
+                        name,
+                        trait_name,
+                        arity,
+                        args,
+                    })
+                }
+            }
+            _ => Err(EvalError("cannot call a non-function value".to_string())),
+        }
+    }
+
+    fn eval_match(
+        &mut self,
+        scrutinee: &Expr,
+        arms: &[MatchArm],
+        env: &HashMap<String, Value>,
+    ) -> Result<Value, EvalError> {
+        let v = self.eval(scrutinee, env)?;
+        for arm in arms {
+            let mut binds = HashMap::new();
+            if self.match_pattern(&arm.pattern, &v, &mut binds) {
+                let mut inner = env.clone();
+                inner.extend(binds);
+                return self.eval(&arm.body, &inner);
+            }
+        }
+        Err(EvalError("no match arm matched".to_string()))
+    }
+
+    fn match_pattern(
+        &self,
+        pat: &Pattern,
+        value: &Value,
+        binds: &mut HashMap<String, Value>,
+    ) -> bool {
+        match pat {
+            Pattern::Wildcard => true,
+            Pattern::Var(name) => {
+                binds.insert(name.clone(), value.clone());
+                true
+            }
+            Pattern::Num(n) => matches!(value, Value::Num(v) if v == n),
+            Pattern::Bool(b) => matches!(value, Value::Bool(v) if v == b),
+            Pattern::Str(s) => matches!(value, Value::Str(v) if v == s),
+            Pattern::Dur(d) => matches!(value, Value::Dur(v) if v == d),
+            Pattern::Tuple(ps) => match value {
+                Value::Tuple(vs) if vs.len() == ps.len() => ps
+                    .iter()
+                    .zip(vs.iter())
+                    .all(|(p, v)| self.match_pattern(p, v, binds)),
+                _ => false,
+            },
+            Pattern::Nil => matches!(value, Value::List(v) if v.is_empty()),
+            Pattern::Cons(head, tail) => match value {
+                Value::List(vs) if !vs.is_empty() => {
+                    let h = &vs[0];
+                    let rest = Value::List(vs[1..].to_vec());
+                    self.match_pattern(head, h, binds) && self.match_pattern(tail, &rest, binds)
+                }
+                _ => false,
+            },
+            Pattern::List(ps) => match value {
+                Value::List(vs) if vs.len() == ps.len() => ps
+                    .iter()
+                    .zip(vs.iter())
+                    .all(|(p, v)| self.match_pattern(p, v, binds)),
+                _ => false,
+            },
+            Pattern::Variant { name, args } => match value {
+                Value::Variant {
+                    name: vn, values, ..
+                } if vn == name && values.len() == args.len() => args
+                    .iter()
+                    .zip(values.iter())
+                    .all(|(p, v)| self.match_pattern(p, v, binds)),
+                _ => false,
+            },
+            Pattern::Record { fields, .. } => match value {
+                Value::Record { fields: vf, .. } => fields.iter().all(|(name, sub)| {
+                    if let Some(v) = vf.get(name) {
+                        match sub {
+                            Some(p) => self.match_pattern(p, v, binds),
+                            None => {
+                                binds.insert(name.clone(), v.clone());
+                                true
+                            }
+                        }
+                    } else {
+                        false
+                    }
+                }),
+                _ => false,
+            },
+        }
+    }
+
+    fn record_type_for(&self, labels: &[String]) -> String {
+        use std::collections::HashSet;
+        let set: HashSet<&str> = labels.iter().map(|s| s.as_str()).collect();
+        for (rname, fields) in &self.record_fields {
+            let rset: HashSet<&str> = fields.iter().map(|s| s.as_str()).collect();
+            if rset == set {
+                return rname.clone();
+            }
+        }
+        "Record".to_string()
+    }
+
+    // ----- operators -----
+
+    fn binary(&mut self, op: BinaryOp, l: Value, r: Value) -> Result<Value, EvalError> {
+        match op {
+            BinaryOp::Xor => Ok(Value::Bool(as_bool(&l)? ^ as_bool(&r)?)),
+            BinaryOp::And | BinaryOp::Or => unreachable!("handled by short-circuit"),
+            BinaryOp::Eq => Ok(Value::Bool(values_equal(&l, &r))),
+            BinaryOp::Neq => Ok(Value::Bool(!values_equal(&l, &r))),
+            BinaryOp::Lt | BinaryOp::Lte | BinaryOp::Gt | BinaryOp::Gte => {
+                let ord = self.compare(&l, &r)?;
+                let res = match op {
+                    BinaryOp::Lt => ord == std::cmp::Ordering::Less,
+                    BinaryOp::Lte => ord != std::cmp::Ordering::Greater,
+                    BinaryOp::Gt => ord == std::cmp::Ordering::Greater,
+                    BinaryOp::Gte => ord != std::cmp::Ordering::Less,
+                    _ => unreachable!(),
+                };
+                Ok(Value::Bool(res))
+            }
+            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => {
+                self.arith(op, l, r)
+            }
+        }
+    }
+
+    fn arith(&self, op: BinaryOp, l: Value, r: Value) -> Result<Value, EvalError> {
+        use Value::{Dur, Num};
+        match (op, &l, &r) {
+            (BinaryOp::Add, Num(a), Num(b)) => Ok(Num(a + b)),
+            (BinaryOp::Sub, Num(a), Num(b)) => Ok(Num(a - b)),
+            (BinaryOp::Mul, Num(a), Num(b)) => Ok(Num(a * b)),
+            (BinaryOp::Div, Num(a), Num(b)) => Ok(Num(a / b)),
+            (BinaryOp::Mod, Num(a), Num(b)) => Ok(Num(a % b)),
+            (BinaryOp::Add, Dur(a), Dur(b)) => Ok(Dur(a + b)),
+            (BinaryOp::Sub, Dur(a), Dur(b)) => Ok(Dur(a - b)),
+            (BinaryOp::Mul, Dur(a), Num(b)) => Ok(Dur(((*a as f64) * b) as i64)),
+            (BinaryOp::Mul, Num(a), Dur(b)) => Ok(Dur(((*b as f64) * a) as i64)),
+            (BinaryOp::Div, Dur(a), Num(b)) => Ok(Dur(((*a as f64) / b) as i64)),
+            (BinaryOp::Div, Dur(a), Dur(b)) => {
+                if *b == 0 {
+                    Err(EvalError("division by zero".to_string()))
+                } else {
+                    Ok(Num(*a as f64 / *b as f64))
+                }
+            }
+            _ => Err(EvalError("bad operands for arithmetic".to_string())),
+        }
+    }
+
+    fn compare(&self, l: &Value, r: &Value) -> Result<std::cmp::Ordering, EvalError> {
+        use std::cmp::Ordering;
+        match (l, r) {
+            (Value::Num(a), Value::Num(b)) => a
+                .partial_cmp(b)
+                .ok_or_else(|| EvalError("NaN comparison".to_string())),
+            (Value::Dur(a), Value::Dur(b)) => Ok(a.cmp(b)),
+            (Value::Str(a), Value::Str(b)) => Ok(a.cmp(b)),
+            (Value::Bool(a), Value::Bool(b)) => Ok(a.cmp(b)),
+            (Value::List(a), Value::List(b)) => {
+                for (x, y) in a.iter().zip(b.iter()) {
+                    let c = self.compare(x, y)?;
+                    if c != Ordering::Equal {
+                        return Ok(c);
+                    }
+                }
+                Ok(a.len().cmp(&b.len()))
+            }
+            (Value::Tuple(a), Value::Tuple(b)) => {
+                for (x, y) in a.iter().zip(b.iter()) {
+                    let c = self.compare(x, y)?;
+                    if c != Ordering::Equal {
+                        return Ok(c);
+                    }
+                }
+                Ok(Ordering::Equal)
+            }
+            (Value::Record { type_name, fields }, Value::Record { fields: fb, .. }) => {
+                let order = self.record_fields.get(type_name);
+                let keys: Vec<&String> = match order {
+                    Some(ks) => ks.iter().collect(),
+                    None => fields.keys().collect(),
+                };
+                for k in keys {
+                    if let (Some(x), Some(y)) = (fields.get(k), fb.get(k)) {
+                        let c = self.compare(x, y)?;
+                        if c != Ordering::Equal {
+                            return Ok(c);
+                        }
+                    }
+                }
+                Ok(Ordering::Equal)
+            }
+            (
+                Value::Variant {
+                    type_name,
+                    name: na,
+                    values: va,
+                },
+                Value::Variant {
+                    name: nb,
+                    values: vb,
+                    ..
+                },
+            ) => {
+                let ia = self.variant_index(type_name, na);
+                let ib = self.variant_index(type_name, nb);
+                let c = ia.cmp(&ib);
+                if c != Ordering::Equal {
+                    return Ok(c);
+                }
+                for (x, y) in va.iter().zip(vb.iter()) {
+                    let c = self.compare(x, y)?;
+                    if c != Ordering::Equal {
+                        return Ok(c);
+                    }
+                }
+                Ok(Ordering::Equal)
+            }
+            _ => Err(EvalError("values are not comparable".to_string())),
+        }
+    }
+
+    fn variant_index(&self, type_name: &str, name: &str) -> usize {
+        self.enum_order
+            .get(type_name)
+            .and_then(|v| v.iter().position(|n| n == name))
+            .unwrap_or(0)
+    }
+
+    // ----- builtins & methods -----
+
+    fn run_builtin(&mut self, name: &str, args: Vec<Value>) -> Result<Value, EvalError> {
+        match name {
+            "abs" => Ok(Value::Num(as_num(&args[0])?.abs())),
+            "floor" => Ok(Value::Num(as_num(&args[0])?.floor())),
+            "ceil" => Ok(Value::Num(as_num(&args[0])?.ceil())),
+            "round" => Ok(Value::Num(as_num(&args[0])?.round())),
+            "min" | "max" => {
+                let xs = as_list(&args[0])?;
+                if xs.is_empty() {
+                    return Err(EvalError(format!("{name} of empty list")));
+                }
+                let want_less = name == "min";
+                let mut best = xs[0].clone();
+                for v in &xs[1..] {
+                    let c = self.compare(v, &best)?;
+                    if (want_less && c == std::cmp::Ordering::Less)
+                        || (!want_less && c == std::cmp::Ordering::Greater)
+                    {
+                        best = v.clone();
+                    }
+                }
+                Ok(best)
+            }
+            "notify" => Ok(Value::Action(Effect::Notify {
+                message: as_str(&args[0])?,
+            })),
+            "sleep" => Ok(Value::Action(Effect::Sleep {
+                secs: as_dur(&args[0])?,
+            })),
+            "delay" => {
+                let inner = self.as_effect(args[0].clone())?;
+                let secs = as_dur(&args[1])?;
+                Ok(Value::Action(flatten_seq(vec![
+                    Effect::Sleep { secs },
+                    inner,
+                ])))
+            }
+            _ => Err(EvalError(format!("unknown builtin '{name}'"))),
+        }
+    }
+
+    fn run_method(
+        &mut self,
+        trait_name: &str,
+        method: &str,
+        args: Vec<Value>,
+    ) -> Result<Value, EvalError> {
+        // Built-in traits are handled structurally.
+        match (trait_name, method) {
+            ("Display", "show") => return Ok(Value::Str(self.display(&args[0]))),
+            ("Eq", "eq") => return Ok(Value::Bool(values_equal(&args[0], &args[1]))),
+            ("Ord", m) => {
+                let ord = self.compare(&args[0], &args[1])?;
+                let res = match m {
+                    "lt" => ord == std::cmp::Ordering::Less,
+                    "le" => ord != std::cmp::Ordering::Greater,
+                    "gt" => ord == std::cmp::Ordering::Greater,
+                    "ge" => ord != std::cmp::Ordering::Less,
+                    _ => return Err(EvalError(format!("unknown Ord method '{m}'"))),
+                };
+                return Ok(Value::Bool(res));
+            }
+            ("Arith", m) => {
+                let op = match m {
+                    "add" => BinaryOp::Add,
+                    "sub" => BinaryOp::Sub,
+                    "mul" => BinaryOp::Mul,
+                    "div" => BinaryOp::Div,
+                    "rem" => BinaryOp::Mod,
+                    _ => return Err(EvalError(format!("unknown Arith method '{m}'"))),
+                };
+                return self.arith(op, args[0].clone(), args[1].clone());
+            }
+            _ => {}
+        }
+        // User-defined trait: dispatch on the first argument's type tag.
+        let tag = type_tag(&args[0]);
+        let key = (trait_name.to_string(), tag.clone());
+        let method_val = self
+            .impls
+            .get(&key)
+            .and_then(|m| m.get(method))
+            .cloned()
+            .ok_or_else(|| {
+                EvalError(format!(
+                    "no impl of {trait_name} for {tag} (method '{method}')"
+                ))
+            })?;
+        let mut cur = method_val;
+        for a in args {
+            cur = self.apply(cur, a)?;
+        }
+        Ok(cur)
+    }
+
+    fn as_effect(&self, v: Value) -> Result<Effect, EvalError> {
+        match v {
+            Value::Action(e) => Ok(e),
+            _ => Err(EvalError("expected an action".to_string())),
+        }
+    }
+
+    // ----- display -----
+
+    fn display(&self, v: &Value) -> String {
+        match v {
+            Value::Str(s) => s.clone(),
+            other => self.format(other),
+        }
+    }
+
+    fn format(&self, v: &Value) -> String {
+        match v {
+            Value::Num(n) => format_num(*n),
+            Value::Bool(b) => b.to_string(),
+            Value::Dur(s) => format_dur(*s),
+            Value::Str(s) => format!("\"{s}\""),
+            Value::List(items) => {
+                let parts: Vec<String> = items.iter().map(|x| self.format(x)).collect();
+                format!("[{}]", parts.join(", "))
+            }
+            Value::Tuple(items) => {
+                let parts: Vec<String> = items.iter().map(|x| self.format(x)).collect();
+                format!("({})", parts.join(", "))
+            }
+            Value::Record { fields, .. } => {
+                let parts: Vec<String> = fields
+                    .iter()
+                    .map(|(k, v)| format!("{k} = {}", self.format(v)))
+                    .collect();
+                format!("{{ {} }}", parts.join(", "))
+            }
+            Value::Variant { name, values, .. } => {
+                if values.is_empty() {
+                    name.clone()
+                } else {
+                    let parts: Vec<String> = values.iter().map(|x| self.format(x)).collect();
+                    format!("{name}({})", parts.join(", "))
+                }
+            }
+            Value::Action(_) => "<action>".to_string(),
+            Value::Closure(_)
+            | Value::Builtin { .. }
+            | Value::Method { .. }
+            | Value::Ctor { .. } => "<function>".to_string(),
+            Value::Unit => "()".to_string(),
+        }
+    }
+}
+
+fn flatten_seq(effects: Vec<Effect>) -> Effect {
+    let mut steps = Vec::new();
+    for e in effects {
+        match e {
+            Effect::Seq { steps: inner } => steps.extend(inner),
+            Effect::Noop => {}
+            other => steps.push(other),
+        }
+    }
+    match steps.len() {
+        0 => Effect::Noop,
+        1 => steps.pop().unwrap(),
+        _ => Effect::Seq { steps },
+    }
+}
+
+fn type_tag(v: &Value) -> String {
+    match v {
+        Value::Num(_) => "Num".to_string(),
+        Value::Bool(_) => "Bool".to_string(),
+        Value::Dur(_) => "Dur".to_string(),
+        Value::Str(_) => "Str".to_string(),
+        Value::List(_) => "List".to_string(),
+        Value::Tuple(_) => "Tuple".to_string(),
+        Value::Record { type_name, .. } => type_name.clone(),
+        Value::Variant { type_name, .. } => type_name.clone(),
+        Value::Action(_) => "Action".to_string(),
+        _ => "Fun".to_string(),
+    }
+}
+
+fn values_equal(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Num(x), Value::Num(y)) => x == y,
+        (Value::Bool(x), Value::Bool(y)) => x == y,
+        (Value::Dur(x), Value::Dur(y)) => x == y,
+        (Value::Str(x), Value::Str(y)) => x == y,
+        (Value::List(x), Value::List(y)) => {
+            x.len() == y.len() && x.iter().zip(y).all(|(a, b)| values_equal(a, b))
+        }
+        (Value::Tuple(x), Value::Tuple(y)) => {
+            x.len() == y.len() && x.iter().zip(y).all(|(a, b)| values_equal(a, b))
+        }
+        (Value::Record { fields: x, .. }, Value::Record { fields: y, .. }) => {
+            x.len() == y.len()
+                && x.iter()
+                    .all(|(k, v)| y.get(k).map(|w| values_equal(v, w)).unwrap_or(false))
+        }
+        (
+            Value::Variant {
+                name: na,
+                values: va,
+                ..
+            },
+            Value::Variant {
+                name: nb,
+                values: vb,
+                ..
+            },
+        ) => na == nb && va.len() == vb.len() && va.iter().zip(vb).all(|(a, b)| values_equal(a, b)),
+        _ => false,
+    }
+}
+
+fn as_bool(v: &Value) -> Result<bool, EvalError> {
+    match v {
+        Value::Bool(b) => Ok(*b),
+        _ => Err(EvalError("expected Bool".to_string())),
+    }
+}
+fn as_num(v: &Value) -> Result<f64, EvalError> {
+    match v {
+        Value::Num(n) => Ok(*n),
+        _ => Err(EvalError("expected Num".to_string())),
+    }
+}
+fn as_dur(v: &Value) -> Result<i64, EvalError> {
+    match v {
+        Value::Dur(d) => Ok(*d),
+        _ => Err(EvalError("expected Dur".to_string())),
+    }
+}
+fn as_str(v: &Value) -> Result<String, EvalError> {
+    match v {
+        Value::Str(s) => Ok(s.clone()),
+        _ => Err(EvalError("expected Str".to_string())),
+    }
+}
+fn as_list(v: &Value) -> Result<Vec<Value>, EvalError> {
+    match v {
+        Value::List(xs) => Ok(xs.clone()),
+        _ => Err(EvalError("expected a list".to_string())),
     }
 }
 
@@ -86,11 +932,11 @@ fn format_dur(total: i64) -> String {
         return "0s".to_string();
     }
     let neg = total < 0;
-    let mut secs = total.abs();
-    let h = secs / 3600;
-    secs %= 3600;
-    let m = secs / 60;
-    secs %= 60;
+    let mut s = total.abs();
+    let h = s / 3600;
+    s %= 3600;
+    let m = s / 60;
+    let sec = s % 60;
     let mut out = String::new();
     if h > 0 {
         out.push_str(&format!("{h}h"));
@@ -98,8 +944,8 @@ fn format_dur(total: i64) -> String {
     if m > 0 {
         out.push_str(&format!("{m}m"));
     }
-    if secs > 0 {
-        out.push_str(&format!("{secs}s"));
+    if sec > 0 {
+        out.push_str(&format!("{sec}s"));
     }
     if neg {
         format!("-{out}")
@@ -108,461 +954,130 @@ fn format_dur(total: i64) -> String {
     }
 }
 
-pub fn eval_program(
-    program: &TypedProgram,
-    env: &EvalEnv,
-) -> Result<Option<FiredAction>, EvalError> {
-    let mut vars = env.vars.clone();
-    // Inject enum variants as values so bare `Red` resolves like a constructor.
-    for decl in &program.decls {
-        if let Decl::Enum { variants, .. } = decl {
-            for v in variants {
-                vars.insert(v.clone(), Value::Variant(v.clone()));
-            }
-        }
-    }
-    for binding in &program.bindings {
-        match binding {
-            Binding::Simple { name, value } => {
-                let v = eval_expr(value, &vars)?;
-                vars.insert(name.clone(), v);
-            }
-            Binding::Record { fields, value, .. } => {
-                let v = eval_expr(value, &vars)?;
-                match v {
-                    Value::Record(map) => {
-                        for f in fields {
-                            let fv = map.get(f).cloned().ok_or_else(|| {
-                                EvalError(format!("record has no field '{f}'"))
-                            })?;
-                            vars.insert(f.clone(), fv);
-                        }
-                    }
-                    _ => return Err(EvalError("destructuring requires a record".into())),
-                }
-            }
-        }
-    }
+// ---------------------------------------------------------------------------
+// Runtime environment construction
+// ---------------------------------------------------------------------------
 
-    let cond = eval_expr(&program.condition, &vars)?;
-    match cond {
-        Value::Bool(false) => Ok(None),
-        Value::Bool(true) => match &program.action.spec {
-            ActionSpec::Notify { message, after } => {
-                let after_secs = match after {
-                    Some(expr) => match eval_expr(expr, &vars)? {
-                        Value::DurSecs(s) => Some(s.max(0)),
-                        _ => {
-                            return Err(EvalError(
-                                "notify(after) must evaluate to duration".into(),
-                            ))
-                        }
-                    },
-                    None => None,
-                };
-                Ok(Some(FiredAction::Notify {
-                    message: message.clone(),
-                    after_secs,
-                }))
-            }
-            ActionSpec::Commit => Ok(Some(FiredAction::Commit)),
-            ActionSpec::Interest => Ok(Some(FiredAction::Interest)),
-            ActionSpec::Lurk => Ok(Some(FiredAction::Lurk)),
-        },
-        _ => Err(EvalError("condition did not evaluate to Bool".into())),
+fn base_runtime(eval: &mut Evaluator) -> HashMap<String, Value> {
+    let mut env: HashMap<String, Value> = HashMap::new();
+    let builtin = |name: &str, arity: usize| Value::Builtin {
+        name: name.to_string(),
+        arity,
+        args: vec![],
+    };
+    for f in ["abs", "floor", "ceil", "round", "min", "max"] {
+        env.insert(f.to_string(), builtin(f, 1));
     }
-}
-
-fn is_builtin(name: &str) -> bool {
-    matches!(
-        name,
-        "len" | "map"
-            | "filter"
-            | "any"
-            | "all"
-            | "proj"
-            | "sum"
-            | "avg"
-            | "min"
-            | "max"
-            | "abs"
-            | "floor"
-            | "ceil"
-            | "round"
-    )
-}
-
-pub fn eval_expr(expr: &Expr, vars: &HashMap<String, Value>) -> Result<Value, EvalError> {
-    match expr {
-        Expr::Num(n) => Ok(Value::Num(*n)),
-        Expr::Bool(b) => Ok(Value::Bool(*b)),
-        Expr::Str(s) => Ok(Value::Str(s.clone())),
-        Expr::DurationSecs(s) => Ok(Value::DurSecs(*s)),
-        Expr::Var(name) => {
-            if let Some(v) = vars.get(name) {
-                Ok(v.clone())
-            } else if is_builtin(name) {
-                Ok(Value::Builtin(name.clone()))
-            } else {
-                Err(EvalError(format!("missing variable '{name}'")))
-            }
-        }
-        Expr::Count(name) => match vars.get(name) {
-            Some(Value::List(xs)) => Ok(Value::Num(xs.len() as f64)),
-            Some(_) => Err(EvalError(format!("'#{name}' expects a list"))),
-            None => Err(EvalError(format!("missing list variable '{name}'"))),
-        },
-        Expr::Tuple(items) => {
-            let mut out = Vec::with_capacity(items.len());
-            for it in items {
-                out.push(eval_expr(it, vars)?);
-            }
-            Ok(Value::Tuple(out))
-        }
-        Expr::Unary { op, expr } => {
-            let v = eval_expr(expr, vars)?;
-            match (op, v) {
-                (UnaryOp::Not, Value::Bool(b)) => Ok(Value::Bool(!b)),
-                (UnaryOp::Neg, Value::Num(n)) => Ok(Value::Num(-n)),
-                (UnaryOp::Neg, Value::DurSecs(s)) => Ok(Value::DurSecs(-s)),
-                _ => Err(EvalError("invalid unary operation".into())),
-            }
-        }
-        Expr::Binary { op, left, right } => {
-            let l = eval_expr(left, vars)?;
-            let r = eval_expr(right, vars)?;
-            eval_binary(*op, l, r)
-        }
-        Expr::Apply { func, arg } => {
-            let f = eval_expr(func, vars)?;
-            let a = eval_expr(arg, vars)?;
-            apply_value(f, a)
-        }
-        Expr::Lambda { param, body } => Ok(Value::Closure {
-            param: param.clone(),
-            body: body.clone(),
-            env: vars.clone(),
+    env.insert("notify".to_string(), builtin("notify", 1));
+    env.insert("sleep".to_string(), builtin("sleep", 1));
+    env.insert("delay".to_string(), builtin("delay", 2));
+    env.insert(
+        "commit".to_string(),
+        Value::Action(Effect::SetState {
+            state: "committed".to_string(),
         }),
-        Expr::Match { scrutinee, arms } => {
-            let v = eval_expr(scrutinee, vars)?;
-            eval_match(&v, arms, vars)
-        }
-        Expr::TupleIndex { base, index } => {
-            let b = eval_expr(base, vars)?;
-            match b {
-                Value::Tuple(items) => items
-                    .get(*index)
-                    .cloned()
-                    .ok_or_else(|| EvalError(format!("tuple index {index} out of range"))),
-                _ => Err(EvalError("tuple index requires a tuple".into())),
-            }
-        }
-        Expr::Record { fields } => {
-            let mut map = HashMap::with_capacity(fields.len());
-            for (name, expr) in fields {
-                map.insert(name.clone(), eval_expr(expr, vars)?);
-            }
-            Ok(Value::Record(map))
-        }
-        Expr::Field { base, field } => {
-            let b = eval_expr(base, vars)?;
-            match b {
-                Value::Record(map) => map
-                    .get(field)
-                    .cloned()
-                    .ok_or_else(|| EvalError(format!("record has no field '{field}'"))),
-                _ => Err(EvalError("field access requires a record".into())),
-            }
+    );
+    env.insert(
+        "interest".to_string(),
+        Value::Action(Effect::SetState {
+            state: "interested".to_string(),
+        }),
+    );
+    env.insert(
+        "lurk".to_string(),
+        Value::Action(Effect::SetState {
+            state: "lurker".to_string(),
+        }),
+    );
+    // Trait methods (built-in traits) as dispatchable method values.
+    for t in crate::types::builtin_traits() {
+        for (mname, mty) in &t.methods {
+            env.insert(
+                mname.clone(),
+                Value::Method {
+                    name: mname.clone(),
+                    trait_name: t.name.clone(),
+                    arity: arrow_arity(mty),
+                    args: vec![],
+                },
+            );
         }
     }
+    // Prelude closures.
+    let src = format!("{PRELUDE_SRC}\ntrue => lurk\n");
+    if let Ok(program) = crate::parse::parse_program(&src) {
+        for decl in &program.decls {
+            eval.register_decl(decl, &env);
+        }
+        if let Ok(new_env) = eval.eval_bindings(&program.bindings, env.clone()) {
+            env = new_env;
+        }
+    }
+    env
 }
 
-fn eval_match(
-    value: &Value,
-    arms: &[MatchArm],
-    vars: &HashMap<String, Value>,
-) -> Result<Value, EvalError> {
-    for arm in arms {
-        if pattern_matches(&arm.pattern, value) {
-            return eval_expr(&arm.body, vars);
-        }
+fn arrow_arity(ty: &crate::ast::Ty) -> usize {
+    let mut n = 0;
+    let mut cur = ty;
+    while let crate::ast::Ty::Fun(_, b) = cur {
+        n += 1;
+        cur = b;
     }
-    Err(EvalError("no match arm matched (non-exhaustive)".into()))
+    n
 }
 
-fn pattern_matches(pattern: &Pattern, value: &Value) -> bool {
-    match (pattern, value) {
-        (Pattern::Wildcard, _) => true,
-        (Pattern::Num(a), Value::Num(b)) => (a - b).abs() < f64::EPSILON,
-        (Pattern::Bool(a), Value::Bool(b)) => a == b,
-        (Pattern::Str(a), Value::Str(b)) => a == b,
-        (Pattern::Dur(a), Value::DurSecs(b)) => a == b,
-        (Pattern::Variant(a), Value::Variant(b)) => a == b,
-        _ => false,
+/// Evaluate a typed policy against host-provided globals, producing the effect
+/// program to run when the condition holds (or `None` when it does not).
+pub fn eval_program(program: &TypedProgram, env: &EvalEnv) -> Result<Option<Effect>, EvalError> {
+    let mut eval = Evaluator::new();
+    eval.register_builtin_types();
+    let mut runtime = base_runtime(&mut eval);
+    for (k, v) in &env.vars {
+        runtime.insert(k.clone(), v.clone());
     }
-}
-
-fn apply_value(func: Value, arg: Value) -> Result<Value, EvalError> {
-    match func {
-        Value::Closure { param, body, env } => {
-            let mut inner = env;
-            inner.insert(param, arg);
-            eval_expr(&body, &inner)
-        }
-        Value::Builtin(name) => eval_builtin(&name, arg),
-        _ => Err(EvalError("attempted to call a non-function value".into())),
-    }
-}
-
-fn eval_builtin(name: &str, arg: Value) -> Result<Value, EvalError> {
-    match name {
-        "len" => match arg {
-            Value::List(xs) => Ok(Value::Num(xs.len() as f64)),
-            _ => Err(EvalError("len(list) expects a list".into())),
-        },
-        "sum" => match arg {
-            Value::List(xs) => sum_list(&xs),
-            _ => Err(EvalError("sum(list) expects a list".into())),
-        },
-        "avg" => match arg {
-            Value::List(xs) => {
-                if xs.is_empty() {
-                    return Ok(Value::Num(0.0));
-                }
-                let total = sum_list(&xs)?;
-                let n = xs.len() as f64;
-                match total {
-                    Value::Num(t) => Ok(Value::Num(t / n)),
-                    Value::DurSecs(t) => Ok(Value::DurSecs((t as f64 / n).round() as i64)),
-                    _ => Err(EvalError("avg(list) expects numbers or durations".into())),
-                }
-            }
-            _ => Err(EvalError("avg(list) expects a list".into())),
-        },
-        "min" => match arg {
-            Value::Tuple(items) if items.len() == 2 => match (&items[0], &items[1]) {
-                (Value::Num(a), Value::Num(b)) => Ok(Value::Num(a.min(*b))),
-                (Value::DurSecs(a), Value::DurSecs(b)) => Ok(Value::DurSecs((*a).min(*b))),
-                _ => Err(EvalError("min(a, b) expects matching Num or Dur".into())),
-            },
-            _ => Err(EvalError("min(a, b) expects two arguments".into())),
-        },
-        "max" => match arg {
-            Value::Tuple(items) if items.len() == 2 => match (&items[0], &items[1]) {
-                (Value::Num(a), Value::Num(b)) => Ok(Value::Num(a.max(*b))),
-                (Value::DurSecs(a), Value::DurSecs(b)) => Ok(Value::DurSecs((*a).max(*b))),
-                _ => Err(EvalError("max(a, b) expects matching Num or Dur".into())),
-            },
-            _ => Err(EvalError("max(a, b) expects two arguments".into())),
-        },
-        "abs" => match arg {
-            Value::Num(a) => Ok(Value::Num(a.abs())),
-            _ => Err(EvalError("abs(x) expects a number".into())),
-        },
-        "floor" => match arg {
-            Value::Num(a) => Ok(Value::Num(a.floor())),
-            _ => Err(EvalError("floor(x) expects a number".into())),
-        },
-        "ceil" => match arg {
-            Value::Num(a) => Ok(Value::Num(a.ceil())),
-            _ => Err(EvalError("ceil(x) expects a number".into())),
-        },
-        "round" => match arg {
-            Value::Num(a) => Ok(Value::Num(a.round())),
-            _ => Err(EvalError("round(x) expects a number".into())),
-        },
-        "map" => {
-            let (f, xs) = pair_fn_list(arg, "map")?;
-            let mut out = Vec::with_capacity(xs.len());
-            for x in xs {
-                out.push(apply_value(f.clone(), x)?);
-            }
-            Ok(Value::List(out))
-        }
-        "filter" => {
-            let (f, xs) = pair_fn_list(arg, "filter")?;
-            let mut out = Vec::new();
-            for x in xs {
-                if as_bool(apply_value(f.clone(), x.clone())?, "filter")? {
-                    out.push(x);
-                }
-            }
-            Ok(Value::List(out))
-        }
-        "any" => {
-            let (f, xs) = pair_fn_list(arg, "any")?;
-            for x in xs {
-                if as_bool(apply_value(f.clone(), x)?, "any")? {
-                    return Ok(Value::Bool(true));
-                }
-            }
-            Ok(Value::Bool(false))
-        }
-        "all" => {
-            let (f, xs) = pair_fn_list(arg, "all")?;
-            for x in xs {
-                if !as_bool(apply_value(f.clone(), x)?, "all")? {
-                    return Ok(Value::Bool(false));
-                }
-            }
-            Ok(Value::Bool(true))
-        }
-        "proj" => match arg {
-            Value::List(items) => {
-                let mut firsts = Vec::with_capacity(items.len());
-                let mut seconds = Vec::with_capacity(items.len());
-                for it in items {
-                    match it {
-                        Value::Tuple(t) if t.len() == 2 => {
-                            firsts.push(t[0].clone());
-                            seconds.push(t[1].clone());
-                        }
-                        _ => {
-                            return Err(EvalError(
-                                "proj expects a list of 2-tuples".into(),
-                            ))
-                        }
-                    }
-                }
-                Ok(Value::Tuple(vec![Value::List(firsts), Value::List(seconds)]))
-            }
-            _ => Err(EvalError("proj expects a list of tuples".into())),
-        },
-        _ => Err(EvalError(format!("unknown builtin '{name}'"))),
-    }
-}
-
-fn pair_fn_list(arg: Value, who: &str) -> Result<(Value, Vec<Value>), EvalError> {
-    match arg {
-        Value::Tuple(mut items) if items.len() == 2 => {
-            let list = items.pop().unwrap();
-            let f = items.pop().unwrap();
-            match list {
-                Value::List(xs) => Ok((f, xs)),
-                _ => Err(EvalError(format!("{who}(f, list) expects a list"))),
-            }
-        }
-        _ => Err(EvalError(format!("{who}(f, list) expects (function, list)"))),
-    }
-}
-
-fn as_bool(v: Value, who: &str) -> Result<bool, EvalError> {
-    match v {
-        Value::Bool(b) => Ok(b),
-        _ => Err(EvalError(format!("{who} predicate must return Bool"))),
-    }
-}
-
-fn sum_list(xs: &[Value]) -> Result<Value, EvalError> {
-    let mut is_dur = false;
-    let mut total = 0.0;
-    for v in xs {
-        match v {
-            Value::Num(n) => total += n,
-            Value::DurSecs(s) => {
-                is_dur = true;
-                total += *s as f64;
-            }
-            _ => {
-                return Err(EvalError(
-                    "sum/avg expect a list of numbers or durations".into(),
-                ))
+    // User-declared trait methods become dispatchable method values.
+    for decl in &program.decls {
+        if let Decl::Trait(t) = decl {
+            for (mname, mty) in &t.methods {
+                runtime.insert(
+                    mname.clone(),
+                    Value::Method {
+                        name: mname.clone(),
+                        trait_name: t.name.clone(),
+                        arity: arrow_arity(mty),
+                        args: vec![],
+                    },
+                );
             }
         }
     }
-    if is_dur {
-        Ok(Value::DurSecs(total.round() as i64))
+    for decl in &program.decls {
+        eval.register_decl(decl, &runtime);
+    }
+    runtime = eval.eval_bindings(&program.bindings, runtime)?;
+    let action = eval.eval(&program.action, &runtime)?;
+    let effect = eval.as_effect(action)?;
+    // A no-op effect means the policy chose to do nothing this round.
+    if matches!(effect, Effect::Noop) {
+        Ok(None)
     } else {
-        Ok(Value::Num(total))
+        Ok(Some(effect))
     }
 }
 
-fn eval_binary(op: BinaryOp, l: Value, r: Value) -> Result<Value, EvalError> {
-    match op {
-        BinaryOp::Add => match (l, r) {
-            (Value::Num(a), Value::Num(b)) => Ok(Value::Num(a + b)),
-            (Value::DurSecs(a), Value::DurSecs(b)) => Ok(Value::DurSecs(a + b)),
-            _ => Err(EvalError("'+' requires Num+Num or Dur+Dur".into())),
-        },
-        BinaryOp::Sub => match (l, r) {
-            (Value::Num(a), Value::Num(b)) => Ok(Value::Num(a - b)),
-            (Value::DurSecs(a), Value::DurSecs(b)) => Ok(Value::DurSecs(a - b)),
-            _ => Err(EvalError("'-' requires Num-Num or Dur-Dur".into())),
-        },
-        BinaryOp::Mul => match (l, r) {
-            (Value::Num(a), Value::Num(b)) => Ok(Value::Num(a * b)),
-            (Value::DurSecs(a), Value::Num(b)) => Ok(Value::DurSecs((a as f64 * b).round() as i64)),
-            (Value::Num(a), Value::DurSecs(b)) => Ok(Value::DurSecs((a * b as f64).round() as i64)),
-            _ => Err(EvalError("'*' requires Num*Num or Dur*Num".into())),
-        },
-        BinaryOp::Div => match (l, r) {
-            (Value::Num(a), Value::Num(b)) => Ok(Value::Num(if b == 0.0 { 0.0 } else { a / b })),
-            (Value::DurSecs(a), Value::Num(b)) => Ok(Value::DurSecs(if b == 0.0 {
-                0
-            } else {
-                (a as f64 / b).round() as i64
-            })),
-            _ => Err(EvalError("'/' requires Num/Num or Dur/Num".into())),
-        },
-        BinaryOp::Mod => match (l, r) {
-            (Value::Num(a), Value::Num(b)) => Ok(Value::Num(if b == 0.0 { 0.0 } else { a % b })),
-            _ => Err(EvalError("'%' requires Num%Num".into())),
-        },
-        BinaryOp::Lt
-        | BinaryOp::Lte
-        | BinaryOp::Gt
-        | BinaryOp::Gte
-        | BinaryOp::Eq
-        | BinaryOp::Neq => eval_compare(op, l, r),
-        BinaryOp::And | BinaryOp::Or | BinaryOp::Xor => match (l, r) {
-            (Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(match op {
-                BinaryOp::And => a && b,
-                BinaryOp::Or => a || b,
-                BinaryOp::Xor => a ^ b,
-                _ => false,
-            })),
-            _ => Err(EvalError("logical operations require booleans".into())),
-        },
+/// Evaluate a standalone expression (terminal/REPL) with host globals.
+pub fn eval_expr(expr: &Expr, env: &EvalEnv) -> Result<Value, EvalError> {
+    let mut eval = Evaluator::new();
+    eval.register_builtin_types();
+    let mut runtime = base_runtime(&mut eval);
+    for (k, v) in &env.vars {
+        runtime.insert(k.clone(), v.clone());
     }
+    eval.eval(expr, &runtime)
 }
 
-fn eval_compare(op: BinaryOp, l: Value, r: Value) -> Result<Value, EvalError> {
-    match (l, r) {
-        (Value::Num(a), Value::Num(b)) => Ok(Value::Bool(match op {
-            BinaryOp::Lt => a < b,
-            BinaryOp::Lte => a <= b,
-            BinaryOp::Gt => a > b,
-            BinaryOp::Gte => a >= b,
-            BinaryOp::Eq => (a - b).abs() < f64::EPSILON,
-            BinaryOp::Neq => (a - b).abs() >= f64::EPSILON,
-            _ => false,
-        })),
-        (Value::DurSecs(a), Value::DurSecs(b)) => Ok(Value::Bool(match op {
-            BinaryOp::Lt => a < b,
-            BinaryOp::Lte => a <= b,
-            BinaryOp::Gt => a > b,
-            BinaryOp::Gte => a >= b,
-            BinaryOp::Eq => a == b,
-            BinaryOp::Neq => a != b,
-            _ => false,
-        })),
-        (Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(match op {
-            BinaryOp::Eq => a == b,
-            BinaryOp::Neq => a != b,
-            _ => return Err(EvalError("only ==/!= supported for booleans".into())),
-        })),
-        (Value::Str(a), Value::Str(b)) => Ok(Value::Bool(match op {
-            BinaryOp::Eq => a == b,
-            BinaryOp::Neq => a != b,
-            _ => return Err(EvalError("only ==/!= supported for strings".into())),
-        })),
-        (Value::Variant(a), Value::Variant(b)) => Ok(Value::Bool(match op {
-            BinaryOp::Eq => a == b,
-            BinaryOp::Neq => a != b,
-            _ => return Err(EvalError("only ==/!= supported for variants".into())),
-        })),
-        _ => Err(EvalError(
-            "comparison operands must have matching types".into(),
-        )),
-    }
+/// Render a value for REPL/terminal output (strings are quoted).
+pub fn format_value(v: &Value) -> String {
+    let eval = Evaluator::new();
+    eval.format(v)
 }

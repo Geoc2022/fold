@@ -1,248 +1,370 @@
-use std::collections::HashMap;
+//! Hindley–Milner type inference (Algorithm W) with let-generalisation, plus a
+//! pragmatic type-class ("trait") constraint solver. Class constraints are
+//! collected during inference and discharged against built-in impls
+//! (`Eq`/`Ord`/`Display`/`Arith`) and user `impl`s; unresolved-but-concrete or
+//! ambiguous constraints are type errors. Runtime dispatch (see `eval.rs`)
+//! resolves the actual method by the type tag of the first argument.
+
+use std::collections::{HashMap, HashSet};
 
 use crate::ast::{
-    ActionSpec, BinaryOp, Binding, Channel, Decl, Expr, MatchArm, Pattern, Program, Ty,
-    TypedAction, TypedProgram, UnaryOp,
+    BinaryOp, Binding, Decl, Expr, ImplDecl, MatchArm, Pattern, Program, StrSeg, TraitDecl, Ty,
+    TypeBody, TypeDecl, TypedProgram, UnaryOp, VariantDef,
 };
 use crate::diag::{Diagnostic, Span};
+use crate::prelude::PRELUDE_SRC;
+use crate::types::{
+    builtin_impl_holds, builtin_traits, builtin_type_decls, global_types, ty_head, Constraint,
+    Scheme, TraitInfo,
+};
 
-/// Registry of user-declared nominal types (records + enums), built from a
-/// program's `type` declarations. OCaml-style: fields and variants are resolved
-/// by name, so record literals and field access don't need explicit annotation.
-#[derive(Debug, Clone, Default)]
-pub struct TypeRegistry {
-    records: HashMap<String, Vec<(String, Ty)>>,
-    field_owner: HashMap<String, String>,
-    variant_enum: HashMap<String, String>,
-    enums: HashMap<String, Vec<String>>,
+#[derive(Debug, Clone)]
+struct RecordDef {
+    params: Vec<String>,
+    fields: Vec<(String, Ty)>,
 }
 
-impl TypeRegistry {
-    pub fn from_decls(decls: &[Decl]) -> (Self, Vec<Diagnostic>) {
-        let mut reg = TypeRegistry::default();
-        let mut errors = Vec::new();
-        for decl in decls {
-            match decl {
-                Decl::Record { name, fields } => {
-                    if reg.records.contains_key(name) || reg.enums.contains_key(name) {
-                        errors.push(Diagnostic::new(Span::new(0, 0), format!("duplicate type '{name}'")));
-                    }
-                    for (field, _) in fields {
-                        reg.field_owner.insert(field.clone(), name.clone());
-                    }
-                    reg.records.insert(name.clone(), fields.clone());
-                }
-                Decl::Enum { name, variants } => {
-                    if reg.records.contains_key(name) || reg.enums.contains_key(name) {
-                        errors.push(Diagnostic::new(Span::new(0, 0), format!("duplicate type '{name}'")));
-                    }
-                    for v in variants {
-                        reg.variant_enum.insert(v.clone(), name.clone());
-                    }
-                    reg.enums.insert(name.clone(), variants.clone());
-                }
-            }
-        }
-        (reg, errors)
-    }
+#[derive(Debug, Clone)]
+struct CtorInfo {
+    scheme: Scheme,
+    arity: usize,
 }
 
-/// The room variables available to every policy. Lists carry element types
-/// (ML-style parametric `List<T>`): names are `Str`, timed entries are
-/// `(Str, Dur)` tuples.
+/// The ambient typing context: built-in types, traits, globals, kernel
+/// primitives, and the checked prelude. User declarations extend a clone.
 #[derive(Debug, Clone)]
 pub struct TypeContext {
-    vars: HashMap<String, Ty>,
+    records: HashMap<String, RecordDef>,
+    field_owner: HashMap<String, Vec<String>>,
+    ctors: HashMap<String, CtorInfo>,
+    enums: HashMap<String, Vec<String>>,
+    traits: Vec<TraitInfo>,
+    user_impls: HashSet<(String, String)>,
+    env: HashMap<String, Scheme>,
 }
 
 impl Default for TypeContext {
     fn default() -> Self {
-        let mut vars = HashMap::new();
-        vars.insert("interested".to_string(), Ty::list(Ty::Str));
-        vars.insert("lurkers".to_string(), Ty::list(Ty::Str));
-        vars.insert("people".to_string(), Ty::list(Ty::Str));
-        vars.insert(
-            "committed".to_string(),
-            Ty::list(Ty::Tuple(vec![Ty::Str, Ty::Dur])),
-        );
-        vars.insert(
-            "arrived".to_string(),
-            Ty::list(Ty::Tuple(vec![Ty::Str, Ty::Dur])),
-        );
-        vars.insert("hour".to_string(), Ty::Num);
-        vars.insert("is_weekend".to_string(), Ty::Bool);
-        vars.insert("min_people".to_string(), Ty::Num);
-        vars.insert("max_people".to_string(), Ty::Num);
-        vars.insert("duration".to_string(), Ty::Dur);
-        vars.insert("max_commit".to_string(), Ty::Dur);
-        Self { vars }
+        let mut ctx = TypeContext::base();
+        ctx.load_prelude();
+        ctx
     }
 }
 
-pub fn typecheck_program(
-    program: Program,
-    ctx: &TypeContext,
-) -> Result<TypedProgram, Vec<Diagnostic>> {
-    let (reg, mut decl_errors) = TypeRegistry::from_decls(&program.decls);
-    let mut inf = Infer::new(&reg);
-    inf.errors.append(&mut decl_errors);
-    let mut env = ctx.vars.clone();
+impl TypeContext {
+    fn base() -> TypeContext {
+        let mut ctx = TypeContext {
+            records: HashMap::new(),
+            field_owner: HashMap::new(),
+            ctors: HashMap::new(),
+            enums: HashMap::new(),
+            traits: builtin_traits(),
+            user_impls: HashSet::new(),
+            env: HashMap::new(),
+        };
+        for decl in builtin_type_decls() {
+            ctx.register_type_decl(&decl);
+        }
+        // Trait methods become polymorphic, constrained schemes in the env.
+        let traits = ctx.traits.clone();
+        for t in &traits {
+            for (mname, mty) in &t.methods {
+                let scheme = method_scheme(t, mty);
+                ctx.env.insert(mname.clone(), scheme);
+            }
+        }
+        for (name, ty) in global_types() {
+            ctx.env.insert(name, Scheme::mono(ty));
+        }
+        ctx.install_kernel();
+        ctx
+    }
 
-    for binding in &program.bindings {
-        match binding {
-            Binding::Simple { name, value } => {
-                let ty = inf.infer(value, &env);
-                env.insert(name.clone(), ty);
-            }
-            Binding::Record {
-                fields,
-                ignore_rest,
-                value,
-            } => {
-                let vty = inf.infer(value, &env);
-                inf.bind_record_fields(&vty, fields, *ignore_rest, &mut env);
-            }
+    fn install_kernel(&mut self) {
+        let mut add = |name: &str, scheme: Scheme| {
+            self.env.insert(name.to_string(), scheme);
+        };
+        let num = Ty::num;
+        // Numeric intrinsics.
+        for f in ["abs", "floor", "ceil", "round"] {
+            add(f, Scheme::mono(Ty::func(num(), num())));
+        }
+        // min/max : forall a. Ord a => [a] -> a
+        for f in ["min", "max"] {
+            add(
+                f,
+                Scheme {
+                    vars: vec![0],
+                    constraints: vec![Constraint {
+                        trait_name: "Ord".to_string(),
+                        ty: Ty::Var(0),
+                    }],
+                    ty: Ty::func(Ty::list(Ty::Var(0)), Ty::Var(0)),
+                },
+            );
+        }
+        // Effects.
+        add("notify", Scheme::mono(Ty::func(Ty::str(), Ty::action())));
+        add("sleep", Scheme::mono(Ty::func(Ty::dur(), Ty::action())));
+        add(
+            "delay",
+            Scheme::mono(Ty::arrow(&[Ty::action(), Ty::dur()], Ty::action())),
+        );
+        for a in ["commit", "interest", "lurk"] {
+            add(a, Scheme::mono(Ty::action()));
         }
     }
 
-    let cond_ty = inf.infer(&program.rule.condition, &env);
-    inf.expect(&cond_ty, &Ty::Bool, "policy condition must evaluate to Bool");
-
-    if let ActionSpec::Notify {
-        after: Some(expr), ..
-    } = &program.rule.action
-    {
-        let ty = inf.infer(expr, &env);
-        inf.expect(&ty, &Ty::Dur, "notify(after: ...) expects a duration");
-    }
-
-    if inf.errors.is_empty() {
-        let channel = match program.rule.action {
-            ActionSpec::Notify { .. } => Channel::Notify,
-            ActionSpec::Commit | ActionSpec::Interest | ActionSpec::Lurk => Channel::Node,
+    fn load_prelude(&mut self) {
+        let src = format!("{PRELUDE_SRC}\ntrue => lurk\n");
+        let program = match crate::parse::parse_program(&src) {
+            Ok(p) => p,
+            Err(diags) => {
+                panic!("prelude failed to parse: {:?}", diags.first());
+            }
         };
-        Ok(TypedProgram {
-            decls: program.decls,
-            bindings: program.bindings,
-            condition: program.rule.condition,
-            action: TypedAction {
-                spec: program.rule.action,
-                channel,
-            },
-        })
-    } else {
-        Err(inf.errors)
+        for decl in &program.decls {
+            self.register_decl(decl);
+        }
+        let mut infer = Infer::new(self);
+        let env = self.env.clone();
+        let new_env = match infer.check_bindings(&program.bindings, env) {
+            Ok(env) => env,
+            Err(_) => panic!("prelude failed to type-check: {:?}", infer.errors.first()),
+        };
+        self.env = new_env;
+    }
+
+    fn register_decl(&mut self, decl: &Decl) {
+        match decl {
+            Decl::Type(t) => self.register_type_decl(t),
+            Decl::Trait(t) => self.register_trait_decl(t),
+            Decl::Impl(i) => self.register_impl_decl(i),
+        }
+    }
+
+    fn register_type_decl(&mut self, decl: &TypeDecl) {
+        match &decl.body {
+            TypeBody::Record(fields) => {
+                self.records.insert(
+                    decl.name.clone(),
+                    RecordDef {
+                        params: decl.params.clone(),
+                        fields: fields.clone(),
+                    },
+                );
+                for (f, _) in fields {
+                    self.field_owner
+                        .entry(f.clone())
+                        .or_default()
+                        .push(decl.name.clone());
+                }
+            }
+            TypeBody::Variant(variants) => {
+                let ctor_names: Vec<String> = variants.iter().map(|v| v.name.clone()).collect();
+                self.enums.insert(decl.name.clone(), ctor_names);
+                for v in variants {
+                    let scheme = variant_scheme(decl, v);
+                    self.ctors.insert(
+                        v.name.clone(),
+                        CtorInfo {
+                            scheme,
+                            arity: v.args.len(),
+                        },
+                    );
+                }
+            }
+            TypeBody::Alias(_) => {}
+        }
+    }
+
+    fn register_trait_decl(&mut self, decl: &TraitDecl) {
+        let info = TraitInfo {
+            name: decl.name.clone(),
+            param: decl.param.clone(),
+            methods: decl.methods.clone(),
+            superclasses: vec![],
+            builtin: false,
+            doc: decl.doc.clone(),
+        };
+        for (mname, mty) in &info.methods {
+            let scheme = method_scheme(&info, mty);
+            self.env.insert(mname.clone(), scheme);
+        }
+        self.traits.push(info);
+    }
+
+    fn register_impl_decl(&mut self, decl: &ImplDecl) {
+        if let Some(head) = ty_head(&decl.ty) {
+            self.user_impls.insert((decl.trait_name.clone(), head));
+        }
+    }
+
+    pub fn trait_infos(&self) -> &[TraitInfo] {
+        &self.traits
+    }
+
+    /// Rendered type scheme for a name in the environment (for docs/help).
+    pub fn describe(&self, name: &str) -> Option<String> {
+        self.env.get(name).map(scheme_to_string)
     }
 }
 
-/// Type-check a standalone expression (terminal/REPL). Returns its type.
-pub fn typecheck_expr(expr: &Expr, ctx: &TypeContext) -> Result<Ty, Vec<Diagnostic>> {
-    let reg = TypeRegistry::default();
-    let mut inf = Infer::new(&reg);
-    let ty = inf.infer(expr, &ctx.vars);
-    if inf.errors.is_empty() {
-        Ok(inf.zonk(&ty))
-    } else {
-        Err(inf.errors)
+/// Build the constrained scheme for a trait method: `forall p. Trait p => ty`,
+/// with the trait's named parameter turned into a bound type variable.
+fn method_scheme(t: &TraitInfo, mty: &Ty) -> Scheme {
+    let pid = 0u32; // local scheme var id
+    let ty = replace_named_var(mty, &t.param, pid);
+    Scheme {
+        vars: vec![pid],
+        constraints: vec![Constraint {
+            trait_name: t.name.clone(),
+            ty: Ty::Var(pid),
+        }],
+        ty,
     }
 }
 
-pub fn ty_to_string(ty: &Ty) -> String {
-    show(ty)
+/// Build the scheme for a variant constructor, e.g. `Some : forall a. a -> Option<a>`.
+fn variant_scheme(decl: &TypeDecl, v: &VariantDef) -> Scheme {
+    // Assign each type parameter a scheme var id by position.
+    let mut param_ids: HashMap<String, u32> = HashMap::new();
+    for (i, p) in decl.params.iter().enumerate() {
+        param_ids.insert(p.clone(), i as u32);
+    }
+    let result = Ty::Con(
+        decl.name.clone(),
+        decl.params.iter().map(|p| Ty::Var(param_ids[p])).collect(),
+    );
+    let args: Vec<Ty> = v
+        .args
+        .iter()
+        .map(|a| replace_named_vars(a, &param_ids))
+        .collect();
+    let ty = Ty::arrow(&args, result);
+    Scheme {
+        vars: param_ids.values().copied().collect(),
+        constraints: vec![],
+        ty,
+    }
 }
 
-struct Scheme {
-    quantified: Vec<u32>,
-    ty: Ty,
+/// Replace a single lowercase named type variable (`Con(name, [])`) with `Var(id)`.
+fn replace_named_var(ty: &Ty, name: &str, id: u32) -> Ty {
+    let mut map = HashMap::new();
+    map.insert(name.to_string(), id);
+    replace_named_vars(ty, &map)
 }
+
+fn replace_named_vars(ty: &Ty, map: &HashMap<String, u32>) -> Ty {
+    match ty {
+        Ty::Con(name, args) if args.is_empty() && map.contains_key(name) => Ty::Var(map[name]),
+        Ty::Con(name, args) => Ty::Con(
+            name.clone(),
+            args.iter().map(|a| replace_named_vars(a, map)).collect(),
+        ),
+        Ty::Tuple(items) => Ty::Tuple(items.iter().map(|a| replace_named_vars(a, map)).collect()),
+        Ty::Fun(a, b) => Ty::func(replace_named_vars(a, map), replace_named_vars(b, map)),
+        Ty::Var(v) => Ty::Var(*v),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Inference engine
+// ---------------------------------------------------------------------------
 
 struct Infer<'a> {
+    ctx: &'a TypeContext,
     subst: HashMap<u32, Ty>,
-    next: u32,
+    counter: u32,
+    constraints: Vec<Constraint>,
     errors: Vec<Diagnostic>,
-    reg: &'a TypeRegistry,
 }
 
 impl<'a> Infer<'a> {
-    fn new(reg: &'a TypeRegistry) -> Self {
-        Self {
+    fn new(ctx: &'a TypeContext) -> Self {
+        Infer {
+            ctx,
             subst: HashMap::new(),
-            next: 0,
+            counter: 1000,
+            constraints: Vec::new(),
             errors: Vec::new(),
-            reg,
         }
     }
 
     fn fresh(&mut self) -> Ty {
-        let id = self.next;
-        self.next += 1;
+        let id = self.counter;
+        self.counter += 1;
         Ty::Var(id)
     }
 
     fn error(&mut self, msg: impl Into<String>) {
-        self.errors.push(Diagnostic::new(Span::new(0, 0), msg));
+        self.errors
+            .push(Diagnostic::new(Span::new(0, 0), msg.into()));
     }
 
-    /// Follow substitutions to the representative type (shallow at the head).
+    // ----- substitution -----
+
     fn resolve(&self, ty: &Ty) -> Ty {
-        match ty {
-            Ty::Var(id) => match self.subst.get(id) {
-                Some(inner) => self.resolve(inner),
-                None => ty.clone(),
-            },
-            _ => ty.clone(),
+        let mut cur = ty.clone();
+        while let Ty::Var(id) = cur {
+            match self.subst.get(&id) {
+                Some(t) => cur = t.clone(),
+                None => break,
+            }
         }
+        cur
     }
 
-    /// Deeply apply the substitution (for display of the final type).
-    fn zonk(&self, ty: &Ty) -> Ty {
+    fn apply(&self, ty: &Ty) -> Ty {
         match self.resolve(ty) {
-            Ty::List(inner) => Ty::List(Box::new(self.zonk(&inner))),
-            Ty::Tuple(items) => Ty::Tuple(items.iter().map(|t| self.zonk(t)).collect()),
-            Ty::Fun(a, b) => Ty::Fun(Box::new(self.zonk(&a)), Box::new(self.zonk(&b))),
-            other => other,
+            Ty::Con(name, args) => Ty::Con(name, args.iter().map(|a| self.apply(a)).collect()),
+            Ty::Tuple(items) => Ty::Tuple(items.iter().map(|a| self.apply(a)).collect()),
+            Ty::Fun(a, b) => Ty::func(self.apply(&a), self.apply(&b)),
+            Ty::Var(v) => Ty::Var(v),
         }
     }
 
     fn occurs(&self, id: u32, ty: &Ty) -> bool {
         match self.resolve(ty) {
-            Ty::Var(other) => other == id,
-            Ty::List(inner) => self.occurs(id, &inner),
-            Ty::Tuple(items) => items.iter().any(|t| self.occurs(id, t)),
+            Ty::Var(v) => v == id,
+            Ty::Con(_, args) => args.iter().any(|a| self.occurs(id, a)),
+            Ty::Tuple(items) => items.iter().any(|a| self.occurs(id, a)),
             Ty::Fun(a, b) => self.occurs(id, &a) || self.occurs(id, &b),
-            _ => false,
         }
     }
 
     fn unify(&mut self, a: &Ty, b: &Ty) -> Result<(), String> {
-        let a = self.resolve(a);
-        let b = self.resolve(b);
-        match (a, b) {
+        let ra = self.resolve(a);
+        let rb = self.resolve(b);
+        match (ra, rb) {
             (Ty::Var(x), Ty::Var(y)) if x == y => Ok(()),
             (Ty::Var(x), other) | (other, Ty::Var(x)) => {
                 if self.occurs(x, &other) {
-                    return Err("recursive type".to_string());
+                    return Err("cannot construct infinite type".to_string());
                 }
                 self.subst.insert(x, other);
                 Ok(())
             }
-            (Ty::Num, Ty::Num)
-            | (Ty::Bool, Ty::Bool)
-            | (Ty::Dur, Ty::Dur)
-            | (Ty::Str, Ty::Str)
-            | (Ty::Unit, Ty::Unit) => Ok(()),
-            (Ty::Named(x), Ty::Named(y)) if x == y => Ok(()),
-            (Ty::List(x), Ty::List(y)) => self.unify(&x, &y),
-            (Ty::Tuple(xs), Ty::Tuple(ys)) => {
-                if xs.len() != ys.len() {
+            (Ty::Con(n1, a1), Ty::Con(n2, a2)) => {
+                if n1 != n2 || a1.len() != a2.len() {
                     return Err(format!(
-                        "tuple arity mismatch: {} vs {}",
-                        xs.len(),
-                        ys.len()
+                        "type mismatch: {} vs {}",
+                        show_ty(&Ty::Con(n1, a1)),
+                        show_ty(&Ty::Con(n2, a2))
                     ));
                 }
-                for (x, y) in xs.iter().zip(ys.iter()) {
+                for (x, y) in a1.iter().zip(a2.iter()) {
                     self.unify(x, y)?;
+                }
+                Ok(())
+            }
+            (Ty::Tuple(x), Ty::Tuple(y)) => {
+                if x.len() != y.len() {
+                    return Err("tuple size mismatch".to_string());
+                }
+                for (a, b) in x.iter().zip(y.iter()) {
+                    self.unify(a, b)?;
                 }
                 Ok(())
             }
@@ -250,497 +372,855 @@ impl<'a> Infer<'a> {
                 self.unify(&a1, &a2)?;
                 self.unify(&b1, &b2)
             }
-            (x, y) => Err(format!("cannot unify {} with {}", show(&x), show(&y))),
+            (x, y) => Err(format!("type mismatch: {} vs {}", show_ty(&x), show_ty(&y))),
         }
     }
 
-    fn expect(&mut self, ty: &Ty, expected: &Ty, msg: &str) {
-        if let Err(detail) = self.unify(ty, expected) {
-            self.error(format!("{msg} ({detail})"));
+    fn unify_at(&mut self, a: &Ty, b: &Ty, what: &str) {
+        if let Err(e) = self.unify(a, b) {
+            self.error(format!("{what}: {e}"));
         }
     }
 
     fn instantiate(&mut self, scheme: &Scheme) -> Ty {
-        let mapping: HashMap<u32, Ty> =
-            scheme.quantified.iter().map(|q| (*q, self.fresh())).collect();
-        subst_vars(&scheme.ty, &mapping)
+        let mut map: HashMap<u32, Ty> = HashMap::new();
+        for v in &scheme.vars {
+            let f = self.fresh();
+            map.insert(*v, f);
+        }
+        for c in &scheme.constraints {
+            let ty = subst_ids(&c.ty, &map);
+            self.constraints.push(Constraint {
+                trait_name: c.trait_name.clone(),
+                ty,
+            });
+        }
+        subst_ids(&scheme.ty, &map)
     }
 
-    fn infer(&mut self, expr: &Expr, env: &HashMap<String, Ty>) -> Ty {
+    // ----- bindings -----
+
+    fn check_bindings(
+        &mut self,
+        bindings: &[Binding],
+        mut env: HashMap<String, Scheme>,
+    ) -> Result<HashMap<String, Scheme>, ()> {
+        for b in bindings {
+            match &b.pattern {
+                Pattern::Var(name) => {
+                    // Allow self-recursion: pre-bind a fresh monotype.
+                    let placeholder = self.fresh();
+                    let mut rec_env = env.clone();
+                    rec_env.insert(name.clone(), Scheme::mono(placeholder.clone()));
+                    let ty = self.infer(&b.value, &rec_env);
+                    self.unify_at(&placeholder, &ty, &format!("binding '{name}'"));
+                    self.solve_constraints();
+                    let scheme = self.generalize(&ty, &env);
+                    env.insert(name.clone(), scheme);
+                }
+                other => {
+                    let ty = self.infer(&b.value, &env);
+                    let binds = self.check_pattern(other, &ty);
+                    self.solve_constraints();
+                    for (name, bty) in binds {
+                        let scheme = self.generalize(&bty, &env);
+                        env.insert(name, scheme);
+                    }
+                }
+            }
+        }
+        if self.errors.is_empty() {
+            Ok(env)
+        } else {
+            Err(())
+        }
+    }
+
+    fn generalize(&mut self, ty: &Ty, env: &HashMap<String, Scheme>) -> Scheme {
+        let applied = self.apply(ty);
+        let mut env_vars: HashSet<u32> = HashSet::new();
+        for s in env.values() {
+            let ty = self.apply(&s.ty);
+            collect_vars(&ty, &mut env_vars);
+        }
+        let mut vars_in_ty: Vec<u32> = Vec::new();
+        let mut seen: HashSet<u32> = HashSet::new();
+        collect_vars_ordered(&applied, &mut vars_in_ty, &mut seen);
+        let gen_vars: Vec<u32> = vars_in_ty
+            .into_iter()
+            .filter(|v| !env_vars.contains(v))
+            .collect();
+        let gen_set: HashSet<u32> = gen_vars.iter().copied().collect();
+        // Keep any still-pending constraints that mention generalised vars.
+        let mut constraints = Vec::new();
+        let pending = std::mem::take(&mut self.constraints);
+        for c in pending {
+            let cty = self.apply(&c.ty);
+            let mut cvars = HashSet::new();
+            collect_vars(&cty, &mut cvars);
+            if cvars.iter().any(|v| gen_set.contains(v)) {
+                constraints.push(Constraint {
+                    trait_name: c.trait_name,
+                    ty: cty,
+                });
+            } else {
+                // Constraint on non-generalised vars: keep solving later.
+                self.constraints.push(Constraint {
+                    trait_name: c.trait_name,
+                    ty: cty,
+                });
+            }
+        }
+        Scheme {
+            vars: gen_vars,
+            constraints,
+            ty: applied,
+        }
+    }
+
+    /// Type-check the method bodies of a user `impl` against the trait's
+    /// signatures (with the trait parameter substituted by the impl type).
+    fn check_impl(&mut self, imp: &ImplDecl) {
+        let Some(t) = self
+            .ctx
+            .traits
+            .iter()
+            .find(|t| t.name == imp.trait_name)
+            .cloned()
+        else {
+            self.error(format!("unknown trait '{}'", imp.trait_name));
+            return;
+        };
+        let env = self.ctx.env.clone();
+        let mut map = HashMap::new();
+        map.insert(t.param.clone(), imp.ty.clone());
+        for b in &imp.methods {
+            if let Pattern::Var(mname) = &b.pattern {
+                match t.methods.iter().find(|(n, _)| n == mname) {
+                    Some((_, msig)) => {
+                        let expected = substitute_named(msig, &map);
+                        let ty = self.infer(&b.value, &env);
+                        self.unify_at(&ty, &expected, &format!("impl method '{mname}'"));
+                    }
+                    None => self.error(format!("'{mname}' is not a method of trait {}", t.name)),
+                }
+            }
+        }
+        self.solve_constraints();
+    }
+
+    // ----- constraint solving -----
+
+    fn solve_constraints(&mut self) {
+        let pending = std::mem::take(&mut self.constraints);
+        for c in pending {
+            let ty = self.apply(&c.ty);
+            match self.constraint_status(&c.trait_name, &ty) {
+                ConstraintStatus::Holds => {}
+                ConstraintStatus::Fails => self.error(format!(
+                    "no implementation of trait {} for type {}",
+                    c.trait_name,
+                    show_ty(&ty)
+                )),
+                ConstraintStatus::Unknown => {
+                    // Still a type variable: defer (may be generalised).
+                    self.constraints.push(Constraint {
+                        trait_name: c.trait_name,
+                        ty,
+                    });
+                }
+            }
+        }
+    }
+
+    fn constraint_status(&self, trait_name: &str, ty: &Ty) -> ConstraintStatus {
+        if matches!(ty, Ty::Var(_)) {
+            return ConstraintStatus::Unknown;
+        }
+        if let Some(holds) = builtin_impl_holds(trait_name, ty) {
+            return if holds {
+                ConstraintStatus::Holds
+            } else {
+                ConstraintStatus::Fails
+            };
+        }
+        if let Some(head) = ty_head(ty) {
+            if self
+                .ctx
+                .user_impls
+                .contains(&(trait_name.to_string(), head))
+            {
+                return ConstraintStatus::Holds;
+            }
+        }
+        ConstraintStatus::Fails
+    }
+
+    // ----- expression inference -----
+
+    fn infer(&mut self, expr: &Expr, env: &HashMap<String, Scheme>) -> Ty {
         match expr {
-            Expr::Num(_) => Ty::Num,
-            Expr::Bool(_) => Ty::Bool,
-            Expr::Str(_) => Ty::Str,
-            Expr::DurationSecs(_) => Ty::Dur,
-            Expr::Var(name) => {
-                if let Some(t) = env.get(name) {
-                    t.clone()
-                } else if let Some(enum_name) = self.reg.variant_enum.get(name) {
-                    Ty::Named(enum_name.clone())
-                } else if let Some(scheme) = builtin_scheme(name) {
-                    self.instantiate(&scheme)
-                } else if is_adhoc_builtin(name) {
-                    self.error(format!("builtin '{name}' must be applied to arguments"));
-                    self.fresh()
-                } else {
-                    self.error(format!("unknown variable '{name}'"));
+            Expr::Num(_) => Ty::num(),
+            Expr::Bool(_) => Ty::bool(),
+            Expr::DurationSecs(_) => Ty::dur(),
+            Expr::Str(segs) => {
+                for seg in segs {
+                    if let StrSeg::Expr(e) = seg {
+                        let ty = self.infer(e, env);
+                        self.constraints.push(Constraint {
+                            trait_name: "Display".to_string(),
+                            ty,
+                        });
+                    }
+                }
+                Ty::str()
+            }
+            Expr::Var(name) => match env.get(name) {
+                Some(scheme) => self.instantiate(scheme),
+                None => {
+                    self.error(format!("unknown name '{name}'"));
                     self.fresh()
                 }
-            }
-            Expr::Count(name) => {
+            },
+            Expr::Ctor(name) => match self.ctx.ctors.get(name) {
+                Some(info) => self.instantiate(&info.scheme),
+                None => {
+                    self.error(format!("unknown constructor '{name}'"));
+                    self.fresh()
+                }
+            },
+            Expr::List(items) => {
                 let elem = self.fresh();
-                let list = Ty::list(elem);
-                match env.get(name) {
-                    Some(t) => {
-                        let t = t.clone();
-                        self.expect(&t, &list, &format!("'#{name}' expects a list"));
-                    }
-                    None => self.error(format!("unknown list variable '{name}'")),
+                for it in items {
+                    let ty = self.infer(it, env);
+                    self.unify_at(&elem, &ty, "list element");
                 }
-                Ty::Num
+                Ty::list(elem)
             }
-            Expr::Tuple(items) => {
-                Ty::Tuple(items.iter().map(|e| self.infer(e, env)).collect())
+            Expr::Tuple(items) => Ty::Tuple(items.iter().map(|e| self.infer(e, env)).collect()),
+            Expr::Cons(head, tail) => {
+                let ht = self.infer(head, env);
+                let tt = self.infer(tail, env);
+                self.unify_at(&tt, &Ty::list(ht.clone()), "list cons");
+                Ty::list(ht)
             }
-            Expr::Unary { op, expr } => {
-                let t = self.infer(expr, env);
-                match op {
-                    UnaryOp::Neg => self.expect_numeric(&t, "unary '-' expects Num or Dur"),
-                    UnaryOp::Not => {
-                        self.expect(&t, &Ty::Bool, "'not' expects Bool");
-                        Ty::Bool
-                    }
-                }
+            Expr::Record(fields) => self.infer_record(fields, env),
+            Expr::Field { base, field } => {
+                let bt = self.infer(base, env);
+                self.field_type(&bt, field)
             }
-            Expr::Binary { op, left, right } => {
-                let l = self.infer(left, env);
-                let r = self.infer(right, env);
-                self.infer_binary(*op, l, r)
-            }
-            Expr::Apply { func, arg } => self.infer_apply(func, arg, env),
-            Expr::Lambda { param, body } => {
-                let pv = self.fresh();
-                let mut inner = env.clone();
-                inner.insert(param.clone(), pv.clone());
-                let bt = self.infer(body, &inner);
-                Ty::func(pv, bt)
-            }
-            Expr::Match { scrutinee, arms } => self.infer_match(scrutinee, arms, env),
             Expr::TupleIndex { base, index } => {
                 let bt = self.infer(base, env);
-                match self.resolve(&bt) {
-                    Ty::Tuple(items) => match items.get(*index) {
-                        Some(t) => t.clone(),
-                        None => {
-                            self.error(format!(
-                                "tuple index {index} out of range (len {})",
-                                items.len()
-                            ));
-                            self.fresh()
-                        }
-                    },
+                match self.apply(&bt) {
+                    Ty::Tuple(items) if *index < items.len() => items[*index].clone(),
                     other => {
-                        self.error(format!(
-                            "tuple index requires a tuple of known arity, got {}",
-                            show(&other)
-                        ));
+                        self.error(format!("cannot take .{index} of type {}", show_ty(&other)));
                         self.fresh()
                     }
                 }
             }
-            Expr::Record { fields } => self.infer_record(fields, env),
-            Expr::Field { base, field } => {
-                let owner = match self.reg.field_owner.get(field) {
-                    Some(o) => o.clone(),
-                    None => {
-                        self.error(format!("unknown record field '{field}'"));
-                        return self.fresh();
-                    }
-                };
-                let bt = self.infer(base, env);
-                self.expect(&bt, &Ty::Named(owner.clone()), "field access on wrong record type");
-                self.record_field_ty(&owner, field)
+            Expr::Lambda { param, body } => {
+                let pty = self.fresh();
+                let mut inner = env.clone();
+                inner.insert(param.clone(), Scheme::mono(pty.clone()));
+                let bty = self.infer(body, &inner);
+                Ty::func(pty, bty)
             }
-        }
-    }
-
-    fn record_field_ty(&mut self, record: &str, field: &str) -> Ty {
-        match self.reg.records.get(record) {
-            Some(fields) => match fields.iter().find(|(f, _)| f == field) {
-                Some((_, ty)) => ty.clone(),
-                None => {
-                    self.error(format!("record '{record}' has no field '{field}'"));
-                    self.fresh()
+            Expr::Apply { func, arg } => {
+                let ft = self.infer(func, env);
+                let at = self.infer(arg, env);
+                let ret = self.fresh();
+                self.unify_at(&ft, &Ty::func(at, ret.clone()), "function application");
+                ret
+            }
+            Expr::If { cond, then, els } => {
+                let ct = self.infer(cond, env);
+                self.unify_at(&ct, &Ty::bool(), "if condition");
+                let tt = self.infer(then, env);
+                let et = self.infer(els, env);
+                self.unify_at(&tt, &et, "if branches must agree");
+                tt
+            }
+            Expr::Match { scrutinee, arms } => self.infer_match(scrutinee, arms, env),
+            Expr::Block(items) => {
+                for it in items {
+                    let ty = self.infer(it, env);
+                    self.unify_at(&ty, &Ty::action(), "action block element");
                 }
-            },
-            None => {
-                self.error(format!("unknown record type '{record}'"));
-                self.fresh()
+                Ty::action()
             }
+            Expr::Unary { op, expr } => {
+                let t = self.infer(expr, env);
+                match op {
+                    UnaryOp::Not => {
+                        self.unify_at(&t, &Ty::bool(), "'not' operand");
+                        Ty::bool()
+                    }
+                    UnaryOp::Neg => {
+                        let applied = self.apply(&t);
+                        if matches!(&applied, Ty::Con(n, _) if n == "Dur") {
+                            Ty::dur()
+                        } else {
+                            self.unify_at(&t, &Ty::num(), "negation operand");
+                            Ty::num()
+                        }
+                    }
+                }
+            }
+            Expr::Binary { op, left, right } => self.infer_binary(*op, left, right, env),
         }
     }
 
-    fn infer_record(&mut self, fields: &[(String, Expr)], env: &HashMap<String, Ty>) -> Ty {
-        // Resolve the nominal record type from the set of field names (OCaml
-        // resolves record literals by their labels).
-        let mut names: Vec<String> = fields.iter().map(|(f, _)| f.clone()).collect();
-        names.sort();
-        let mut matched: Option<String> = None;
-        for (rname, rfields) in &self.reg.records {
-            let mut rnames: Vec<String> = rfields.iter().map(|(f, _)| f.clone()).collect();
-            rnames.sort();
-            if rnames == names {
-                matched = Some(rname.clone());
+    fn infer_binary(
+        &mut self,
+        op: BinaryOp,
+        left: &Expr,
+        right: &Expr,
+        env: &HashMap<String, Scheme>,
+    ) -> Ty {
+        let lt = self.infer(left, env);
+        let rt = self.infer(right, env);
+        match op {
+            BinaryOp::And | BinaryOp::Or | BinaryOp::Xor => {
+                self.unify_at(&lt, &Ty::bool(), "boolean operand");
+                self.unify_at(&rt, &Ty::bool(), "boolean operand");
+                Ty::bool()
+            }
+            BinaryOp::Eq | BinaryOp::Neq => {
+                self.unify_at(&lt, &rt, "comparison operands must match");
+                self.constraints.push(Constraint {
+                    trait_name: "Eq".to_string(),
+                    ty: lt,
+                });
+                Ty::bool()
+            }
+            BinaryOp::Lt | BinaryOp::Lte | BinaryOp::Gt | BinaryOp::Gte => {
+                self.unify_at(&lt, &rt, "comparison operands must match");
+                self.constraints.push(Constraint {
+                    trait_name: "Ord".to_string(),
+                    ty: lt,
+                });
+                Ty::bool()
+            }
+            BinaryOp::Add | BinaryOp::Sub => {
+                self.unify_at(&lt, &rt, "arithmetic operands must match");
+                self.constraints.push(Constraint {
+                    trait_name: "Arith".to_string(),
+                    ty: lt.clone(),
+                });
+                lt
+            }
+            BinaryOp::Mod => {
+                self.unify_at(&lt, &Ty::num(), "'%' operand");
+                self.unify_at(&rt, &Ty::num(), "'%' operand");
+                Ty::num()
+            }
+            BinaryOp::Mul => self.infer_mul_div(true, lt, rt),
+            BinaryOp::Div => self.infer_mul_div(false, lt, rt),
+        }
+    }
+
+    /// Duration-aware `*` / `/`. `mul`: Num*Num, Dur*Num, Num*Dur. `div`:
+    /// Num/Num, Dur/Num, Dur/Dur.
+    fn infer_mul_div(&mut self, is_mul: bool, lt: Ty, rt: Ty) -> Ty {
+        let la = self.apply(&lt);
+        let ra = self.apply(&rt);
+        let is_dur = |t: &Ty| matches!(t, Ty::Con(n, _) if n == "Dur");
+        if is_mul {
+            if is_dur(&la) {
+                self.unify_at(&rt, &Ty::num(), "Dur * Num");
+                Ty::dur()
+            } else if is_dur(&ra) {
+                self.unify_at(&lt, &Ty::num(), "Num * Dur");
+                Ty::dur()
+            } else {
+                self.unify_at(&lt, &Ty::num(), "'*' operand");
+                self.unify_at(&rt, &Ty::num(), "'*' operand");
+                Ty::num()
+            }
+        } else if is_dur(&la) {
+            if is_dur(&ra) {
+                Ty::num()
+            } else {
+                self.unify_at(&rt, &Ty::num(), "Dur / Num");
+                Ty::dur()
+            }
+        } else {
+            self.unify_at(&lt, &Ty::num(), "'/' operand");
+            self.unify_at(&rt, &Ty::num(), "'/' operand");
+            Ty::num()
+        }
+    }
+
+    fn infer_record(&mut self, fields: &[(String, Expr)], env: &HashMap<String, Scheme>) -> Ty {
+        let field_tys: Vec<(String, Ty)> = fields
+            .iter()
+            .map(|(name, e)| (name.clone(), self.infer(e, env)))
+            .collect();
+        let labels: HashSet<&str> = fields.iter().map(|(n, _)| n.as_str()).collect();
+        // Find the record type whose fields exactly match the literal's labels.
+        let mut chosen: Option<String> = None;
+        for (rname, rdef) in &self.ctx.records {
+            let rlabels: HashSet<&str> = rdef.fields.iter().map(|(n, _)| n.as_str()).collect();
+            if rlabels == labels {
+                chosen = Some(rname.clone());
                 break;
             }
         }
-        let rname = match matched {
-            Some(r) => r,
-            None => {
-                self.error("record literal does not match any declared record type");
-                for (_, e) in fields {
-                    let _ = self.infer(e, env);
+        let Some(rname) = chosen else {
+            self.error("record literal does not match any declared record type");
+            return self.fresh();
+        };
+        let rdef = self.ctx.records[&rname].clone();
+        // Instantiate record type parameters.
+        let mut param_map: HashMap<String, Ty> = HashMap::new();
+        let mut args = Vec::new();
+        for p in &rdef.params {
+            let f = self.fresh();
+            param_map.insert(p.clone(), f.clone());
+            args.push(f);
+        }
+        for (fname, fty) in &field_tys {
+            let declared = rdef
+                .fields
+                .iter()
+                .find(|(n, _)| n == fname)
+                .map(|(_, t)| substitute_named(t, &param_map))
+                .unwrap();
+            self.unify_at(fty, &declared, &format!("record field '{fname}'"));
+        }
+        Ty::Con(rname, args)
+    }
+
+    fn field_type(&mut self, base: &Ty, field: &str) -> Ty {
+        let applied = self.apply(base);
+        if let Ty::Con(name, args) = &applied {
+            if let Some(rdef) = self.ctx.records.get(name) {
+                if let Some((_, fty)) = rdef.fields.iter().find(|(n, _)| n == field) {
+                    let mut param_map = HashMap::new();
+                    for (p, a) in rdef.params.iter().zip(args.iter()) {
+                        param_map.insert(p.clone(), a.clone());
+                    }
+                    return substitute_named(fty, &param_map);
                 }
+                self.error(format!("type {name} has no field '{field}'"));
                 return self.fresh();
             }
-        };
-        for (fname, fexpr) in fields {
-            let ft = self.infer(fexpr, env);
-            let expected = self.record_field_ty(&rname, fname);
-            self.expect(&ft, &expected, &format!("record field '{fname}' has wrong type"));
         }
-        Ty::Named(rname)
-    }
-
-    fn bind_record_fields(
-        &mut self,
-        value_ty: &Ty,
-        fields: &[String],
-        ignore_rest: bool,
-        env: &mut HashMap<String, Ty>,
-    ) {
-        let resolved = self.resolve(value_ty);
-        let rname = match resolved {
-            Ty::Named(n) if self.reg.records.contains_key(&n) => n,
-            other => {
-                self.error(format!(
-                    "destructuring requires a record value, got {}",
-                    show(&other)
-                ));
-                for f in fields {
-                    let fresh = self.fresh();
-                    env.insert(f.clone(), fresh);
+        // Field access on an unresolved type: if exactly one declared record
+        // type has this field, resolve the base to it (no row polymorphism).
+        if matches!(applied, Ty::Var(_)) {
+            if let Some(owners) = self.ctx.field_owner.get(field) {
+                if owners.len() == 1 {
+                    let rname = owners[0].clone();
+                    let rdef = self.ctx.records[&rname].clone();
+                    let mut param_map = HashMap::new();
+                    let mut args = Vec::new();
+                    for p in &rdef.params {
+                        let f = self.fresh();
+                        param_map.insert(p.clone(), f.clone());
+                        args.push(f);
+                    }
+                    self.unify_at(&applied, &Ty::Con(rname, args), "field access");
+                    let (_, fty) = rdef.fields.iter().find(|(n, _)| n == field).unwrap();
+                    return substitute_named(fty, &param_map);
                 }
-                return;
-            }
-        };
-        let declared: Vec<String> = self
-            .reg
-            .records
-            .get(&rname)
-            .map(|fs| fs.iter().map(|(f, _)| f.clone()).collect())
-            .unwrap_or_default();
-        if !ignore_rest && fields.len() != declared.len() {
-            self.error(format!(
-                "record pattern must bind all fields of '{rname}' (or use '_')"
-            ));
-        }
-        for f in fields {
-            if !declared.contains(f) {
-                self.error(format!("record '{rname}' has no field '{f}'"));
-            }
-            let ty = self.record_field_ty(&rname, f);
-            env.insert(f.clone(), ty);
-        }
-    }
-
-    fn infer_apply(&mut self, func: &Expr, arg: &Expr, env: &HashMap<String, Ty>) -> Ty {
-        // Overloaded builtins are checked in call position (they are not
-        // first-class values because their types can't be expressed as a
-        // single scheme).
-        if let Expr::Var(name) = func {
-            if !env.contains_key(name) && is_adhoc_builtin(name) {
-                let arg_ty = self.infer(arg, env);
-                return self.check_adhoc_builtin(name, &arg_ty);
+                self.error(format!(
+                    "field '{field}' is ambiguous; annotate the value's type"
+                ));
+                return self.fresh();
             }
         }
-        let ft = self.infer(func, env);
-        let at = self.infer(arg, env);
-        let ret = self.fresh();
-        let expected = Ty::func(at, ret.clone());
-        if let Err(detail) = self.unify(&ft, &expected) {
-            self.error(format!("cannot apply value as a function ({detail})"));
-        }
-        ret
+        self.error(format!(
+            "cannot access field '{field}' on type {}",
+            show_ty(&applied)
+        ));
+        self.fresh()
     }
 
     fn infer_match(
         &mut self,
         scrutinee: &Expr,
         arms: &[MatchArm],
-        env: &HashMap<String, Ty>,
+        env: &HashMap<String, Scheme>,
     ) -> Ty {
-        let st = self.infer(scrutinee, env);
-        if arms.is_empty() {
-            self.error("match must have at least one arm");
-            return self.fresh();
-        }
+        let scrut = self.infer(scrutinee, env);
         let result = self.fresh();
-        let mut has_wildcard = false;
-        let mut saw_true = false;
-        let mut saw_false = false;
-        let mut covered_variants: Vec<String> = Vec::new();
         for arm in arms {
-            match &arm.pattern {
-                Pattern::Wildcard => has_wildcard = true,
-                Pattern::Num(_) => self.expect(&st, &Ty::Num, "match pattern type mismatch"),
-                Pattern::Str(_) => self.expect(&st, &Ty::Str, "match pattern type mismatch"),
-                Pattern::Dur(_) => self.expect(&st, &Ty::Dur, "match pattern type mismatch"),
-                Pattern::Bool(b) => {
-                    self.expect(&st, &Ty::Bool, "match pattern type mismatch");
-                    if *b {
-                        saw_true = true;
-                    } else {
-                        saw_false = true;
-                    }
-                }
-                Pattern::Variant(v) => match self.reg.variant_enum.get(v) {
-                    Some(enum_name) => {
-                        let en = enum_name.clone();
-                        self.expect(&st, &Ty::Named(en), "match pattern type mismatch");
-                        covered_variants.push(v.clone());
-                    }
-                    None => self.error(format!("unknown variant '{v}' in match pattern")),
-                },
+            let mut inner = env.clone();
+            let binds = self.check_pattern(&arm.pattern, &scrut);
+            for (name, ty) in binds {
+                inner.insert(name, Scheme::mono(ty));
             }
-            let bt = self.infer(&arm.body, env);
-            if let Err(detail) = self.unify(&result, &bt) {
-                self.error(format!("match arms must have the same type ({detail})"));
-            }
+            let bty = self.infer(&arm.body, &inner);
+            self.unify_at(&bty, &result, "match arms must agree");
         }
-        let bool_exhaustive = matches!(self.resolve(&st), Ty::Bool) && saw_true && saw_false;
-        let enum_exhaustive = match self.resolve(&st) {
-            Ty::Named(name) => self
-                .reg
-                .enums
-                .get(&name)
-                .map(|vs| vs.iter().all(|v| covered_variants.contains(v)))
-                .unwrap_or(false),
-            _ => false,
-        };
-        if !has_wildcard && !bool_exhaustive && !enum_exhaustive {
-            self.error("match must be exhaustive: cover all cases or add a '_' arm");
-        }
+        self.check_exhaustive(&scrut, arms);
         result
     }
 
-    fn infer_binary(&mut self, op: BinaryOp, l: Ty, r: Ty) -> Ty {
-        match op {
-            BinaryOp::Add | BinaryOp::Sub => {
-                if let Err(detail) = self.unify(&l, &r) {
-                    self.error(format!("'{op:?}' requires matching operands ({detail})"));
-                }
-                self.expect_numeric(&l, "'+'/'-' expects Num or Dur")
-            }
-            BinaryOp::Mul => {
-                let lr = self.resolve(&l);
-                let rr = self.resolve(&r);
-                match (lr, rr) {
-                    (Ty::Dur, _) => {
-                        self.expect(&r, &Ty::Num, "Dur * Num expected");
-                        Ty::Dur
-                    }
-                    (_, Ty::Dur) => {
-                        self.expect(&l, &Ty::Num, "Num * Dur expected");
-                        Ty::Dur
-                    }
-                    _ => {
-                        self.expect(&l, &Ty::Num, "'*' expects Num");
-                        self.expect(&r, &Ty::Num, "'*' expects Num");
-                        Ty::Num
+    fn check_exhaustive(&mut self, scrut: &Ty, arms: &[MatchArm]) {
+        let has_catchall = arms
+            .iter()
+            .any(|a| matches!(a.pattern, Pattern::Wildcard | Pattern::Var(_)));
+        if has_catchall {
+            return;
+        }
+        let applied = self.apply(scrut);
+        match &applied {
+            Ty::Con(name, _) if self.ctx.enums.contains_key(name) => {
+                let all: HashSet<&String> = self.ctx.enums[name].iter().collect();
+                let mut covered: HashSet<&String> = HashSet::new();
+                for a in arms {
+                    if let Pattern::Variant { name, .. } = &a.pattern {
+                        covered.insert(name);
                     }
                 }
-            }
-            BinaryOp::Div => {
-                let lr = self.resolve(&l);
-                if matches!(lr, Ty::Dur) {
-                    self.expect(&r, &Ty::Num, "Dur / Num expected");
-                    Ty::Dur
-                } else {
-                    self.expect(&l, &Ty::Num, "'/' expects Num");
-                    self.expect(&r, &Ty::Num, "'/' expects Num");
-                    Ty::Num
+                let missing: Vec<String> = all.difference(&covered).map(|s| (*s).clone()).collect();
+                if !missing.is_empty() {
+                    self.error(format!(
+                        "non-exhaustive match; missing: {}",
+                        missing.join(", ")
+                    ));
                 }
             }
-            BinaryOp::Mod => {
-                self.expect(&l, &Ty::Num, "'%' expects Num");
-                self.expect(&r, &Ty::Num, "'%' expects Num");
-                Ty::Num
-            }
-            BinaryOp::Lt | BinaryOp::Lte | BinaryOp::Gt | BinaryOp::Gte => {
-                if let Err(detail) = self.unify(&l, &r) {
-                    self.error(format!("comparison requires matching operands ({detail})"));
+            Ty::Con(name, _) if name == "Bool" => {
+                let has_true = arms
+                    .iter()
+                    .any(|a| matches!(a.pattern, Pattern::Bool(true)));
+                let has_false = arms
+                    .iter()
+                    .any(|a| matches!(a.pattern, Pattern::Bool(false)));
+                if !(has_true && has_false) {
+                    self.error("non-exhaustive match on Bool; cover true and false or add '_'");
                 }
-                let _ = self.expect_numeric(&l, "comparison expects Num or Dur");
-                Ty::Bool
             }
-            BinaryOp::Eq | BinaryOp::Neq => {
-                if let Err(detail) = self.unify(&l, &r) {
-                    self.error(format!("equality requires matching operands ({detail})"));
+            Ty::Con(name, _) if name == "List" => {
+                let has_nil = arms.iter().any(|a| {
+                    matches!(a.pattern, Pattern::Nil)
+                        || matches!(&a.pattern, Pattern::List(v) if v.is_empty())
+                });
+                let has_cons = arms.iter().any(|a| {
+                    matches!(a.pattern, Pattern::Cons(_, _))
+                        || matches!(&a.pattern, Pattern::List(v) if !v.is_empty())
+                });
+                if !(has_nil && has_cons) {
+                    self.error("non-exhaustive match on a list; cover [] and x :: rest or add '_'");
                 }
-                Ty::Bool
             }
-            BinaryOp::And | BinaryOp::Or | BinaryOp::Xor => {
-                self.expect(&l, &Ty::Bool, "logical ops require Bool");
-                self.expect(&r, &Ty::Bool, "logical ops require Bool");
-                Ty::Bool
+            _ => {
+                self.error("non-exhaustive match; add a '_' arm");
             }
         }
     }
 
-    /// Require Num or Dur; if still an unbound var, default to Num.
-    fn expect_numeric(&mut self, ty: &Ty, msg: &str) -> Ty {
-        match self.resolve(ty) {
-            Ty::Num => Ty::Num,
-            Ty::Dur => Ty::Dur,
-            Ty::Var(_) => {
-                let _ = self.unify(ty, &Ty::Num);
-                Ty::Num
+    /// Check a pattern against an expected type, returning the variable bindings.
+    fn check_pattern(&mut self, pat: &Pattern, expected: &Ty) -> Vec<(String, Ty)> {
+        match pat {
+            Pattern::Wildcard => vec![],
+            Pattern::Var(name) => vec![(name.clone(), expected.clone())],
+            Pattern::Num(_) => {
+                self.unify_at(expected, &Ty::num(), "number pattern");
+                vec![]
             }
-            other => {
-                self.error(format!("{msg} (got {})", show(&other)));
-                Ty::Num
+            Pattern::Bool(_) => {
+                self.unify_at(expected, &Ty::bool(), "bool pattern");
+                vec![]
             }
-        }
-    }
-
-    fn check_adhoc_builtin(&mut self, name: &str, arg: &Ty) -> Ty {
-        match name {
-            "sum" | "avg" => {
-                let elem = self.fresh();
-                if self.unify(arg, &Ty::list(elem.clone())).is_err() {
-                    self.error(format!("{name}(list) expects a list"));
-                    return Ty::Num;
+            Pattern::Str(_) => {
+                self.unify_at(expected, &Ty::str(), "string pattern");
+                vec![]
+            }
+            Pattern::Dur(_) => {
+                self.unify_at(expected, &Ty::dur(), "duration pattern");
+                vec![]
+            }
+            Pattern::Tuple(ps) => {
+                let elems: Vec<Ty> = ps.iter().map(|_| self.fresh()).collect();
+                self.unify_at(expected, &Ty::Tuple(elems.clone()), "tuple pattern");
+                let mut binds = Vec::new();
+                for (p, t) in ps.iter().zip(elems.iter()) {
+                    binds.extend(self.check_pattern(p, t));
                 }
-                match self.resolve(&elem) {
-                    Ty::Dur => Ty::Dur,
-                    Ty::Var(_) => {
-                        let _ = self.unify(&elem, &Ty::Num);
-                        Ty::Num
+                binds
+            }
+            Pattern::Nil => {
+                let e = self.fresh();
+                self.unify_at(expected, &Ty::list(e), "'[]' pattern");
+                vec![]
+            }
+            Pattern::Cons(head, tail) => {
+                let e = self.fresh();
+                self.unify_at(expected, &Ty::list(e.clone()), "'::' pattern");
+                let mut binds = self.check_pattern(head, &e);
+                binds.extend(self.check_pattern(tail, &Ty::list(e)));
+                binds
+            }
+            Pattern::List(ps) => {
+                let e = self.fresh();
+                self.unify_at(expected, &Ty::list(e.clone()), "list pattern");
+                let mut binds = Vec::new();
+                for p in ps {
+                    binds.extend(self.check_pattern(p, &e));
+                }
+                binds
+            }
+            Pattern::Variant { name, args } => {
+                let Some(info) = self.ctx.ctors.get(name).cloned() else {
+                    self.error(format!("unknown constructor '{name}'"));
+                    return vec![];
+                };
+                if args.len() != info.arity {
+                    self.error(format!(
+                        "constructor '{name}' expects {} argument(s)",
+                        info.arity
+                    ));
+                }
+                let ctor_ty = self.instantiate(&info.scheme);
+                // Peel argument types off the curried constructor type.
+                let mut cur = ctor_ty;
+                let mut arg_tys = Vec::new();
+                for _ in 0..info.arity {
+                    match self.resolve(&cur) {
+                        Ty::Fun(a, b) => {
+                            arg_tys.push(*a);
+                            cur = *b;
+                        }
+                        _ => break,
                     }
-                    Ty::Num => Ty::Num,
-                    other => {
-                        self.error(format!("{name}(list) expects List<Num> or List<Dur>, got List<{}>", show(&other)));
-                        Ty::Num
+                }
+                self.unify_at(expected, &cur, &format!("constructor '{name}' pattern"));
+                let mut binds = Vec::new();
+                for (p, t) in args.iter().zip(arg_tys.iter()) {
+                    binds.extend(self.check_pattern(p, t));
+                }
+                binds
+            }
+            Pattern::Record { fields, .. } => {
+                let applied = self.apply(expected);
+                let mut binds = Vec::new();
+                if let Ty::Con(name, targs) = &applied {
+                    if let Some(rdef) = self.ctx.records.get(name).cloned() {
+                        let mut param_map = HashMap::new();
+                        for (p, a) in rdef.params.iter().zip(targs.iter()) {
+                            param_map.insert(p.clone(), a.clone());
+                        }
+                        for (fname, sub) in fields {
+                            let fty = rdef
+                                .fields
+                                .iter()
+                                .find(|(n, _)| n == fname)
+                                .map(|(_, t)| substitute_named(t, &param_map));
+                            let Some(fty) = fty else {
+                                self.error(format!("type {name} has no field '{fname}'"));
+                                continue;
+                            };
+                            match sub {
+                                Some(p) => binds.extend(self.check_pattern(p, &fty)),
+                                None => binds.push((fname.clone(), fty)),
+                            }
+                        }
+                        return binds;
                     }
                 }
-            }
-            "min" | "max" => {
-                let t = self.fresh();
-                if self
-                    .unify(arg, &Ty::Tuple(vec![t.clone(), t.clone()]))
-                    .is_err()
-                {
-                    self.error(format!("{name}(a, b) expects two matching arguments"));
-                    return Ty::Num;
-                }
-                self.expect_numeric(&t, &format!("{name}(a, b) expects Num or Dur"))
-            }
-            "abs" | "floor" | "ceil" | "round" => {
-                self.expect(arg, &Ty::Num, &format!("{name}(x) expects Num"));
-                Ty::Num
-            }
-            other => {
-                self.error(format!("unknown builtin '{other}'"));
-                Ty::Num
+                self.error("record pattern requires a known record type");
+                binds
             }
         }
     }
 }
 
-fn subst_vars(ty: &Ty, mapping: &HashMap<u32, Ty>) -> Ty {
+enum ConstraintStatus {
+    Holds,
+    Fails,
+    Unknown,
+}
+
+// ----- free variables & substitution helpers -----
+
+fn collect_vars(ty: &Ty, out: &mut HashSet<u32>) {
     match ty {
-        Ty::Var(id) => mapping.get(id).cloned().unwrap_or_else(|| ty.clone()),
-        Ty::List(inner) => Ty::List(Box::new(subst_vars(inner, mapping))),
-        Ty::Tuple(items) => Ty::Tuple(items.iter().map(|t| subst_vars(t, mapping)).collect()),
-        Ty::Fun(a, b) => Ty::Fun(
-            Box::new(subst_vars(a, mapping)),
-            Box::new(subst_vars(b, mapping)),
+        Ty::Var(v) => {
+            out.insert(*v);
+        }
+        Ty::Con(_, args) => args.iter().for_each(|a| collect_vars(a, out)),
+        Ty::Tuple(items) => items.iter().for_each(|a| collect_vars(a, out)),
+        Ty::Fun(a, b) => {
+            collect_vars(a, out);
+            collect_vars(b, out);
+        }
+    }
+}
+
+fn collect_vars_ordered(ty: &Ty, out: &mut Vec<u32>, seen: &mut HashSet<u32>) {
+    match ty {
+        Ty::Var(v) => {
+            if seen.insert(*v) {
+                out.push(*v);
+            }
+        }
+        Ty::Con(_, args) => args.iter().for_each(|a| collect_vars_ordered(a, out, seen)),
+        Ty::Tuple(items) => items
+            .iter()
+            .for_each(|a| collect_vars_ordered(a, out, seen)),
+        Ty::Fun(a, b) => {
+            collect_vars_ordered(a, out, seen);
+            collect_vars_ordered(b, out, seen);
+        }
+    }
+}
+
+fn subst_ids(ty: &Ty, map: &HashMap<u32, Ty>) -> Ty {
+    match ty {
+        Ty::Var(v) => map.get(v).cloned().unwrap_or(Ty::Var(*v)),
+        Ty::Con(name, args) => Ty::Con(
+            name.clone(),
+            args.iter().map(|a| subst_ids(a, map)).collect(),
         ),
-        other => other.clone(),
+        Ty::Tuple(items) => Ty::Tuple(items.iter().map(|a| subst_ids(a, map)).collect()),
+        Ty::Fun(a, b) => Ty::func(subst_ids(a, map), subst_ids(b, map)),
     }
 }
 
-fn is_adhoc_builtin(name: &str) -> bool {
-    matches!(
-        name,
-        "sum" | "avg" | "min" | "max" | "abs" | "floor" | "ceil" | "round"
-    )
-}
-
-/// Polymorphic builtins usable as first-class values (fresh instantiation per
-/// use — Damas–Milner let-polymorphism, scoped to the standard library).
-fn builtin_scheme(name: &str) -> Option<Scheme> {
-    match name {
-        "len" => Some(Scheme {
-            quantified: vec![0],
-            ty: Ty::func(Ty::list(Ty::Var(0)), Ty::Num),
-        }),
-        "map" => Some(Scheme {
-            quantified: vec![0, 1],
-            ty: Ty::func(
-                Ty::Tuple(vec![
-                    Ty::func(Ty::Var(0), Ty::Var(1)),
-                    Ty::list(Ty::Var(0)),
-                ]),
-                Ty::list(Ty::Var(1)),
-            ),
-        }),
-        "filter" => Some(Scheme {
-            quantified: vec![0],
-            ty: Ty::func(
-                Ty::Tuple(vec![
-                    Ty::func(Ty::Var(0), Ty::Bool),
-                    Ty::list(Ty::Var(0)),
-                ]),
-                Ty::list(Ty::Var(0)),
-            ),
-        }),
-        "any" | "all" => Some(Scheme {
-            quantified: vec![0],
-            ty: Ty::func(
-                Ty::Tuple(vec![
-                    Ty::func(Ty::Var(0), Ty::Bool),
-                    Ty::list(Ty::Var(0)),
-                ]),
-                Ty::Bool,
-            ),
-        }),
-        "proj" => Some(Scheme {
-            quantified: vec![0, 1],
-            ty: Ty::func(
-                Ty::list(Ty::Tuple(vec![Ty::Var(0), Ty::Var(1)])),
-                Ty::Tuple(vec![Ty::list(Ty::Var(0)), Ty::list(Ty::Var(1))]),
-            ),
-        }),
-        _ => None,
-    }
-}
-
-fn show(ty: &Ty) -> String {
+fn substitute_named(ty: &Ty, map: &HashMap<String, Ty>) -> Ty {
     match ty {
-        Ty::Num => "Num".to_string(),
-        Ty::Bool => "Bool".to_string(),
-        Ty::Dur => "Dur".to_string(),
-        Ty::Str => "Str".to_string(),
-        Ty::Unit => "Unit".to_string(),
-        Ty::List(inner) => format!("List<{}>", show(inner)),
+        Ty::Con(name, args) if args.is_empty() && map.contains_key(name) => map[name].clone(),
+        Ty::Con(name, args) => Ty::Con(
+            name.clone(),
+            args.iter().map(|a| substitute_named(a, map)).collect(),
+        ),
+        Ty::Tuple(items) => Ty::Tuple(items.iter().map(|a| substitute_named(a, map)).collect()),
+        Ty::Fun(a, b) => Ty::func(substitute_named(a, map), substitute_named(b, map)),
+        Ty::Var(v) => Ty::Var(*v),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+pub fn typecheck_program(
+    program: Program,
+    ctx: &TypeContext,
+) -> Result<TypedProgram, Vec<Diagnostic>> {
+    let mut ctx = ctx.clone();
+    for decl in &program.decls {
+        ctx.register_decl(decl);
+    }
+    let mut infer = Infer::new(&ctx);
+    for decl in &program.decls {
+        if let Decl::Impl(imp) = decl {
+            infer.check_impl(imp);
+        }
+    }
+    let env = ctx.env.clone();
+    let env = match infer.check_bindings(&program.bindings, env) {
+        Ok(env) => env,
+        Err(()) => return Err(infer.errors),
+    };
+    let action_ty = infer.infer(&program.action, &env);
+    infer.unify_at(&action_ty, &Ty::action(), "a policy must end with an Action");
+    infer.solve_constraints();
+    if infer.errors.is_empty() {
+        Ok(TypedProgram {
+            decls: program.decls,
+            bindings: program.bindings,
+            action: program.action,
+        })
+    } else {
+        Err(infer.errors)
+    }
+}
+
+pub fn typecheck_expr(expr: &Expr, ctx: &TypeContext) -> Result<Ty, Vec<Diagnostic>> {
+    let mut infer = Infer::new(ctx);
+    let env = ctx.env.clone();
+    let ty = infer.infer(expr, &env);
+    infer.solve_constraints();
+    if infer.errors.is_empty() {
+        Ok(infer.apply(&ty))
+    } else {
+        Err(infer.errors)
+    }
+}
+
+pub fn ty_to_string(ty: &Ty) -> String {
+    show_ty(ty)
+}
+
+/// Render a type scheme like `Ord a => List<a> -> a`.
+pub fn scheme_to_string(scheme: &Scheme) -> String {
+    let mut names = HashMap::new();
+    let mut counter = 0u32;
+    let ty = show_ty_inner(&scheme.ty, &mut names, &mut counter);
+    if scheme.constraints.is_empty() {
+        return ty;
+    }
+    let cons: Vec<String> = scheme
+        .constraints
+        .iter()
+        .map(|c| {
+            format!(
+                "{} {}",
+                c.trait_name,
+                show_ty_inner(&c.ty, &mut names, &mut counter)
+            )
+        })
+        .collect();
+    format!("{} => {}", cons.join(", "), ty)
+}
+
+fn show_ty(ty: &Ty) -> String {
+    let mut names = HashMap::new();
+    let mut counter = 0u32;
+    show_ty_inner(ty, &mut names, &mut counter)
+}
+
+fn show_ty_inner(ty: &Ty, names: &mut HashMap<u32, String>, counter: &mut u32) -> String {
+    match ty {
+        Ty::Con(name, args) if args.is_empty() => name.clone(),
+        Ty::Con(name, args) if name == "List" => {
+            format!("List<{}>", show_ty_inner(&args[0], names, counter))
+        }
+        Ty::Con(name, args) => {
+            let inner: Vec<String> = args
+                .iter()
+                .map(|a| show_ty_inner(a, names, counter))
+                .collect();
+            format!("{name}<{}>", inner.join(", "))
+        }
         Ty::Tuple(items) => {
-            let inner: Vec<String> = items.iter().map(show).collect();
+            let inner: Vec<String> = items
+                .iter()
+                .map(|a| show_ty_inner(a, names, counter))
+                .collect();
             format!("({})", inner.join(", "))
         }
-        Ty::Fun(a, b) => format!("{} -> {}", show(a), show(b)),
-        Ty::Var(id) => format!("t{id}"),
-        Ty::Named(name) => name.clone(),
+        Ty::Fun(a, b) => {
+            let left = show_ty_inner(a, names, counter);
+            let right = show_ty_inner(b, names, counter);
+            if matches!(**a, Ty::Fun(_, _)) {
+                format!("({left}) -> {right}")
+            } else {
+                format!("{left} -> {right}")
+            }
+        }
+        Ty::Var(v) => names
+            .entry(*v)
+            .or_insert_with(|| {
+                let name = letter_name(*counter);
+                *counter += 1;
+                name
+            })
+            .clone(),
+    }
+}
+
+fn letter_name(n: u32) -> String {
+    let letter = (b'a' + (n % 26) as u8) as char;
+    if n < 26 {
+        letter.to_string()
+    } else {
+        format!("{letter}{}", n / 26)
     }
 }

@@ -9,6 +9,8 @@ export function evaluate_policy_json(policy_json: string, env_json: string): str
 
 export function highlight_policy_json(source: string): string;
 
+export function policy_docs(): string;
+
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
@@ -17,6 +19,7 @@ export interface InitOutput {
     readonly eval_expr_json: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly evaluate_policy_json: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly highlight_policy_json: (a: number, b: number, c: number) => void;
+    readonly policy_docs: (a: number) => void;
     readonly __wbindgen_add_to_stack_pointer: (a: number) => number;
     readonly __wbindgen_export: (a: number, b: number) => number;
     readonly __wbindgen_export2: (a: number, b: number, c: number, d: number) => number;

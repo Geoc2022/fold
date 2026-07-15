@@ -207,7 +207,7 @@ export function ProposeForm({ initialCode, categoryOptions, onCreated, onClose }
         <EmojiPicker value={emoji} onChange={setEmoji} />
         <input
           autoFocus
-          maxLength={100}
+          maxLength={14}
           placeholder="Title"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
@@ -219,7 +219,7 @@ export function ProposeForm({ initialCode, categoryOptions, onCreated, onClose }
           <textarea
             aria-label="Details"
             rows={2}
-            maxLength={500}
+            maxLength={125}
             placeholder="Details (optional)"
             value={description}
             onChange={(e) => setDescription(e.target.value)}

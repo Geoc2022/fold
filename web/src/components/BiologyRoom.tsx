@@ -38,6 +38,8 @@ interface SimConfig {
   commitRate: number
   avgEtaSec: number
   maxNodes: number
+  minPeople: number
+  maxPeople: number
 }
 
 interface VisConfig {
@@ -58,6 +60,8 @@ export interface BioParticipant {
 export interface BiologySnapshot {
   now: number
   participants: BioParticipant[]
+  minPeople: number
+  maxPeople: number
 }
 
 interface BiologyRoomProps {
@@ -74,6 +78,9 @@ const MIN_ETA_MS = 0
 const MAX_ETA_MS = 60 * 1000
 const WORLD_R = 280
 const MAX_NODES = 26
+const MIN_PEOPLE_MIN = 1
+const MIN_PEOPLE_MAX = 12
+const MAX_PEOPLE_MAX = 24
 const SELF_ID = 0
 const TUG = createTugModel(WORLD_R)
 const VOGEL_C = 28
@@ -95,6 +102,8 @@ export function BiologyRoom({
     commitRate: 0.2,
     avgEtaSec: 30,
     maxNodes: MAX_NODES,
+    minPeople: 2,
+    maxPeople: 6,
   })
   const [vis, setVis] = useState<VisConfig>({
     nodeRadius: 20,
@@ -406,7 +415,12 @@ export function BiologyRoom({
       const snapshotCb = snapshotRef.current
       if (snapshotCb && perf - lastSnapshotAtRef.current > 350) {
         lastSnapshotAtRef.current = perf
-        snapshotCb({ now, participants: nodesToParticipants(nodes, now) })
+        snapshotCb({
+          now,
+          participants: nodesToParticipants(nodes, now),
+          minPeople: simRef.current.minPeople,
+          maxPeople: simRef.current.maxPeople,
+        })
       }
 
       raf = requestAnimationFrame(frame)
@@ -439,6 +453,24 @@ export function BiologyRoom({
           <SR label="→ committed" min={0} max={1} step={0.05} value={sim.commitRate} fmt={(v) => `${Math.round(v * 100)}%/s`} onChange={(v) => patchSim({ commitRate: v })} />
           <SR label="avg ETA" min={5} max={60} step={1} value={sim.avgEtaSec} fmt={(v) => `${v}s`} onChange={(v) => patchSim({ avgEtaSec: v })} />
           <SR label="max nodes" min={5} max={MAX_NODES} step={1} value={sim.maxNodes} fmt={(v) => String(v)} onChange={(v) => patchSim({ maxNodes: Math.min(MAX_NODES, v) })} />
+          <SR
+            label="min people"
+            min={MIN_PEOPLE_MIN}
+            max={MIN_PEOPLE_MAX}
+            step={1}
+            value={sim.minPeople}
+            fmt={(v) => String(v)}
+            onChange={(v) => patchSim({ minPeople: v, maxPeople: Math.max(v, sim.maxPeople) })}
+          />
+          <SR
+            label="max people"
+            min={sim.minPeople}
+            max={MAX_PEOPLE_MAX}
+            step={1}
+            value={Math.max(sim.minPeople, sim.maxPeople)}
+            fmt={(v) => String(v)}
+            onChange={(v) => patchSim({ maxPeople: Math.max(sim.minPeople, v) })}
+          />
           <div className="bio-slider-row">
             <span className="bio-slider-label">grouping</span>
             <div className="bio-mode-btns">

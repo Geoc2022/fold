@@ -1,54 +1,50 @@
-//! # Policy DSL core
+//! # Policy language (v2)
 //!
-//! A small, strictly-typed language for authoring notification/room policies,
-//! compiled to WASM. Design decisions and their lineage:
+//! A small, strongly-typed, purely-functional language for authoring room /
+//! notification policies, compiled to WASM. It reads like "simplified OCaml
+//! with adjusted syntax":
 //!
-//! ## ML lineage (OCaml / Standard ML)
-//! - `fun x -> body` lambdas + application by juxtaposition (OCaml surface).
-//! - Hindley–Milner type inference with unification and let-polymorphism
-//!   (scoped to the standard library) — Milner, *A Theory of Type Polymorphism
-//!   in Programming* (1978); the Damas–Milner Algorithm W.
-//! - `match` with strict exhaustiveness (a `_` arm is required unless the
-//!   scrutinee type is finitely covered) — promotes ML's non-exhaustive-match
-//!   warning to an error.
-//! - Algebraic data: tuples, parametric `List<T>`, and user-declared nominal
-//!   records (`type u = { .. }`) and variant enums (`type c = A | B`) with
-//!   label-resolved record literals, field access, and destructuring — all from
-//!   OCaml, including `(* nestable comments *)`.
-//! - "Parse, don't validate": [`TypedProgram`] is only constructible by the
-//!   type checker (ML tradition of making illegal states unrepresentable).
+//! - **Commas gather data** (`[a, b, c]`, `(a, b)`, `{ x = 1 }`), **spaces
+//!   apply functions** (`map f xs`). Newlines separate statements; no
+//!   semicolons.
+//! - Currying + juxtaposition, `match`/variants/records/`Option`, and
+//!   `(* nestable comments *)` come from **OCaml/ML**, with Hindley–Milner
+//!   inference.
+//! - Type classes are **traits** (`trait`/`impl`), the enum AST, and
+//!   `println!`-style `notify` come from **Rust**.
+//! - Newline layout, comma literals, and `and`/`or`/`not`/`xor` come from
+//!   **Python**.
 //!
-//! ## Rust lineage
-//! - Enum-based AST with exhaustive `match` in the compiler, and `Result`-style
-//!   diagnostic accumulation.
-//! - No implicit numeric coercions: `Num` and `Dur` are distinct; `Dur * Num`
-//!   is allowed but `Dur + Num` is rejected (newtype discipline over C-style
-//!   promotion).
-//! - Expression-oriented evaluation; serde at the WASM/JS boundary.
-//!
-//! ## Deliberate divergence
-//! - The off-side rule (indentation for `match` arms and statement separation)
-//!   is borrowed from Python, not Rust/ML, for playground ergonomics.
+//! A policy is `condition => action`; evaluating it yields a structured
+//! [`eval::Effect`] program the host runs against the simulation.
 
 pub mod ast;
 pub mod diag;
+pub mod docs;
 pub mod eval;
 pub mod lex;
 pub mod parse;
+pub mod prelude;
 pub mod typeck;
+pub mod types;
 
 use ast::TypedProgram;
 use diag::Diagnostic;
-use eval::{eval_program, EvalEnv, FiredAction};
+use eval::{eval_expr, eval_program, Effect, EvalEnv};
 use serde::{Deserialize, Serialize};
+use typeck::TypeContext;
+
+thread_local! {
+    static CONTEXT: TypeContext = TypeContext::default();
+}
+
+fn with_context<R>(f: impl FnOnce(&TypeContext) -> R) -> R {
+    CONTEXT.with(f)
+}
 
 pub fn compile_policy(source: &str) -> Result<TypedProgram, Vec<Diagnostic>> {
     let program = parse::parse_program(source)?;
-    typeck::typecheck_program(program, &typeck::TypeContext::default())
-}
-
-pub fn evaluate_policy(program: &TypedProgram, env: &EvalEnv) -> Result<Option<FiredAction>, String> {
-    eval_program(program, env).map_err(|e| e.0)
+    with_context(|ctx| typeck::typecheck_program(program, ctx))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,25 +59,26 @@ pub fn compile_policy_with_diagnostics(source: &str) -> CompileResult {
             policy: Some(policy),
             diagnostics: Vec::new(),
         },
-        Err(diags) => CompileResult {
+        Err(diagnostics) => CompileResult {
             policy: None,
-            diagnostics: diags,
+            diagnostics,
         },
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvaluateResult {
-    pub fired: Option<FiredAction>,
+    /// The effect program to run when the condition holds; `None` otherwise.
+    pub fired: Option<Effect>,
     pub error: Option<String>,
 }
 
 pub fn evaluate_policy_safe(policy: &TypedProgram, env: &EvalEnv) -> EvaluateResult {
-    match evaluate_policy(policy, env) {
+    match eval_program(policy, env) {
         Ok(fired) => EvaluateResult { fired, error: None },
-        Err(error) => EvaluateResult {
+        Err(e) => EvaluateResult {
             fired: None,
-            error: Some(error),
+            error: Some(e.0),
         },
     }
 }
@@ -105,7 +102,7 @@ pub fn evaluate_expression(source: &str, env: &EvalEnv) -> EvalExprResult {
             }
         }
     };
-    let ty = match typeck::typecheck_expr(&expr, &typeck::TypeContext::default()) {
+    let ty = match with_context(|ctx| typeck::typecheck_expr(&expr, ctx)) {
         Ok(t) => t,
         Err(diags) => {
             return EvalExprResult {
@@ -115,7 +112,7 @@ pub fn evaluate_expression(source: &str, env: &EvalEnv) -> EvalExprResult {
             }
         }
     };
-    match eval::eval_expr(&expr, &env.vars) {
+    match eval_expr(&expr, env) {
         Ok(value) => EvalExprResult {
             output: Some(eval::format_value(&value)),
             ty: Some(typeck::ty_to_string(&ty)),
@@ -154,19 +151,12 @@ pub fn highlight_policy(source: &str) -> HighlightResult {
         Ok(tokens) => HighlightResult {
             tokens: tokens
                 .into_iter()
-                .filter(|t| {
-                    !matches!(
-                        t.kind,
-                        crate::lex::TokenKind::Eof
-                            | crate::lex::TokenKind::Newline
-                            | crate::lex::TokenKind::Indent
-                            | crate::lex::TokenKind::Dedent
-                    )
-                })
-                .map(|t| HighlightToken {
-                    kind: token_kind_name(&t.kind).to_string(),
-                    start: t.span.start,
-                    end: t.span.end,
+                .filter_map(|t| {
+                    token_kind_name(&t.kind).map(|kind| HighlightToken {
+                        kind: kind.to_string(),
+                        start: t.span.start,
+                        end: t.span.end,
+                    })
                 })
                 .collect(),
             diagnostics: Vec::new(),
@@ -178,52 +168,64 @@ pub fn highlight_policy(source: &str) -> HighlightResult {
     }
 }
 
-fn token_kind_name(kind: &crate::lex::TokenKind) -> &'static str {
-    use crate::lex::TokenKind as T;
-    match kind {
-        T::Ident(_) => "ident",
+/// The generated Markdown language reference.
+pub fn language_docs() -> String {
+    docs::language_docs()
+}
+
+fn token_kind_name(kind: &lex::TokenKind) -> Option<&'static str> {
+    use lex::TokenKind as T;
+    let name = match kind {
+        T::Ident(_) | T::Underscore => "ident",
+        T::UIdent(_) => "type",
         T::Str(_) => "string",
         T::Number(_) => "number",
         T::DurationSecs(_) => "duration",
-        T::Hash => "hash",
-        T::Dot => "dot",
-        T::LParen => "lparen",
-        T::RParen => "rparen",
-        T::Colon => "colon",
-        T::Comma => "comma",
-        T::Plus => "plus",
-        T::Minus => "minus",
-        T::Star => "star",
-        T::Slash => "slash",
-        T::Percent => "percent",
-        T::Lt => "lt",
-        T::Lte => "lte",
-        T::Gt => "gt",
-        T::Gte => "gte",
-        T::EqEq => "eqeq",
-        T::Neq => "neq",
-        T::Eq => "eq",
-        T::FatArrow => "arrow",
-        T::Arrow => "thinarrow",
-        T::LBrace => "lbrace",
-        T::RBrace => "rbrace",
-        T::Pipe => "pipe",
-        T::Semi => "semi",
-        T::Type => "type",
-        T::And => "and",
-        T::Or => "or",
-        T::Not => "not",
-        T::Xor => "xor",
-        T::True => "true",
-        T::False => "false",
-        T::Fun => "fun",
-        T::Match => "match",
-        T::Underscore => "wildcard",
-        T::Newline => "newline",
-        T::Indent => "indent",
-        T::Dedent => "dedent",
-        T::Eof => "eof",
-    }
+        T::True | T::False => "bool",
+        T::Fun
+        | T::Match
+        | T::With
+        | T::If
+        | T::Then
+        | T::Else
+        | T::Before
+        | T::By
+        | T::Type
+        | T::Trait
+        | T::Impl => {
+            "keyword"
+        }
+        T::And | T::Or | T::Not | T::Xor => "keyword",
+        T::Hash
+        | T::Plus
+        | T::Minus
+        | T::Star
+        | T::Slash
+        | T::Percent
+        | T::Lt
+        | T::Lte
+        | T::Gt
+        | T::Gte
+        | T::EqEq
+        | T::Neq
+        | T::Eq
+        | T::FatArrow
+        | T::Arrow
+        | T::ColonColon
+        | T::Pipe => "operator",
+        T::Dot
+        | T::Comma
+        | T::Colon
+        | T::LParen
+        | T::RParen
+        | T::LBracket
+        | T::RBracket
+        | T::LBrace
+        | T::RBrace => "punct",
+        T::DocComment(_) => "comment",
+        T::Newline | T::Indent | T::Dedent | T::Eof => return None,
+    };
+    Some(name)
 }
 
 #[cfg(feature = "wasm")]
@@ -232,7 +234,7 @@ pub mod wasm {
 
     use crate::{
         compile_policy_with_diagnostics, evaluate_expression, evaluate_policy_safe,
-        highlight_policy, EvalEnv, TypedProgram,
+        highlight_policy, language_docs, EvalEnv, TypedProgram,
     };
 
     #[wasm_bindgen]
@@ -245,345 +247,344 @@ pub mod wasm {
                 )
             }
         };
-        match serde_json::to_string(&evaluate_expression(source, &env)) {
-            Ok(s) => s,
-            Err(_) => "{\"output\":null,\"ty\":null,\"error\":\"serialization failed\"}".to_string(),
-        }
+        serde_json::to_string(&evaluate_expression(source, &env)).unwrap_or_else(|_| {
+            "{\"output\":null,\"ty\":null,\"error\":\"serialization failed\"}".to_string()
+        })
     }
 
     #[wasm_bindgen]
     pub fn compile_policy_json(source: &str) -> String {
-        match serde_json::to_string(&compile_policy_with_diagnostics(source)) {
-            Ok(s) => s,
-            Err(_) => "{\"policy\":null,\"diagnostics\":[{\"span\":{\"start\":0,\"end\":0},\"message\":\"serialization failed\"}]}".to_string(),
-        }
+        serde_json::to_string(&compile_policy_with_diagnostics(source)).unwrap_or_else(|_| {
+            "{\"policy\":null,\"diagnostics\":[{\"span\":{\"start\":0,\"end\":0},\"message\":\"serialization failed\"}]}".to_string()
+        })
     }
 
     #[wasm_bindgen]
     pub fn evaluate_policy_json(policy_json: &str, env_json: &str) -> String {
         let policy = match serde_json::from_str::<TypedProgram>(policy_json) {
             Ok(p) => p,
-            Err(e) => {
-                return format!(
-                    "{{\"fired\":null,\"error\":\"invalid policy json: {}\"}}",
-                    e
-                )
-            }
+            Err(e) => return format!("{{\"fired\":null,\"error\":\"invalid policy json: {e}\"}}"),
         };
         let env = match serde_json::from_str::<EvalEnv>(env_json) {
             Ok(v) => v,
-            Err(e) => return format!("{{\"fired\":null,\"error\":\"invalid env json: {}\"}}", e),
+            Err(e) => return format!("{{\"fired\":null,\"error\":\"invalid env json: {e}\"}}"),
         };
-        match serde_json::to_string(&evaluate_policy_safe(&policy, &env)) {
-            Ok(s) => s,
-            Err(_) => "{\"fired\":null,\"error\":\"serialization failed\"}".to_string(),
-        }
+        serde_json::to_string(&evaluate_policy_safe(&policy, &env))
+            .unwrap_or_else(|_| "{\"fired\":null,\"error\":\"serialization failed\"}".to_string())
     }
 
     #[wasm_bindgen]
     pub fn highlight_policy_json(source: &str) -> String {
-        match serde_json::to_string(&highlight_policy(source)) {
-            Ok(s) => s,
-            Err(_) => "{\"tokens\":[],\"diagnostics\":[{\"span\":{\"start\":0,\"end\":0},\"message\":\"serialization failed\"}]}".to_string(),
-        }
+        serde_json::to_string(&highlight_policy(source))
+            .unwrap_or_else(|_| "{\"tokens\":[],\"diagnostics\":[]}".to_string())
+    }
+
+    #[wasm_bindgen]
+    pub fn policy_docs() -> String {
+        language_docs()
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use std::collections::HashMap;
+mod smoke {
+    use crate::parse::{parse_expr_str, parse_program};
+    use crate::typeck::{ty_to_string, typecheck_expr, typecheck_program, TypeContext};
 
-    use crate::eval::{eval_expr, eval_program, EvalEnv, FiredAction, Value};
-
-    use super::*;
-    use crate::ast::ActionSpec;
-
-    fn named(name: &str, secs: i64) -> Value {
-        Value::Tuple(vec![Value::Str(name.to_string()), Value::DurSecs(secs)])
-    }
-
-    fn env_with(vars: &[(&str, Value)]) -> EvalEnv {
-        let mut env = EvalEnv::default();
-        for (k, v) in vars {
-            env.vars.insert((*k).to_string(), v.clone());
-        }
-        env
+    fn ty_of(src: &str) -> String {
+        let e = parse_expr_str(src).expect("parse");
+        let t = typecheck_expr(&e, &TypeContext::default()).expect("typecheck");
+        ty_to_string(&t)
     }
 
     #[test]
-    fn compiles_count_notify() {
-        let p = compile_policy("3 < #committed => notify").expect("compile");
-        let env = env_with(&[(
-            "committed",
-            Value::List(vec![named("A", 60), named("B", 120), named("C", 180), named("D", 240)]),
-        )]);
-        let fired = eval_program(&p, &env).expect("eval");
-        assert_eq!(
-            fired,
-            Some(FiredAction::Notify {
-                message: None,
-                after_secs: None
-            })
-        );
+    fn prelude_builds() {
+        let _ = TypeContext::default();
     }
 
     #[test]
-    fn compiles_delayed_notify() {
-        let p = compile_policy("3 < #interested => notify(after: 3min)").expect("compile");
-        let env = env_with(&[(
-            "interested",
-            Value::List(vec![
-                Value::Str("A".into()),
-                Value::Str("B".into()),
-                Value::Str("C".into()),
-                Value::Str("D".into()),
-            ]),
-        )]);
-        let fired = eval_program(&p, &env).expect("eval");
-        assert_eq!(
-            fired,
-            Some(FiredAction::Notify {
-                message: None,
-                after_secs: Some(180)
-            })
-        );
+    fn infers_basic_types() {
+        assert_eq!(ty_of("1 + 2"), "Num");
+        assert_eq!(ty_of("#committed"), "Num");
+        assert_eq!(ty_of("map (fun x -> x + 1) [1, 2, 3]"), "List<Num>");
+        assert_eq!(ty_of("filter (fun x -> x > 2) [1, 2, 3]"), "List<Num>");
+        assert_eq!(ty_of("Some(3)"), "Option<Num>");
+        assert_eq!(ty_of("is_weekend today"), "Bool");
+        assert_eq!(ty_of("self.name"), "Str");
+        assert_eq!(ty_of("eta self"), "Option<Dur>");
+        assert_eq!(ty_of("unwrap_or 0s (eta self)"), "Dur");
+        assert_eq!(ty_of("now.hour"), "Num");
     }
 
     #[test]
-    fn short_notify_alias_with_message() {
-        let p = compile_policy("#interested > 3 => notify \"ping\" in 3min").expect("compile");
-        let env = env_with(&[(
-            "interested",
-            Value::List(vec![
-                Value::Str("A".into()),
-                Value::Str("B".into()),
-                Value::Str("C".into()),
-                Value::Str("D".into()),
-            ]),
-        )]);
-        let fired = eval_program(&p, &env).expect("eval");
-        assert_eq!(
-            fired,
-            Some(FiredAction::Notify {
-                message: Some("ping".to_string()),
-                after_secs: Some(180)
-            })
-        );
+    fn programs_typecheck() {
+        let ctx = TypeContext::default();
+        let ok = |src: &str| {
+            let p = parse_program(src).expect("parse");
+            typecheck_program(p, &ctx).expect(src);
+        };
+        ok("#committed > min_people => notify \"ready!\"");
+        ok("is_weekend today => lurk");
+        ok("count = #interested\ncount > 3 => notify \"we have {count} interested\"");
+        ok("type Mood = Happy | Sad\nm = Happy\nmatch m with | Happy -> true | Sad -> false => commit");
+        ok("any is_committed interested => { notify \"someone committed\", commit }");
+        // A policy can be a bare action (no `=>` rule).
+        ok("commit");
+        // A `match` must be exhaustive; a `_` arm covers the rest.
+        ok("match #committed with | 2 -> commit | 3 -> lurk | _ -> {}");
+        // Notify a duration before the group is ready, via `ready_in`.
+        ok("match ready_in with | Some(t) -> delay (notify \"3 min!\") (t - 3min) | None -> {}");
+        ok("notify \"starting in 3 min!\" before ready_in by 3min");
     }
 
     #[test]
-    fn compound_duration_notify() {
-        let p = compile_policy("#interested > 0 => notify in 1m2s").expect("compile");
-        let env = env_with(&[("interested", Value::List(vec![Value::Str("A".into())]))]);
-        let fired = eval_program(&p, &env).expect("eval");
-        assert_eq!(
-            fired,
-            Some(FiredAction::Notify {
-                message: None,
-                after_secs: Some(62)
-            })
-        );
+    fn rejects_nonexhaustive_match() {
+        let ctx = TypeContext::default();
+        // Missing a `_` arm: exhaustiveness is enforced even for Action matches.
+        let p = parse_program("match #committed with | 2 -> commit | 3 -> lurk").expect("parse");
+        assert!(typecheck_program(p, &ctx).is_err());
     }
 
     #[test]
-    fn proj_and_avg_over_committed() {
-        // proj(committed).1 is List<Dur>; avg over durations returns Dur.
-        let p = compile_policy("avg(proj(committed).1) > 1min => notify").expect("compile");
-        let env = env_with(&[(
-            "committed",
-            Value::List(vec![named("A", 60), named("B", 120), named("C", 180)]),
-        )]);
-        let fired = eval_program(&p, &env).expect("eval");
-        assert_eq!(
-            fired,
-            Some(FiredAction::Notify {
-                message: None,
-                after_secs: None
-            })
-        );
-    }
+    fn evaluates_programs() {
+        use crate::eval::{eval_expr, eval_program, Effect, EvalEnv, Value};
+        use std::collections::BTreeMap;
 
-    #[test]
-    fn lambda_application() {
-        let expr = parse::parse_program("(fun x -> x * 2) 4 > 7 => notify")
-            .expect("parse");
-        let typed = typeck::typecheck_program(expr, &typeck::TypeContext::default())
-            .expect("typecheck");
-        let env = EvalEnv::default();
-        let fired = eval_program(&typed, &env).expect("eval");
-        assert!(matches!(fired, Some(FiredAction::Notify { .. })));
-    }
-
-    #[test]
-    fn map_filter_any() {
-        let src = "any(fun c -> c > 2min, proj(committed).1) => commit";
-        let p = compile_policy(src).expect("compile");
-        let env = env_with(&[(
-            "committed",
-            Value::List(vec![named("A", 60), named("B", 200)]),
-        )]);
-        let fired = eval_program(&p, &env).expect("eval");
-        assert_eq!(fired, Some(FiredAction::Commit));
-    }
-
-    #[test]
-    fn bindings_are_usable() {
-        let src = "a = 3\nb = #interested\nb > a => interest";
-        let p = compile_policy(src).expect("compile");
-        let env = env_with(&[(
-            "interested",
-            Value::List(vec![
-                Value::Str("A".into()),
-                Value::Str("B".into()),
-                Value::Str("C".into()),
-                Value::Str("D".into()),
-            ]),
-        )]);
-        let fired = eval_program(&p, &env).expect("eval");
-        assert_eq!(fired, Some(FiredAction::Interest));
-    }
-
-    #[test]
-    fn match_expression_strict() {
-        let src = "a = 2\nmatch a\n  1 => false\n  2 => true\n  _ => false\n=> lurk";
-        let p = compile_policy(src).expect("compile");
-        let env = EvalEnv::default();
-        let fired = eval_program(&p, &env).expect("eval");
-        assert_eq!(fired, Some(FiredAction::Lurk));
-    }
-
-    #[test]
-    fn match_requires_exhaustive() {
-        let src = "a = 2\nmatch a\n  1 => true\n  2 => false\n=> notify";
-        let err = compile_policy(src).expect_err("must require wildcard");
-        assert!(!err.is_empty());
-    }
-
-    #[test]
-    fn match_arms_must_agree() {
-        let src = "match 1\n  1 => true\n  _ => 3\n=> notify";
-        let err = compile_policy(src).expect_err("mismatched arm types");
-        assert!(!err.is_empty());
-    }
-
-    #[test]
-    fn rejects_type_error() {
-        let err = compile_policy("#committed and true => notify").expect_err("must fail");
-        assert!(!err.is_empty());
-    }
-
-    #[test]
-    fn message_named_argument() {
-        let p = compile_policy("#interested > 0 => notify(message: \"hello\", after: 1min)")
-            .expect("compile");
-        match p.action.spec {
-            ActionSpec::Notify { message, after } => {
-                assert_eq!(message.as_deref(), Some("hello"));
-                assert!(after.is_some());
+        fn person(name: &str, state: &str, secs: i64) -> Value {
+            let mut fields = BTreeMap::new();
+            fields.insert("name".to_string(), Value::Str(name.to_string()));
+            let st = match state {
+                "committed" => Value::Variant {
+                    type_name: "State".to_string(),
+                    name: "Committed".to_string(),
+                    values: vec![Value::Dur(secs)],
+                },
+                "arrived" => Value::Variant {
+                    type_name: "State".to_string(),
+                    name: "Arrived".to_string(),
+                    values: vec![Value::Dur(secs)],
+                },
+                "interested" => Value::Variant {
+                    type_name: "State".to_string(),
+                    name: "Interested".to_string(),
+                    values: vec![],
+                },
+                _ => Value::Variant {
+                    type_name: "State".to_string(),
+                    name: "Lurker".to_string(),
+                    values: vec![],
+                },
+            };
+            fields.insert("state".to_string(), st);
+            Value::Record {
+                type_name: "Person".to_string(),
+                fields,
             }
-            _ => panic!("expected notify"),
         }
+
+        let ctx = TypeContext::default();
+        let mut env = EvalEnv::default();
+        env.vars.insert(
+            "committed".to_string(),
+            Value::List(vec![
+                person("A", "committed", 60),
+                person("B", "committed", 120),
+                person("C", "committed", 180),
+                person("D", "committed", 240),
+            ]),
+        );
+        env.vars.insert("min_people".to_string(), Value::Num(3.0));
+        env.vars.insert(
+            "ready_in".to_string(),
+            Value::Variant {
+                type_name: "Option".to_string(),
+                name: "Some".to_string(),
+                values: vec![Value::Dur(300)],
+            },
+        );
+
+        let compile = |src: &str| {
+            let p = parse_program(src).expect("parse");
+            typecheck_program(p, &ctx).expect("typecheck")
+        };
+
+        let p = compile("#committed > min_people => notify \"we have {#committed}!\"");
+        let fired = eval_program(&p, &env).expect("eval");
+        assert_eq!(
+            fired,
+            Some(Effect::Notify {
+                message: "we have 4!".to_string()
+            })
+        );
+
+        let p = compile("#committed > 10 => commit");
+        assert_eq!(eval_program(&p, &env).expect("eval"), None);
+
+        let p = compile("notify \"starting in 3 min!\" before ready_in by 3min");
+        let fired = eval_program(&p, &env).expect("eval");
+        assert_eq!(
+            fired,
+            Some(Effect::Seq {
+                steps: vec![
+                    Effect::Sleep { secs: 120 },
+                    Effect::Notify {
+                        message: "starting in 3 min!".to_string(),
+                    },
+                ],
+            })
+        );
+
+        let p =
+            compile("any (fun p -> waited p > 2min) committed => { notify \"long wait\", commit }");
+        let fired = eval_program(&p, &env).expect("eval");
+        assert_eq!(
+            fired,
+            Some(Effect::Seq {
+                steps: vec![
+                    Effect::Notify {
+                        message: "long wait".to_string()
+                    },
+                    Effect::SetState {
+                        state: "committed".to_string()
+                    }
+                ]
+            })
+        );
+
+        // REPL-style expression evaluation.
+        let e = parse_expr_str("avg [1, 2, 3]").expect("parse");
+        assert!(matches!(eval_expr(&e, &env).expect("eval"), Value::Num(n) if n == 2.0));
+
+        let e = parse_expr_str("max (map (fun p -> waited p) committed)").expect("parse");
+        assert!(matches!(
+            eval_expr(&e, &env).expect("eval"),
+            Value::Dur(240)
+        ));
     }
 
     #[test]
-    fn record_type_field_access_and_destructuring() {
+    fn rejects_type_errors() {
+        let ctx = TypeContext::default();
+        let bad = |src: &str| {
+            let p = parse_program(src).expect("parse");
+            assert!(typecheck_program(p, &ctx).is_err(), "should fail: {src}");
+        };
+        bad("1 + true => notify \"x\"");
+        bad("#committed and true => notify \"x\"");
+        bad("3 => notify \"x\"");
+        bad("true => 5");
+        bad("today + 1 => lurk"); // Day is not Arith
+        bad("match today with | Mon -> true => lurk"); // non-exhaustive
+        bad("nope > 3 => lurk"); // unknown name
+        bad("notify 3 => lurk"); // notify needs Str
+                                 // impl method body checked against the trait signature (Str, not a list).
+        bad("trait W<a> {\n  w: a -> Num\n}\nimpl W<Str> {\n  w s = #s\n}\ntrue => lurk");
+    }
+
+    #[test]
+    fn json_boundary_matches_frontend() {
+        use crate::ast::TypedProgram;
+        use crate::eval::{Effect, EvalEnv};
+        use crate::{compile_policy_with_diagnostics, evaluate_policy_safe};
+
+        let compiled =
+            compile_policy_with_diagnostics("self.name == \"A\" => notify \"hi {self.name}\"");
+        assert!(compiled.diagnostics.is_empty());
+        // Round-trip the policy through JSON (as the wasm boundary does).
+        let policy_json = serde_json::to_string(&compiled.policy.unwrap()).unwrap();
+        let policy: TypedProgram = serde_json::from_str(&policy_json).unwrap();
+
+        // `env` encoded exactly like MathPage's buildPolicyEnv.
+        let env_json = r#"{"vars":{"self":{"kind":"Record","value":{"type":"Person","fields":{
+            "name":{"kind":"Str","value":"A"},
+            "state":{"kind":"Variant","value":{"type":"State","name":"Lurker","values":[]}}}}}}}"#;
+        let env: EvalEnv = serde_json::from_str(env_json).unwrap();
+
+        let res = evaluate_policy_safe(&policy, &env);
+        assert_eq!(res.error, None);
+        assert!(matches!(res.fired, Some(Effect::Notify { message }) if message == "hi A"));
+    }
+
+    #[test]
+    fn user_trait_and_impl_dispatch() {
+        use crate::eval::{eval_expr, EvalEnv, Value};
+        let ctx = TypeContext::default();
         let src = "\
-type user = { id : int; name : string; email : string }
-account = { id = 1; name = \"Alice\"; email = \"a@x.com\" }
-{ name; _ } = account
-name == \"Alice\" and account.id > 0 => notify \"ok\" in 3s";
-        let p = compile_policy(src).expect("compile");
+trait Weight<a> {
+  weight: a -> Num
+}
+impl Weight<Str> {
+  weight s = 3
+}
+impl Weight<Num> {
+  weight n = n * 2
+}
+wa = weight \"abc\"
+wn = weight 5
+wa + wn > 0 => notify \"{wa} and {wn}\"";
+        let p = parse_program(src).expect("parse");
+        let typed = typecheck_program(p, &ctx).expect("typecheck");
+        let fired = crate::eval::eval_program(&typed, &EvalEnv::default()).expect("eval");
+        assert_eq!(
+            fired,
+            Some(crate::eval::Effect::Notify {
+                message: "3 and 10".to_string()
+            })
+        );
+
+        // Same, in the REPL.
+        let e = parse_expr_str("Some(3)").expect("parse");
+        assert!(matches!(eval_expr(&e, &EvalEnv::default()).expect("eval"),
+            Value::Variant { ref name, .. } if name == "Some"));
+    }
+
+    #[test]
+    fn patterns_and_effects() {
+        use crate::eval::{eval_program, Effect, EvalEnv};
+        let ctx = TypeContext::default();
+        let compile = |src: &str| {
+            let p = parse_program(src).expect("parse");
+            typecheck_program(p, &ctx).expect("typecheck")
+        };
+
+        // List/option patterns + delay desugaring into a sleep + notify.
+        let src = "\
+first_eta xs = match xs with
+  | [] -> None
+  | p :: _ -> eta p
+true => delay (notify \"go\") 5s";
+        let p = compile(src);
         let fired = eval_program(&p, &EvalEnv::default()).expect("eval");
         assert_eq!(
             fired,
-            Some(FiredAction::Notify {
-                message: Some("ok".to_string()),
-                after_secs: Some(3)
+            Some(Effect::Seq {
+                steps: vec![
+                    Effect::Sleep { secs: 5 },
+                    Effect::Notify {
+                        message: "go".to_string()
+                    }
+                ]
             })
         );
-    }
 
-    #[test]
-    fn record_multiline_and_comments() {
-        let src = "\
-(* a record type *)
-type user = {
-  id : int
-  name : string
-}
-account = {
-  id = 7
-  name = \"Bo\"
-}
-account.id == 7 => notify";
-        let p = compile_policy(src).expect("compile");
-        let fired = eval_program(&p, &EvalEnv::default()).expect("eval");
-        assert!(matches!(fired, Some(FiredAction::Notify { .. })));
-    }
-
-    #[test]
-    fn enum_match_exhaustive() {
-        let src = "\
-type color = Red | Green | Blue
-c = Green
-match c
-  Red => false
-  Green => true
-  Blue => false
-=> commit";
-        let p = compile_policy(src).expect("compile");
-        let fired = eval_program(&p, &EvalEnv::default()).expect("eval");
-        assert_eq!(fired, Some(FiredAction::Commit));
-    }
-
-    #[test]
-    fn enum_match_non_exhaustive_rejected() {
-        let src = "\
-type color = Red | Green | Blue
-c = Red
-match c
-  Red => true
-  Green => false
-=> notify";
-        let err = compile_policy(src).expect_err("must require all variants or '_'");
-        assert!(!err.is_empty());
-    }
-
-    #[test]
-    fn record_wrong_field_type_rejected() {
-        let src = "\
-type user = { id : int; name : string }
-account = { id = \"nope\"; name = \"Alice\" }
-account.id > 0 => notify";
-        let err = compile_policy(src).expect_err("id must be Num");
-        assert!(!err.is_empty());
-    }
-
-    #[test]
-    fn evaluate_expression_terminal() {
-        let env = env_with(&[(
-            "committed",
-            Value::List(vec![named("A", 60), named("B", 120)]),
-        )]);
-        let r = evaluate_expression("avg(proj(committed).1)", &env);
-        assert_eq!(r.error, None);
-        assert_eq!(r.output.as_deref(), Some("1m30s"));
-        assert_eq!(r.ty.as_deref(), Some("Dur"));
-
-        let arith = evaluate_expression("(fun x -> x * 2) 4 + 1", &EvalEnv::default());
-        assert_eq!(arith.output.as_deref(), Some("9"));
-        assert_eq!(arith.ty.as_deref(), Some("Num"));
-
-        let bad = evaluate_expression("1 + true", &EvalEnv::default());
-        assert!(bad.error.is_some());
-    }
-
-    #[test]
-    fn string_equality_in_condition() {
-        let expr = parse::parse_program("\"a\" == \"a\" => interest").expect("parse");
-        let typed = typeck::typecheck_program(expr, &typeck::TypeContext::default())
-            .expect("typecheck");
-        let cond = eval_expr(&typed.condition, &HashMap::new()).expect("eval");
-        assert_eq!(cond, Value::Bool(true));
+        // if/then/else selecting an action.
+        let p = compile("is_weekend today => if is_ready then commit else lurk");
+        let mut env = EvalEnv::default();
+        env.vars.insert(
+            "today".to_string(),
+            crate::eval::Value::Variant {
+                type_name: "Day".to_string(),
+                name: "Sat".to_string(),
+                values: vec![],
+            },
+        );
+        env.vars
+            .insert("is_ready".to_string(), crate::eval::Value::Bool(false));
+        let fired = eval_program(&p, &env).expect("eval");
+        assert_eq!(
+            fired,
+            Some(Effect::SetState {
+                state: "lurker".to_string()
+            })
+        );
     }
 }

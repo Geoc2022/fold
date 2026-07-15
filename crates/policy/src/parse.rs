@@ -1,16 +1,13 @@
 use crate::ast::{
-    ActionSpec, BinaryOp, Binding, Decl, Expr, MatchArm, Pattern, Program, Rule, Ty, UnaryOp,
+    BinaryOp, Binding, Decl, Expr, ImplDecl, MatchArm, Pattern, Program, StrSeg, TraitDecl,
+    Ty, TypeBody, TypeDecl, UnaryOp, VariantDef,
 };
 use crate::diag::{Diagnostic, Span};
-use crate::lex::{lex, Token, TokenKind};
+use crate::lex::{lex, StrPart, Token, TokenKind};
 
 pub fn parse_program(input: &str) -> Result<Program, Vec<Diagnostic>> {
     let toks = lex(input)?;
-    let mut p = Parser {
-        tokens: toks,
-        at: 0,
-        errors: Vec::new(),
-    };
+    let mut p = Parser::new(toks);
     let program = p.parse_program();
     p.expect_eof();
     if p.errors.is_empty() {
@@ -23,12 +20,8 @@ pub fn parse_program(input: &str) -> Result<Program, Vec<Diagnostic>> {
 /// Parse a standalone expression (used by the interactive terminal/REPL).
 pub fn parse_expr_str(input: &str) -> Result<Expr, Vec<Diagnostic>> {
     let toks = lex(input)?;
-    let mut p = Parser {
-        tokens: toks,
-        at: 0,
-        errors: Vec::new(),
-    };
-    p.skip_newlines();
+    let mut p = Parser::new(toks);
+    p.skip_layout();
     let expr = p.parse_expr();
     p.expect_eof();
     if p.errors.is_empty() {
@@ -45,12 +38,20 @@ struct Parser {
 }
 
 impl Parser {
-    fn current(&self) -> &Token {
-        &self.tokens[self.at]
+    fn new(tokens: Vec<Token>) -> Self {
+        Parser {
+            tokens,
+            at: 0,
+            errors: Vec::new(),
+        }
     }
 
     fn kind(&self) -> &TokenKind {
         &self.tokens[self.at].kind
+    }
+
+    fn span(&self) -> Span {
+        self.tokens[self.at].span
     }
 
     fn peek_kind(&self, ahead: usize) -> &TokenKind {
@@ -73,605 +74,623 @@ impl Parser {
         }
     }
 
+    fn expect(&mut self, kind: &TokenKind, what: &str) {
+        if !self.eat(kind) {
+            self.error(format!("expected {what}"));
+        }
+    }
+
     fn skip_newlines(&mut self) {
         while matches!(self.kind(), TokenKind::Newline) {
             self.bump();
         }
     }
 
+    /// Skip newline / indent / dedent tokens (used inside brackets and match).
+    fn skip_layout(&mut self) {
+        while matches!(
+            self.kind(),
+            TokenKind::Newline | TokenKind::Indent | TokenKind::Dedent
+        ) {
+            self.bump();
+        }
+    }
+
     fn error(&mut self, msg: impl Into<String>) {
-        self.errors.push(Diagnostic::new(self.current().span, msg));
+        self.errors.push(Diagnostic::new(self.span(), msg));
     }
 
     fn expect_eof(&mut self) {
-        self.skip_newlines();
+        self.skip_layout();
         if !matches!(self.kind(), TokenKind::Eof) {
             self.error("unexpected trailing input");
         }
     }
 
-    /// program := (decl | binding)* rule
+    fn finish_statement(&mut self) {
+        self.skip_layout();
+    }
+
+    fn take_doc(&mut self) -> Option<String> {
+        let mut doc = None;
+        while let TokenKind::DocComment(text) = self.kind() {
+            doc = Some(text.clone());
+            self.bump();
+            self.skip_newlines();
+        }
+        doc
+    }
+
+    // ----- program -----
+
     fn parse_program(&mut self) -> Program {
         let mut decls = Vec::new();
         let mut bindings = Vec::new();
-        self.skip_newlines();
+        let mut action: Option<Expr> = None;
+        self.skip_layout();
         loop {
-            if matches!(self.kind(), TokenKind::Type) {
-                decls.push(self.parse_decl());
-                self.finish_statement();
-                continue;
+            self.skip_layout();
+            if matches!(self.kind(), TokenKind::Eof) {
+                break;
             }
-            // Record destructuring binding: `{ a; b; _ } = expr`.
-            if matches!(self.kind(), TokenKind::LBrace) {
-                bindings.push(self.parse_record_binding());
-                self.finish_statement();
-                continue;
+            let doc = self.take_doc();
+            self.skip_layout();
+            if matches!(self.kind(), TokenKind::Eof) {
+                break;
             }
-            // Simple binding `ident = expr` — lookahead for the `=`.
-            if matches!(self.kind(), TokenKind::Ident(_))
-                && matches!(self.peek_kind(1), TokenKind::Eq)
-            {
-                let name = match self.bump().kind {
-                    TokenKind::Ident(s) => s,
-                    _ => unreachable!(),
-                };
-                self.bump(); // '='
-                let value = self.parse_expr();
-                bindings.push(Binding::Simple { name, value });
-                self.finish_statement();
-                continue;
+            match self.kind() {
+                TokenKind::Type => {
+                    decls.push(Decl::Type(self.parse_type_decl(doc)));
+                }
+                TokenKind::Trait => {
+                    decls.push(Decl::Trait(self.parse_trait_decl(doc)));
+                }
+                TokenKind::Impl => {
+                    decls.push(Decl::Impl(self.parse_impl_decl()));
+                }
+                _ if self.looks_like_binding() => {
+                    bindings.push(self.parse_binding(doc));
+                }
+                _ => {
+                    // The final expression: an Action. `cond => act` is sugar
+                    // for `if cond then act else {}` (do nothing).
+                    let expr = self.parse_expr();
+                    action = Some(if self.eat(&TokenKind::FatArrow) {
+                        let then = self.parse_expr();
+                        Expr::If {
+                            cond: Box::new(expr),
+                            then: Box::new(then),
+                            els: Box::new(Expr::Block(Vec::new())),
+                        }
+                    } else {
+                        expr
+                    });
+                }
             }
-            break;
+            self.finish_statement();
+            if action.is_some() {
+                break;
+            }
         }
-        let rule = self.parse_rule();
-        self.skip_newlines();
+        let action = action.unwrap_or_else(|| {
+            self.error("a policy must end with an action (an expression of type Action)");
+            Expr::Block(Vec::new())
+        });
         Program {
             decls,
             bindings,
-            rule,
+            action,
         }
     }
 
-    fn finish_statement(&mut self) {
-        if !matches!(self.kind(), TokenKind::Newline | TokenKind::Eof) {
-            self.error("expected newline after statement");
-        }
-        self.skip_newlines();
-    }
-
-    /// decl := 'type' ident '=' ( record-body | enum-body )
-    fn parse_decl(&mut self) -> Decl {
-        self.bump(); // 'type'
-        let name = self.expect_ident("expected type name");
-        if !self.eat(&TokenKind::Eq) {
-            self.error("expected '=' in type declaration");
-        }
-        self.skip_newlines();
-        if matches!(self.kind(), TokenKind::LBrace) {
-            let fields = self.parse_record_type_fields();
-            Decl::Record { name, fields }
-        } else {
-            let variants = self.parse_enum_variants();
-            Decl::Enum { name, variants }
-        }
-    }
-
-    /// `{ field : type ; ... }` (`;` or newline separated).
-    fn parse_record_type_fields(&mut self) -> Vec<(String, Ty)> {
-        let mut fields = Vec::new();
-        self.bump(); // '{'
-        self.skip_field_separators();
-        while !matches!(self.kind(), TokenKind::RBrace | TokenKind::Eof) {
-            let field = self.expect_ident("expected field name");
-            if !self.eat(&TokenKind::Colon) {
-                self.error("expected ':' after field name");
-            }
-            let ty = self.parse_type();
-            fields.push((field, ty));
-            if !matches!(self.kind(), TokenKind::RBrace) {
-                if matches!(self.kind(), TokenKind::Semi | TokenKind::Newline) {
-                    self.skip_field_separators();
-                } else {
-                    self.error("expected ';' or newline between fields");
+    fn looks_like_binding(&self) -> bool {
+        let toks = &self.tokens;
+        let mut k = self.at;
+        match &toks[k].kind {
+            TokenKind::LBrace | TokenKind::LParen | TokenKind::LBracket => {
+                let mut depth = 0i32;
+                loop {
+                    match &toks[k].kind {
+                        TokenKind::LParen | TokenKind::LBracket | TokenKind::LBrace => depth += 1,
+                        TokenKind::RParen | TokenKind::RBracket | TokenKind::RBrace => {
+                            depth -= 1;
+                            if depth == 0 {
+                                k += 1;
+                                break;
+                            }
+                        }
+                        TokenKind::Eof => return false,
+                        _ => {}
+                    }
+                    k += 1;
                 }
-            }
-        }
-        if !self.eat(&TokenKind::RBrace) {
-            self.error("expected '}'");
-        }
-        fields
-    }
-
-    /// `A | B | C`
-    fn parse_enum_variants(&mut self) -> Vec<String> {
-        let mut variants = Vec::new();
-        let _ = self.eat(&TokenKind::Pipe); // optional leading bar
-        variants.push(self.expect_ident("expected variant name"));
-        while self.eat(&TokenKind::Pipe) {
-            variants.push(self.expect_ident("expected variant name"));
-        }
-        variants
-    }
-
-    fn parse_type(&mut self) -> Ty {
-        let name = self.expect_ident("expected a type");
-        match name.as_str() {
-            "int" | "float" | "num" | "Num" => Ty::Num,
-            "string" | "str" | "Str" => Ty::Str,
-            "bool" | "Bool" => Ty::Bool,
-            "dur" | "Dur" => Ty::Dur,
-            _ => Ty::Named(name),
-        }
-    }
-
-    /// `{ a; b; _ } = expr`
-    fn parse_record_binding(&mut self) -> Binding {
-        self.bump(); // '{'
-        self.skip_field_separators();
-        let mut fields = Vec::new();
-        let mut ignore_rest = false;
-        while !matches!(self.kind(), TokenKind::RBrace | TokenKind::Eof) {
-            if matches!(self.kind(), TokenKind::Underscore) {
-                self.bump();
-                ignore_rest = true;
-            } else {
-                fields.push(self.expect_ident("expected field name in pattern"));
-            }
-            if !matches!(self.kind(), TokenKind::RBrace) {
-                if matches!(self.kind(), TokenKind::Semi | TokenKind::Newline) {
-                    self.skip_field_separators();
-                } else {
-                    self.error("expected ';' or newline between fields");
+                while matches!(toks[k].kind, TokenKind::Newline) {
+                    k += 1;
                 }
+                matches!(toks[k].kind, TokenKind::Eq)
+            }
+            TokenKind::Ident(_) => {
+                k += 1;
+                while matches!(toks[k].kind, TokenKind::Ident(_) | TokenKind::Underscore) {
+                    k += 1;
+                }
+                matches!(toks[k].kind, TokenKind::Eq)
+            }
+            _ => false,
+        }
+    }
+
+    fn parse_binding(&mut self, doc: Option<String>) -> Binding {
+        // Destructuring binding: `{ ... } = e` or `( ... ) = e`.
+        if matches!(
+            self.kind(),
+            TokenKind::LBrace | TokenKind::LParen | TokenKind::LBracket
+        ) {
+            let pattern = self.parse_pattern();
+            self.expect(&TokenKind::Eq, "'=' in binding");
+            let value = self.parse_expr();
+            return Binding {
+                doc,
+                pattern,
+                value,
+            };
+        }
+        // `name arg1 arg2 = body` (function sugar) or `name = expr`.
+        let name = self.expect_ident("binding name");
+        let mut args: Vec<String> = Vec::new();
+        loop {
+            match self.kind() {
+                TokenKind::Ident(_) => args.push(self.expect_ident("parameter")),
+                TokenKind::Underscore => {
+                    self.bump();
+                    args.push(format!("_arg{}", args.len()));
+                }
+                _ => break,
             }
         }
-        if !self.eat(&TokenKind::RBrace) {
-            self.error("expected '}'");
+        self.expect(&TokenKind::Eq, "'=' in binding");
+        let mut value = self.parse_expr();
+        for param in args.into_iter().rev() {
+            value = Expr::Lambda {
+                param,
+                body: Box::new(value),
+            };
         }
-        if !self.eat(&TokenKind::Eq) {
-            self.error("expected '=' after destructuring pattern");
-        }
-        let value = self.parse_expr();
-        Binding::Record {
-            fields,
-            ignore_rest,
+        Binding {
+            doc,
+            pattern: Pattern::Var(name),
             value,
         }
     }
 
-    fn skip_field_separators(&mut self) {
-        while matches!(self.kind(), TokenKind::Semi | TokenKind::Newline) {
-            self.bump();
-        }
-    }
+    // ----- declarations -----
 
-    fn expect_ident(&mut self, msg: &str) -> String {
-        match self.kind().clone() {
-            TokenKind::Ident(s) => {
-                self.bump();
-                s
-            }
-            _ => {
-                self.error(msg);
-                String::new()
-            }
-        }
-    }
-
-    /// rule := expr '=>' action
-    fn parse_rule(&mut self) -> Rule {
-        let condition = self.parse_expr();
-        if !self.eat(&TokenKind::FatArrow) {
-            self.error("expected '=>' after condition");
-        }
-        let action = self.parse_action();
-        Rule { condition, action }
-    }
-
-    fn parse_action(&mut self) -> ActionSpec {
-        let name = match self.kind() {
-            TokenKind::Ident(name) => {
-                let out = name.clone();
-                self.bump();
-                out
-            }
-            _ => {
-                self.error("expected action name");
-                return ActionSpec::Notify {
-                    message: None,
-                    after: None,
-                };
-            }
-        };
-        match name.as_str() {
-            "notify" => self.parse_notify(),
-            "commit" => ActionSpec::Commit,
-            "interest" => ActionSpec::Interest,
-            "lurk" => ActionSpec::Lurk,
-            other => {
-                self.error(format!(
-                    "unsupported action '{other}' (expected notify, commit, interest, lurk)"
-                ));
-                ActionSpec::Notify {
-                    message: None,
-                    after: None,
-                }
-            }
-        }
-    }
-
-    fn parse_notify(&mut self) -> ActionSpec {
-        let mut message = None;
-        let mut after = None;
-
-        if let TokenKind::Str(s) = self.kind() {
-            message = Some(s.clone());
-            self.bump();
-        }
-
-        if let TokenKind::Ident(word) = self.kind() {
-            if word == "in" {
-                self.bump();
-                after = Some(self.parse_expr());
-            }
-        }
-
-        if matches!(self.kind(), TokenKind::LParen) {
-            self.bump();
-            if !matches!(self.kind(), TokenKind::RParen) {
-                loop {
-                    let key = match self.kind() {
-                        TokenKind::Ident(s) => {
-                            let out = s.clone();
-                            self.bump();
-                            out
-                        }
-                        _ => {
-                            self.error("expected action parameter name");
-                            String::new()
-                        }
-                    };
-                    if key == "after" {
-                        if !self.eat(&TokenKind::Colon) {
-                            self.error("expected ':' after 'after'");
-                        }
-                        let v = self.parse_expr();
-                        if after.is_some() {
-                            self.error("duplicate delay: use either 'in ...' or '(after: ...)'");
-                        }
-                        after = Some(v);
-                    } else if key == "message" {
-                        if !self.eat(&TokenKind::Colon) {
-                            self.error("expected ':' after 'message'");
-                        }
-                        match self.kind() {
-                            TokenKind::Str(s) => {
-                                let msg = s.clone();
-                                if message.is_some() {
-                                    self.error("duplicate message");
-                                }
-                                message = Some(msg);
-                                self.bump();
-                            }
-                            _ => self.error("notify message must be a quoted string"),
-                        }
-                    } else if !key.is_empty() {
-                        self.error(format!("unsupported notify parameter '{key}'"));
-                        let _ = self.parse_expr();
-                    }
-                    if self.eat(&TokenKind::Comma) {
-                        continue;
-                    }
+    fn parse_type_decl(&mut self, doc: Option<String>) -> TypeDecl {
+        self.bump(); // 'type'
+        let name = self.expect_uident("type name");
+        let mut params = Vec::new();
+        if self.eat(&TokenKind::Lt) {
+            loop {
+                params.push(self.expect_ident("type parameter"));
+                if !self.eat(&TokenKind::Comma) {
                     break;
                 }
             }
-            if !self.eat(&TokenKind::RParen) {
-                self.error("expected ')'");
-            }
+            self.expect(&TokenKind::Gt, "'>' after type parameters");
         }
-        ActionSpec::Notify { message, after }
-    }
-
-    fn parse_expr(&mut self) -> Expr {
-        // A `fun` lambda or `match` can appear as a full expression.
-        if matches!(self.kind(), TokenKind::Fun) {
-            return self.parse_lambda();
-        }
-        if matches!(self.kind(), TokenKind::Match) {
-            return self.parse_match();
-        }
-        self.parse_or()
-    }
-
-    fn parse_lambda(&mut self) -> Expr {
-        self.bump(); // 'fun'
-        let param = match self.kind() {
-            TokenKind::Ident(s) => {
-                let out = s.clone();
-                self.bump();
-                out
-            }
-            TokenKind::Underscore => {
-                self.bump();
-                "_".to_string()
-            }
-            _ => {
-                self.error("expected lambda parameter name");
-                String::new()
-            }
-        };
-        if !self.eat(&TokenKind::Arrow) {
-            self.error("expected '->' in lambda");
-        }
-        let body = self.parse_expr();
-        Expr::Lambda {
-            param,
-            body: Box::new(body),
+        self.expect(&TokenKind::Eq, "'=' in type declaration");
+        let body = self.parse_type_body();
+        TypeDecl {
+            doc,
+            name,
+            params,
+            body,
         }
     }
 
-    /// match := 'match' expr NEWLINE INDENT (pattern '=>' expr NEWLINE)+ DEDENT
-    fn parse_match(&mut self) -> Expr {
-        self.bump(); // 'match'
-        let scrutinee = self.parse_or();
-        if !self.eat(&TokenKind::Newline) {
-            self.error("expected newline after match subject");
+    fn parse_type_body(&mut self) -> TypeBody {
+        if matches!(self.kind(), TokenKind::LBrace) {
+            return TypeBody::Record(self.parse_record_ty_fields());
         }
+        let is_variant = matches!(self.kind(), TokenKind::Pipe)
+            || (matches!(self.kind(), TokenKind::UIdent(_))
+                && matches!(self.peek_kind(1), TokenKind::Pipe | TokenKind::LParen));
+        if is_variant {
+            self.parse_variant_body()
+        } else {
+            TypeBody::Alias(self.parse_ty())
+        }
+    }
+
+    fn parse_record_ty_fields(&mut self) -> Vec<(String, Ty)> {
+        self.expect(&TokenKind::LBrace, "'{'");
+        let mut fields = Vec::new();
         self.skip_newlines();
-        let mut arms = Vec::new();
-        if !self.eat(&TokenKind::Indent) {
-            self.error("expected indented match arms");
-            return Expr::Match {
-                scrutinee: Box::new(scrutinee),
-                arms,
-            };
+        while !matches!(self.kind(), TokenKind::RBrace | TokenKind::Eof) {
+            let name = self.expect_ident("field name");
+            self.expect(&TokenKind::Colon, "':' after field name");
+            let ty = self.parse_ty();
+            fields.push((name, ty));
+            self.skip_separators();
         }
-        loop {
-            self.skip_newlines();
-            if matches!(self.kind(), TokenKind::Dedent | TokenKind::Eof) {
-                break;
-            }
-            let pattern = self.parse_pattern();
-            if !self.eat(&TokenKind::FatArrow) {
-                self.error("expected '=>' in match arm");
-            }
-            let body = self.parse_expr();
-            arms.push(MatchArm { pattern, body });
-            if !matches!(self.kind(), TokenKind::Newline | TokenKind::Dedent | TokenKind::Eof) {
-                self.error("expected newline after match arm");
-            }
-        }
-        self.eat(&TokenKind::Dedent);
-        Expr::Match {
-            scrutinee: Box::new(scrutinee),
-            arms,
-        }
+        self.expect(&TokenKind::RBrace, "'}'");
+        fields
     }
 
-    fn parse_pattern(&mut self) -> Pattern {
-        match self.kind().clone() {
-            TokenKind::Underscore => {
-                self.bump();
-                Pattern::Wildcard
-            }
-            TokenKind::Number(n) => {
-                self.bump();
-                Pattern::Num(n)
-            }
-            TokenKind::Minus => {
-                self.bump();
-                match self.kind().clone() {
-                    TokenKind::Number(n) => {
-                        self.bump();
-                        Pattern::Num(-n)
-                    }
-                    TokenKind::DurationSecs(s) => {
-                        self.bump();
-                        Pattern::Dur(-s)
-                    }
-                    _ => {
-                        self.error("expected number after '-' in pattern");
-                        Pattern::Wildcard
+    fn parse_variant_body(&mut self) -> TypeBody {
+        let mut variants = Vec::new();
+        self.eat(&TokenKind::Pipe); // optional leading pipe
+        loop {
+            let name = self.expect_uident("variant name");
+            let mut args = Vec::new();
+            if self.eat(&TokenKind::LParen) {
+                loop {
+                    args.push(self.parse_ty());
+                    if !self.eat(&TokenKind::Comma) {
+                        break;
                     }
                 }
+                self.expect(&TokenKind::RParen, "')'");
             }
-            TokenKind::DurationSecs(s) => {
-                self.bump();
-                Pattern::Dur(s)
-            }
-            TokenKind::Str(s) => {
-                self.bump();
-                Pattern::Str(s)
-            }
-            TokenKind::True => {
-                self.bump();
-                Pattern::Bool(true)
-            }
-            TokenKind::False => {
-                self.bump();
-                Pattern::Bool(false)
-            }
-            TokenKind::Ident(name) => {
-                self.bump();
-                Pattern::Variant(name)
-            }
-            _ => {
-                self.error("expected a literal pattern, variant, or '_'");
-                self.bump();
-                Pattern::Wildcard
+            variants.push(VariantDef { name, args });
+            if !self.eat(&TokenKind::Pipe) {
+                break;
             }
         }
+        TypeBody::Variant(variants)
+    }
+
+    fn parse_trait_decl(&mut self, doc: Option<String>) -> TraitDecl {
+        self.bump(); // 'trait'
+        let name = self.expect_uident("trait name");
+        self.expect(&TokenKind::Lt, "'<' after trait name");
+        let param = self.expect_ident("trait type parameter");
+        self.expect(&TokenKind::Gt, "'>' after trait parameter");
+        self.expect(&TokenKind::LBrace, "'{'");
+        let mut methods = Vec::new();
+        self.skip_newlines();
+        while !matches!(self.kind(), TokenKind::RBrace | TokenKind::Eof) {
+            let m = self.expect_ident("method name");
+            self.expect(&TokenKind::Colon, "':' after method name");
+            let ty = self.parse_ty();
+            methods.push((m, ty));
+            self.skip_separators();
+        }
+        self.expect(&TokenKind::RBrace, "'}'");
+        TraitDecl {
+            doc,
+            name,
+            param,
+            methods,
+        }
+    }
+
+    fn parse_impl_decl(&mut self) -> ImplDecl {
+        self.bump(); // 'impl'
+        let trait_name = self.expect_uident("trait name");
+        self.expect(&TokenKind::Lt, "'<' after trait name");
+        let ty = self.parse_ty();
+        self.expect(&TokenKind::Gt, "'>' after impl type");
+        self.expect(&TokenKind::LBrace, "'{'");
+        let mut methods = Vec::new();
+        self.skip_newlines();
+        while !matches!(self.kind(), TokenKind::RBrace | TokenKind::Eof) {
+            let doc = self.take_doc();
+            methods.push(self.parse_binding(doc));
+            self.skip_separators();
+        }
+        self.expect(&TokenKind::RBrace, "'}'");
+        ImplDecl {
+            trait_name,
+            ty,
+            methods,
+        }
+    }
+
+    // ----- types -----
+
+    fn parse_ty(&mut self) -> Ty {
+        let atom = self.parse_ty_atom();
+        if self.eat(&TokenKind::Arrow) {
+            Ty::func(atom, self.parse_ty())
+        } else {
+            atom
+        }
+    }
+
+    fn parse_ty_atom(&mut self) -> Ty {
+        match self.kind().clone() {
+            TokenKind::UIdent(name) => {
+                self.bump();
+                let mut args = Vec::new();
+                if self.eat(&TokenKind::Lt) {
+                    loop {
+                        args.push(self.parse_ty());
+                        if !self.eat(&TokenKind::Comma) {
+                            break;
+                        }
+                    }
+                    self.expect(&TokenKind::Gt, "'>' after type arguments");
+                }
+                Ty::Con(name, args)
+            }
+            TokenKind::Ident(name) => {
+                // lowercase => type variable (represented as a nullary Con)
+                self.bump();
+                Ty::Con(name, Vec::new())
+            }
+            TokenKind::LBracket => {
+                self.bump();
+                let inner = self.parse_ty();
+                self.expect(&TokenKind::RBracket, "']'");
+                Ty::list(inner)
+            }
+            TokenKind::LParen => {
+                self.bump();
+                let mut items = vec![self.parse_ty()];
+                while self.eat(&TokenKind::Comma) {
+                    items.push(self.parse_ty());
+                }
+                self.expect(&TokenKind::RParen, "')'");
+                if items.len() == 1 {
+                    items.pop().unwrap()
+                } else {
+                    Ty::Tuple(items)
+                }
+            }
+            _ => {
+                self.error("expected a type");
+                Ty::Var(u32::MAX)
+            }
+        }
+    }
+
+    // ----- expressions -----
+
+    fn parse_expr(&mut self) -> Expr {
+        match self.kind() {
+            TokenKind::If => self.parse_if(),
+            TokenKind::Match => self.parse_match(),
+            TokenKind::Fun => self.parse_fun(),
+            _ => self.parse_or(),
+        }
+    }
+
+    fn parse_if(&mut self) -> Expr {
+        self.bump();
+        let cond = Box::new(self.parse_expr());
+        self.expect(&TokenKind::Then, "'then'");
+        let then = Box::new(self.parse_expr());
+        self.expect(&TokenKind::Else, "'else'");
+        let els = Box::new(self.parse_expr());
+        Expr::If { cond, then, els }
+    }
+
+    fn parse_fun(&mut self) -> Expr {
+        self.bump();
+        let mut params = Vec::new();
+        while let TokenKind::Ident(_) = self.kind() {
+            params.push(self.expect_ident("parameter"));
+        }
+        if params.is_empty() {
+            self.error("expected at least one parameter after 'fun'");
+        }
+        self.expect(&TokenKind::Arrow, "'->' after parameters");
+        let mut body = self.parse_expr();
+        for param in params.into_iter().rev() {
+            body = Expr::Lambda {
+                param,
+                body: Box::new(body),
+            };
+        }
+        body
+    }
+
+    fn parse_match(&mut self) -> Expr {
+        self.bump();
+        let scrutinee = Box::new(self.parse_expr());
+        self.expect(&TokenKind::With, "'with' after match scrutinee");
+        let mut arms = Vec::new();
+        loop {
+            self.skip_layout();
+            if !matches!(self.kind(), TokenKind::Pipe) {
+                break;
+            }
+            self.bump(); // '|'
+            let pattern = self.parse_pattern();
+            self.expect(&TokenKind::Arrow, "'->' in match arm");
+            let body = self.parse_expr();
+            arms.push(MatchArm { pattern, body });
+        }
+        if arms.is_empty() {
+            self.error("match needs at least one '| pattern -> expr' arm");
+        }
+        Expr::Match { scrutinee, arms }
     }
 
     fn parse_or(&mut self) -> Expr {
-        let mut expr = self.parse_xor();
-        while matches!(self.kind(), TokenKind::Or) {
+        let mut left = self.parse_and();
+        loop {
+            let op = match self.kind() {
+                TokenKind::Or => BinaryOp::Or,
+                TokenKind::Xor => BinaryOp::Xor,
+                _ => break,
+            };
             self.bump();
-            let rhs = self.parse_xor();
-            expr = bin(BinaryOp::Or, expr, rhs);
+            let right = self.parse_and();
+            left = Expr::Binary {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
         }
-        expr
-    }
-
-    fn parse_xor(&mut self) -> Expr {
-        let mut expr = self.parse_and();
-        while matches!(self.kind(), TokenKind::Xor) {
-            self.bump();
-            let rhs = self.parse_and();
-            expr = bin(BinaryOp::Xor, expr, rhs);
-        }
-        expr
+        left
     }
 
     fn parse_and(&mut self) -> Expr {
-        let mut expr = self.parse_cmp();
+        let mut left = self.parse_not();
         while matches!(self.kind(), TokenKind::And) {
             self.bump();
-            let rhs = self.parse_cmp();
-            expr = bin(BinaryOp::And, expr, rhs);
+            let right = self.parse_not();
+            left = Expr::Binary {
+                op: BinaryOp::And,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
         }
-        expr
+        left
+    }
+
+    fn parse_not(&mut self) -> Expr {
+        if matches!(self.kind(), TokenKind::Not) {
+            self.bump();
+            Expr::Unary {
+                op: UnaryOp::Not,
+                expr: Box::new(self.parse_not()),
+            }
+        } else {
+            self.parse_cmp()
+        }
     }
 
     fn parse_cmp(&mut self) -> Expr {
-        let mut expr = self.parse_add();
-        loop {
-            let op = match self.kind() {
-                TokenKind::Lt => Some(BinaryOp::Lt),
-                TokenKind::Lte => Some(BinaryOp::Lte),
-                TokenKind::Gt => Some(BinaryOp::Gt),
-                TokenKind::Gte => Some(BinaryOp::Gte),
-                TokenKind::EqEq => Some(BinaryOp::Eq),
-                TokenKind::Neq => Some(BinaryOp::Neq),
-                _ => None,
-            };
-            if let Some(op) = op {
-                self.bump();
-                let rhs = self.parse_add();
-                expr = bin(op, expr, rhs);
-            } else {
-                break;
-            }
+        let left = self.parse_cons();
+        let op = match self.kind() {
+            TokenKind::Lt => BinaryOp::Lt,
+            TokenKind::Lte => BinaryOp::Lte,
+            TokenKind::Gt => BinaryOp::Gt,
+            TokenKind::Gte => BinaryOp::Gte,
+            TokenKind::EqEq => BinaryOp::Eq,
+            TokenKind::Neq => BinaryOp::Neq,
+            _ => return left,
+        };
+        self.bump();
+        let right = self.parse_cons();
+        Expr::Binary {
+            op,
+            left: Box::new(left),
+            right: Box::new(right),
         }
-        expr
+    }
+
+    fn parse_cons(&mut self) -> Expr {
+        let left = self.parse_add();
+        if self.eat(&TokenKind::ColonColon) {
+            let right = self.parse_cons();
+            Expr::Cons(Box::new(left), Box::new(right))
+        } else {
+            left
+        }
     }
 
     fn parse_add(&mut self) -> Expr {
-        let mut expr = self.parse_mul();
+        let mut left = self.parse_mul();
         loop {
             let op = match self.kind() {
-                TokenKind::Plus => Some(BinaryOp::Add),
-                TokenKind::Minus => Some(BinaryOp::Sub),
-                _ => None,
+                TokenKind::Plus => BinaryOp::Add,
+                TokenKind::Minus => BinaryOp::Sub,
+                _ => break,
             };
-            if let Some(op) = op {
-                self.bump();
-                let rhs = self.parse_mul();
-                expr = bin(op, expr, rhs);
-            } else {
-                break;
-            }
+            self.bump();
+            let right = self.parse_mul();
+            left = Expr::Binary {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
         }
-        expr
+        left
     }
 
     fn parse_mul(&mut self) -> Expr {
-        let mut expr = self.parse_unary();
+        let mut left = self.parse_unary();
         loop {
             let op = match self.kind() {
-                TokenKind::Star => Some(BinaryOp::Mul),
-                TokenKind::Slash => Some(BinaryOp::Div),
-                TokenKind::Percent => Some(BinaryOp::Mod),
-                _ => None,
+                TokenKind::Star => BinaryOp::Mul,
+                TokenKind::Slash => BinaryOp::Div,
+                TokenKind::Percent => BinaryOp::Mod,
+                _ => break,
             };
-            if let Some(op) = op {
-                self.bump();
-                let rhs = self.parse_unary();
-                expr = bin(op, expr, rhs);
-            } else {
-                break;
-            }
+            self.bump();
+            let right = self.parse_unary();
+            left = Expr::Binary {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
         }
-        expr
+        left
     }
 
     fn parse_unary(&mut self) -> Expr {
-        match self.kind() {
-            TokenKind::Minus => {
-                self.bump();
-                Expr::Unary {
-                    op: UnaryOp::Neg,
-                    expr: Box::new(self.parse_unary()),
-                }
+        if matches!(self.kind(), TokenKind::Minus) {
+            self.bump();
+            Expr::Unary {
+                op: UnaryOp::Neg,
+                expr: Box::new(self.parse_unary()),
             }
-            TokenKind::Not => {
-                self.bump();
-                Expr::Unary {
-                    op: UnaryOp::Not,
-                    expr: Box::new(self.parse_unary()),
-                }
-            }
-            TokenKind::Hash => {
-                self.bump();
-                match self.kind().clone() {
-                    TokenKind::Ident(name) => {
-                        self.bump();
-                        Expr::Count(name)
-                    }
-                    _ => {
-                        self.error("expected identifier after '#'");
-                        Expr::Num(0.0)
-                    }
-                }
-            }
-            _ => self.parse_apply(),
+        } else {
+            self.parse_app()
         }
     }
 
-    /// Application by juxtaposition (ML/OCaml): `f x`, and `f(a, b)` is `f`
-    /// applied to the tuple `(a, b)`. A trailing tuple index binds to the whole
-    /// application result, so `proj(x).1` means `(proj(x)).1` (C/JS-style).
-    fn parse_apply(&mut self) -> Expr {
-        let mut expr = self.parse_primary();
-        while self.starts_argument() {
-            let arg = self.parse_primary();
-            expr = Expr::Apply {
-                func: Box::new(expr),
+    fn parse_app(&mut self) -> Expr {
+        let mut func = self.parse_postfix();
+        loop {
+            if self.eat(&TokenKind::Before) {
+                let target = self.parse_expr();
+                self.expect(&TokenKind::By, "'by' after 'before ...'");
+                let lead = self.parse_expr();
+                func = self.desugar_before_by(func, target, lead);
+                continue;
+            }
+            if !self.starts_atom() {
+                break;
+            }
+            let arg = self.parse_postfix();
+            func = Expr::Apply {
+                func: Box::new(func),
                 arg: Box::new(arg),
             };
         }
-        self.parse_tuple_index(expr)
+        func
     }
 
-    fn parse_tuple_index(&mut self, mut expr: Expr) -> Expr {
-        while matches!(self.kind(), TokenKind::Dot) {
-            self.bump();
-            match self.kind().clone() {
-                TokenKind::Number(n) if n.fract() == 0.0 && n >= 0.0 => {
-                    self.bump();
-                    expr = Expr::TupleIndex {
-                        base: Box::new(expr),
-                        index: n as usize,
-                    };
-                }
-                TokenKind::Ident(field) => {
-                    self.bump();
-                    expr = Expr::Field {
-                        base: Box::new(expr),
-                        field,
-                    };
-                }
-                _ => {
-                    self.error("expected field name or tuple index after '.'");
-                    break;
-                }
-            }
+    fn desugar_before_by(&self, action: Expr, target: Expr, lead: Expr) -> Expr {
+        let t = "_ready_in".to_string();
+        let delayed = Expr::Apply {
+            func: Box::new(Expr::Apply {
+                func: Box::new(Expr::Var("delay".to_string())),
+                arg: Box::new(action),
+            }),
+            arg: Box::new(Expr::Binary {
+                op: BinaryOp::Sub,
+                left: Box::new(Expr::Var(t.clone())),
+                right: Box::new(lead),
+            }),
+        };
+        Expr::Match {
+            scrutinee: Box::new(target),
+            arms: vec![
+                MatchArm {
+                    pattern: Pattern::Variant {
+                        name: "Some".to_string(),
+                        args: vec![Pattern::Var(t)],
+                    },
+                    body: delayed,
+                },
+                MatchArm {
+                    pattern: Pattern::Variant {
+                        name: "None".to_string(),
+                        args: vec![],
+                    },
+                    body: Expr::Block(Vec::new()),
+                },
+            ],
         }
-        expr
     }
 
-    /// A primary that can serve as a juxtaposed argument (no leading operators).
-    fn starts_argument(&self) -> bool {
+    fn starts_atom(&self) -> bool {
         matches!(
             self.kind(),
             TokenKind::Number(_)
@@ -680,24 +699,51 @@ impl Parser {
                 | TokenKind::True
                 | TokenKind::False
                 | TokenKind::Ident(_)
+                | TokenKind::UIdent(_)
+                | TokenKind::Hash
                 | TokenKind::LParen
-                | TokenKind::Fun
+                | TokenKind::LBracket
+                | TokenKind::LBrace
         )
     }
 
-    fn parse_primary(&mut self) -> Expr {
+    fn parse_postfix(&mut self) -> Expr {
+        let mut base = self.parse_atom();
+        while matches!(self.kind(), TokenKind::Dot) {
+            self.bump();
+            match self.kind().clone() {
+                TokenKind::Ident(field) => {
+                    self.bump();
+                    base = Expr::Field {
+                        base: Box::new(base),
+                        field,
+                    };
+                }
+                TokenKind::Number(n) if n.fract() == 0.0 && n >= 0.0 => {
+                    self.bump();
+                    base = Expr::TupleIndex {
+                        base: Box::new(base),
+                        index: n as usize,
+                    };
+                }
+                _ => {
+                    self.error("expected a field name or tuple index after '.'");
+                    break;
+                }
+            }
+        }
+        base
+    }
+
+    fn parse_atom(&mut self) -> Expr {
         match self.kind().clone() {
             TokenKind::Number(n) => {
                 self.bump();
                 Expr::Num(n)
             }
-            TokenKind::DurationSecs(secs) => {
+            TokenKind::DurationSecs(s) => {
                 self.bump();
-                Expr::DurationSecs(secs)
-            }
-            TokenKind::Str(s) => {
-                self.bump();
-                Expr::Str(s)
+                Expr::DurationSecs(s)
             }
             TokenKind::True => {
                 self.bump();
@@ -707,80 +753,277 @@ impl Parser {
                 self.bump();
                 Expr::Bool(false)
             }
-            TokenKind::Fun => self.parse_lambda(),
-            TokenKind::LBrace => self.parse_record_literal(),
+            TokenKind::Str(parts) => {
+                let span = self.span();
+                self.bump();
+                Expr::Str(self.build_str_segs(parts, span))
+            }
             TokenKind::Ident(name) => {
                 self.bump();
                 Expr::Var(name)
             }
+            TokenKind::UIdent(name) => {
+                self.bump();
+                Expr::Ctor(name)
+            }
+            TokenKind::Hash => {
+                self.bump();
+                let arg = self.parse_postfix();
+                Expr::Apply {
+                    func: Box::new(Expr::Var("len".to_string())),
+                    arg: Box::new(arg),
+                }
+            }
             TokenKind::LParen => {
                 self.bump();
-                let first = self.parse_expr();
-                if matches!(self.kind(), TokenKind::Comma) {
-                    let mut items = vec![first];
-                    while self.eat(&TokenKind::Comma) {
-                        if matches!(self.kind(), TokenKind::RParen) {
+                self.skip_newlines();
+                let mut items = vec![self.parse_expr()];
+                self.skip_newlines();
+                while self.eat(&TokenKind::Comma) {
+                    self.skip_newlines();
+                    if matches!(self.kind(), TokenKind::RParen) {
+                        break;
+                    }
+                    items.push(self.parse_expr());
+                    self.skip_newlines();
+                }
+                self.expect(&TokenKind::RParen, "')'");
+                if items.len() == 1 {
+                    items.pop().unwrap()
+                } else {
+                    Expr::Tuple(items)
+                }
+            }
+            TokenKind::LBracket => {
+                self.bump();
+                let mut items = Vec::new();
+                self.skip_newlines();
+                while !matches!(self.kind(), TokenKind::RBracket | TokenKind::Eof) {
+                    items.push(self.parse_expr());
+                    self.skip_separators();
+                }
+                self.expect(&TokenKind::RBracket, "']'");
+                Expr::List(items)
+            }
+            TokenKind::LBrace => self.parse_brace(),
+            _ => {
+                self.error("expected an expression");
+                self.bump();
+                Expr::Bool(false)
+            }
+        }
+    }
+
+    /// `{ field = v, ... }` record literal, or `{ a1, a2 }` action block.
+    fn parse_brace(&mut self) -> Expr {
+        self.bump(); // '{'
+        self.skip_newlines();
+        let is_record = matches!(self.kind(), TokenKind::Ident(_))
+            && matches!(self.peek_kind(1), TokenKind::Eq);
+        if is_record {
+            let mut fields = Vec::new();
+            while !matches!(self.kind(), TokenKind::RBrace | TokenKind::Eof) {
+                let name = self.expect_ident("field name");
+                self.expect(&TokenKind::Eq, "'=' in record field");
+                let value = self.parse_expr();
+                fields.push((name, value));
+                self.skip_separators();
+            }
+            self.expect(&TokenKind::RBrace, "'}'");
+            Expr::Record(fields)
+        } else {
+            let mut items = Vec::new();
+            while !matches!(self.kind(), TokenKind::RBrace | TokenKind::Eof) {
+                items.push(self.parse_expr());
+                self.skip_separators();
+            }
+            self.expect(&TokenKind::RBrace, "'}'");
+            Expr::Block(items)
+        }
+    }
+
+    fn build_str_segs(&mut self, parts: Vec<StrPart>, span: Span) -> Vec<StrSeg> {
+        let mut segs = Vec::new();
+        for part in parts {
+            match part {
+                StrPart::Lit(s) => segs.push(StrSeg::Lit(s)),
+                StrPart::Hole(src) => segs.push(StrSeg::Expr(self.parse_hole(&src, span))),
+            }
+        }
+        segs
+    }
+
+    fn parse_hole(&mut self, src: &str, span: Span) -> Expr {
+        match lex(src) {
+            Ok(toks) => {
+                let mut sub = Parser::new(toks);
+                sub.skip_layout();
+                let e = sub.parse_expr();
+                sub.skip_layout();
+                if !matches!(sub.kind(), TokenKind::Eof) {
+                    self.errors
+                        .push(Diagnostic::new(span, "invalid interpolation expression"));
+                }
+                for d in sub.errors {
+                    self.errors.push(Diagnostic::new(span, d.message));
+                }
+                e
+            }
+            Err(ds) => {
+                for d in ds {
+                    self.errors.push(Diagnostic::new(span, d.message));
+                }
+                Expr::Bool(false)
+            }
+        }
+    }
+
+    // ----- patterns -----
+
+    fn parse_pattern(&mut self) -> Pattern {
+        let left = self.parse_pattern_atom();
+        if self.eat(&TokenKind::ColonColon) {
+            Pattern::Cons(Box::new(left), Box::new(self.parse_pattern()))
+        } else {
+            left
+        }
+    }
+
+    fn parse_pattern_atom(&mut self) -> Pattern {
+        match self.kind().clone() {
+            TokenKind::Underscore => {
+                self.bump();
+                Pattern::Wildcard
+            }
+            TokenKind::Number(n) => {
+                self.bump();
+                Pattern::Num(n)
+            }
+            TokenKind::DurationSecs(s) => {
+                self.bump();
+                Pattern::Dur(s)
+            }
+            TokenKind::True => {
+                self.bump();
+                Pattern::Bool(true)
+            }
+            TokenKind::False => {
+                self.bump();
+                Pattern::Bool(false)
+            }
+            TokenKind::Str(parts) => {
+                self.bump();
+                match parts.as_slice() {
+                    [StrPart::Lit(s)] => Pattern::Str(s.clone()),
+                    _ => {
+                        self.error("string patterns cannot contain interpolation");
+                        Pattern::Wildcard
+                    }
+                }
+            }
+            TokenKind::Ident(name) => {
+                self.bump();
+                Pattern::Var(name)
+            }
+            TokenKind::UIdent(name) => {
+                self.bump();
+                let mut args = Vec::new();
+                if self.eat(&TokenKind::LParen) {
+                    loop {
+                        args.push(self.parse_pattern());
+                        if !self.eat(&TokenKind::Comma) {
                             break;
                         }
-                        items.push(self.parse_expr());
                     }
-                    if !self.eat(&TokenKind::RParen) {
-                        self.error("expected ')'");
-                    }
-                    Expr::Tuple(items)
-                } else {
-                    if !self.eat(&TokenKind::RParen) {
-                        self.error("expected ')'");
-                    }
-                    first
+                    self.expect(&TokenKind::RParen, "')'");
                 }
+                Pattern::Variant { name, args }
+            }
+            TokenKind::LParen => {
+                self.bump();
+                let mut items = vec![self.parse_pattern()];
+                while self.eat(&TokenKind::Comma) {
+                    items.push(self.parse_pattern());
+                }
+                self.expect(&TokenKind::RParen, "')'");
+                if items.len() == 1 {
+                    items.pop().unwrap()
+                } else {
+                    Pattern::Tuple(items)
+                }
+            }
+            TokenKind::LBracket => {
+                self.bump();
+                let mut items = Vec::new();
+                self.skip_newlines();
+                while !matches!(self.kind(), TokenKind::RBracket | TokenKind::Eof) {
+                    items.push(self.parse_pattern());
+                    self.skip_separators();
+                }
+                self.expect(&TokenKind::RBracket, "']'");
+                if items.is_empty() {
+                    Pattern::Nil
+                } else {
+                    Pattern::List(items)
+                }
+            }
+            TokenKind::LBrace => {
+                self.bump();
+                self.skip_newlines();
+                let mut fields = Vec::new();
+                let mut rest = false;
+                while !matches!(self.kind(), TokenKind::RBrace | TokenKind::Eof) {
+                    if matches!(self.kind(), TokenKind::Underscore) {
+                        self.bump();
+                        rest = true;
+                        self.skip_separators();
+                        continue;
+                    }
+                    let name = self.expect_ident("field name");
+                    let sub = if self.eat(&TokenKind::Eq) {
+                        Some(self.parse_pattern())
+                    } else {
+                        None
+                    };
+                    fields.push((name, sub));
+                    self.skip_separators();
+                }
+                self.expect(&TokenKind::RBrace, "'}'");
+                Pattern::Record { fields, rest }
             }
             _ => {
-                self.error("expected expression");
+                self.error("expected a pattern");
                 self.bump();
-                Expr::Num(0.0)
+                Pattern::Wildcard
             }
         }
     }
-}
 
-impl Parser {
-    /// `{ field = expr ; ... }` (`;` or newline separated).
-    fn parse_record_literal(&mut self) -> Expr {
-        self.bump(); // '{'
-        self.skip_field_separators();
-        let mut fields = Vec::new();
-        while !matches!(self.kind(), TokenKind::RBrace | TokenKind::Eof) {
-            let field = self.expect_ident("expected field name");
-            if !self.eat(&TokenKind::Eq) {
-                self.error("expected '=' in record field");
-            }
-            let value = self.parse_expr();
-            fields.push((field, value));
-            if !matches!(self.kind(), TokenKind::RBrace) {
-                if matches!(self.kind(), TokenKind::Semi | TokenKind::Newline) {
-                    self.skip_field_separators();
-                } else {
-                    self.error("expected ';' or newline between fields");
-                }
-            }
+    // ----- helpers -----
+
+    fn skip_separators(&mut self) {
+        while matches!(self.kind(), TokenKind::Comma | TokenKind::Newline) {
+            self.bump();
         }
-        if !self.eat(&TokenKind::RBrace) {
-            self.error("expected '}'");
+    }
+
+    fn expect_ident(&mut self, what: &str) -> String {
+        if let TokenKind::Ident(s) = self.kind().clone() {
+            self.bump();
+            s
+        } else {
+            self.error(format!("expected {what}"));
+            String::new()
         }
-        Expr::Record { fields }
     }
-}
 
-fn bin(op: BinaryOp, left: Expr, right: Expr) -> Expr {
-    Expr::Binary {
-        op,
-        left: Box::new(left),
-        right: Box::new(right),
+    fn expect_uident(&mut self, what: &str) -> String {
+        if let TokenKind::UIdent(s) = self.kind().clone() {
+            self.bump();
+            s
+        } else {
+            self.error(format!("expected {what}"));
+            String::new()
+        }
     }
-}
-
-#[allow(dead_code)]
-fn _span_union(a: Span, b: Span) -> Span {
-    Span::new(a.start.min(b.start), a.end.max(b.end))
 }

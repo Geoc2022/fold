@@ -4,6 +4,7 @@ type PolicyWasmModule = {
   evaluate_policy_json: (policyJson: string, envJson: string) => string
   highlight_policy_json: (source: string) => string
   eval_expr_json: (source: string, envJson: string) => string
+  policy_docs: () => string
 }
 
 export type JsonValue =
@@ -13,6 +14,25 @@ export type JsonValue =
   | null
   | { [k: string]: JsonValue }
   | JsonValue[]
+
+/** A runtime value, matching the Rust `Value` serde shape (`{ kind, value }`). */
+export type PolicyValue =
+  | { kind: 'Num'; value: number }
+  | { kind: 'Bool'; value: boolean }
+  | { kind: 'Dur'; value: number }
+  | { kind: 'Str'; value: string }
+  | { kind: 'List'; value: PolicyValue[] }
+  | { kind: 'Tuple'; value: PolicyValue[] }
+  | { kind: 'Record'; value: { type: string; fields: Record<string, PolicyValue> } }
+  | { kind: 'Variant'; value: { type: string; name: string; values: PolicyValue[] } }
+
+/** The structured effect program produced by evaluating a policy action. */
+export type Effect =
+  | { op: 'notify'; message: string }
+  | { op: 'state'; state: string }
+  | { op: 'sleep'; secs: number }
+  | { op: 'seq'; steps: Effect[] }
+  | { op: 'noop' }
 
 export interface Span {
   start: number
@@ -30,7 +50,7 @@ export interface CompileResult {
 }
 
 export interface EvaluateResult {
-  fired: JsonValue | null
+  fired: Effect | null
   error: string | null
 }
 
@@ -110,6 +130,19 @@ export async function evaluateExpression(source: string, env: JsonValue): Promis
     return JSON.parse(raw) as EvalExprResult
   } catch (error) {
     return { output: null, ty: null, error: `expression eval failed: ${String(error)}` }
+  }
+}
+
+let cachedDocs: string | null = null
+
+export async function policyDocs(): Promise<string> {
+  if (cachedDocs != null) return cachedDocs
+  try {
+    const wasm = await loadPolicyWasm()
+    cachedDocs = wasm.policy_docs()
+    return cachedDocs
+  } catch (error) {
+    return `Failed to load documentation: ${String(error)}`
   }
 }
 

@@ -1219,57 +1219,30 @@ label .opt {
 .math-highlight-layer .token-string {
   color: color-mix(in srgb, var(--accent-2) 82%, var(--text));
 }
-.policy-highlight-layer .token-arrow,
-.policy-highlight-layer .token-and,
-.policy-highlight-layer .token-or,
-.policy-highlight-layer .token-not,
-.policy-highlight-layer .token-xor,
-.policy-highlight-layer .token-gt,
-.policy-highlight-layer .token-gte,
-.policy-highlight-layer .token-lt,
-.policy-highlight-layer .token-lte,
-.policy-highlight-layer .token-eqeq,
-.policy-highlight-layer .token-neq,
-.policy-highlight-layer .token-plus,
-.policy-highlight-layer .token-minus,
-.policy-highlight-layer .token-star,
-.policy-highlight-layer .token-slash,
-.policy-highlight-layer .token-percent,
-.math-highlight-layer .token-arrow,
-.math-highlight-layer .token-and,
-.math-highlight-layer .token-or,
-.math-highlight-layer .token-not,
-.math-highlight-layer .token-xor,
-.math-highlight-layer .token-gt,
-.math-highlight-layer .token-gte,
-.math-highlight-layer .token-lt,
-.math-highlight-layer .token-lte,
-.math-highlight-layer .token-eqeq,
-.math-highlight-layer .token-neq,
-.math-highlight-layer .token-plus,
-.math-highlight-layer .token-minus,
-.math-highlight-layer .token-star,
-.math-highlight-layer .token-slash,
-.math-highlight-layer .token-percent,
-.policy-highlight-layer .token-thinarrow,
-.policy-highlight-layer .token-fun,
-.policy-highlight-layer .token-match,
 .policy-highlight-layer .token-type,
-.policy-highlight-layer .token-pipe,
-.policy-highlight-layer .token-true,
-.policy-highlight-layer .token-false,
-.math-highlight-layer .token-thinarrow,
-.math-highlight-layer .token-fun,
-.math-highlight-layer .token-match,
-.math-highlight-layer .token-type,
-.math-highlight-layer .token-pipe,
-.math-highlight-layer .token-true,
-.math-highlight-layer .token-false {
-  color: color-mix(in srgb, var(--warn) 70%, var(--text));
+.math-highlight-layer .token-type {
+  color: color-mix(in srgb, var(--accent) 78%, var(--text));
+  font-weight: 600;
 }
-.policy-highlight-layer .token-wildcard,
-.math-highlight-layer .token-wildcard {
+.policy-highlight-layer .token-keyword,
+.policy-highlight-layer .token-bool,
+.math-highlight-layer .token-keyword,
+.math-highlight-layer .token-bool {
+  color: color-mix(in srgb, var(--warn) 70%, var(--text));
+  font-weight: 600;
+}
+.policy-highlight-layer .token-operator,
+.math-highlight-layer .token-operator {
+  color: color-mix(in srgb, var(--warn) 55%, var(--text));
+}
+.policy-highlight-layer .token-punct,
+.math-highlight-layer .token-punct {
+  color: color-mix(in srgb, var(--text) 55%, transparent);
+}
+.policy-highlight-layer .token-comment,
+.math-highlight-layer .token-comment {
   color: color-mix(in srgb, var(--text) 45%, transparent);
+  font-style: italic;
 }
 .room-info-card {
   display: flex;
@@ -1705,26 +1678,13 @@ label .opt {
   margin: 0;
   font-size: 1.05rem;
 }
-.math-help-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-  gap: 0.9rem;
-}
-.math-help-grid h3 {
-  margin: 0 0 0.35rem;
-  font-size: 0.84rem;
-  color: var(--muted);
-}
-.math-help-grid ul {
-  margin: 0 0 0.85rem;
-  padding-left: 1rem;
-  font-size: 0.86rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-}
-.math-help-grid code {
-  color: var(--accent-2);
+.math-help-markdown {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font: 500 12.5px ui-monospace, SFMono-Regular, Menlo, monospace;
+  line-height: 1.5;
+  color: var(--text);
 }
 
 @media (max-width: 980px) {
