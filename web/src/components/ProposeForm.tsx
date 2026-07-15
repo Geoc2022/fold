@@ -32,6 +32,7 @@ interface LastProposal {
   group_multiple?: number
   grouping_mode?: GroupingMode
   allow_guests?: boolean
+  private_by_link?: boolean
   location?: string
   duration_minutes?: number
   max_commit_minutes?: number
@@ -86,6 +87,7 @@ export function ProposeForm({ initialCode, categoryOptions, onCreated, onClose }
   const [maxPeople, setMaxPeople] = useState<number | null>(last.max_people ?? null)
   const [groupMultiple, setGroupMultiple] = useState(last.group_multiple ?? 2)
   const [allowGuests, setAllowGuests] = useState(last.allow_guests ?? true)
+  const [privateByLink, setPrivateByLink] = useState(last.private_by_link ?? false)
   const [category, setCategory] = useState(last.category ?? categoryOptions[0]?.value ?? 'board game')
   const [durationMinutes, setDurationMinutes] = useState(last.duration_minutes ?? 30)
   const [maxCommitMinutes, setMaxCommitMinutes] = useState(last.max_commit_minutes ?? 30)
@@ -148,6 +150,7 @@ export function ProposeForm({ initialCode, categoryOptions, onCreated, onClose }
       group_multiple: mode === 'tiling' ? groupMultiple : 1,
       grouping_mode: mode,
       allow_guests: allowGuests,
+      private_by_link: privateByLink,
       category,
       duration_minutes: durationMinutes,
       max_commit_minutes: maxCommitMinutes,
@@ -170,6 +173,7 @@ export function ProposeForm({ initialCode, categoryOptions, onCreated, onClose }
         group_multiple: groupMultiple,
         grouping_mode: mode,
         allow_guests: allowGuests,
+        private_by_link: privateByLink,
         location: location.trim() || undefined,
         duration_minutes: durationMinutes,
         max_commit_minutes: maxCommitMinutes,
@@ -195,7 +199,7 @@ export function ProposeForm({ initialCode, categoryOptions, onCreated, onClose }
             title={formMode === 'simple' ? 'Show more fields' : 'Show fewer fields'}
             onClick={() => setFormMode((m) => (m === 'simple' ? 'expanded' : 'simple'))}
           >
-            {formMode === 'simple' ? '◁' : '◀'}
+            {formMode === 'simple' ? '◀' : '▼'}
           </button>
           <button type="button" className="ghost danger" onClick={onClose}>
             Cancel
@@ -232,10 +236,20 @@ export function ProposeForm({ initialCode, categoryOptions, onCreated, onClose }
             value={location}
             onChange={(e) => setLocation(e.target.value)}
           />
-          <label className="check-row">
-            <input type="checkbox" checked={allowGuests} onChange={(e) => setAllowGuests(e.target.checked)} />
-            <span>Allow Guests</span>
-          </label>
+          <div className="check-row-group">
+            <label className="check-row">
+              <input type="checkbox" checked={allowGuests} onChange={(e) => setAllowGuests(e.target.checked)} />
+              <span>Allow Guests</span>
+            </label>
+            <label className="check-row">
+              <input
+                type="checkbox"
+                checked={privateByLink}
+                onChange={(e) => setPrivateByLink(e.target.checked)}
+              />
+              <span>Private by link</span>
+            </label>
+          </div>
           <label>
             Category
             <select value={category} onChange={(e) => setCategory(e.target.value)}>

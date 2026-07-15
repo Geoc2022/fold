@@ -1,0 +1,2 @@
+ALTER TABLE activities
+ADD COLUMN private_by_link INTEGER NOT NULL DEFAULT 0;

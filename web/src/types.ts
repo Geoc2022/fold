@@ -57,6 +57,7 @@ export interface ActivityView {
   group_multiple: number
   grouping_mode: GroupingMode
   allow_guests: boolean
+  private_by_link: boolean
   duration_minutes: number
   max_commit_minutes: number
   times_run: number
@@ -131,6 +132,7 @@ export interface CreateActivityInput {
   group_multiple?: number | null
   grouping_mode?: GroupingMode
   allow_guests?: boolean
+  private_by_link?: boolean
   duration_minutes?: number | null
   max_commit_minutes?: number | null
   // First-run fields.

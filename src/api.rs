@@ -355,9 +355,9 @@ pub async fn activity_create(mut req: Request, ctx: RouteContext<()>) -> Result<
     db.prepare(
         "INSERT INTO activities \
           (id, code, emoji, title, description, category, proposer_id, min_people, max_people, group_multiple, \
-            grouping_mode, allow_guests, duration_minutes, max_commit_minutes, current_run_id, times_run, \
+            grouping_mode, allow_guests, private_by_link, duration_minutes, max_commit_minutes, current_run_id, times_run, \
             players_served, interest_total, commit_total, last_active_at, created_at, updated_at) \
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 0, 0, 0, 0, ?16, ?16, ?16)",
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, 0, 0, 0, 0, ?17, ?17, ?17)",
     )
     .bind(&[
         db::s(&id),
@@ -372,6 +372,11 @@ pub async fn activity_create(mut req: Request, ctx: RouteContext<()>) -> Result<
         db::i(group_multiple as i64),
         db::s(grouping_mode),
         db::i(if body.allow_guests.unwrap_or(true) { 1 } else { 0 }),
+        db::i(if body.private_by_link.unwrap_or(false) {
+            1
+        } else {
+            0
+        }),
         db::i(duration_minutes as i64),
         db::i(max_commit_minutes as i64),
         db::s(&run_id),
@@ -392,19 +397,21 @@ pub async fn activity_create(mut req: Request, ctx: RouteContext<()>) -> Result<
     )
     .await?;
 
-    // Broadcast to everyone else so the new activity is discoverable.
-    let msg = format!("{} proposed \"{}\"", proposer.handle, title);
-    let recipients = db::notify_all_except(
-        &db,
-        &proposer.id,
-        Some(&id),
-        Some(&run_id),
-        "activity_proposed",
-        &msg,
-        now,
-    )
-    .await?;
-    push_people(&ctx.env, &db, recipients).await?;
+    // Public activities are discoverable; private-by-link activities are not.
+    if !body.private_by_link.unwrap_or(false) {
+        let msg = format!("{} proposed \"{}\"", proposer.handle, title);
+        let recipients = db::notify_all_except(
+            &db,
+            &proposer.id,
+            Some(&id),
+            Some(&run_id),
+            "activity_proposed",
+            &msg,
+            now,
+        )
+        .await?;
+        push_people(&ctx.env, &db, recipients).await?;
+    }
 
     let view = build_activity_view(&db, &id, None)
         .await?
@@ -460,21 +467,23 @@ pub async fn activity_create_run(mut req: Request, ctx: RouteContext<()>) -> Res
     db::set_activity_current_run(&db, &activity.id, Some(&run_id), now).await?;
     db::touch_activity_last_active(&db, &activity.id, now).await?;
 
-    let msg = format!(
-        "{} proposed a new run of \"{}\"",
-        proposer.handle, activity.title
-    );
-    let recipients = db::notify_all_except(
-        &db,
-        &proposer.id,
-        Some(&activity.id),
-        Some(&run_id),
-        "run_proposed",
-        &msg,
-        now,
-    )
-    .await?;
-    push_people(&ctx.env, &db, recipients).await?;
+    if activity.private_by_link == 0 {
+        let msg = format!(
+            "{} proposed a new run of \"{}\"",
+            proposer.handle, activity.title
+        );
+        let recipients = db::notify_all_except(
+            &db,
+            &proposer.id,
+            Some(&activity.id),
+            Some(&run_id),
+            "run_proposed",
+            &msg,
+            now,
+        )
+        .await?;
+        push_people(&ctx.env, &db, recipients).await?;
+    }
 
     let view = build_activity_view(&db, &activity.id, None)
         .await?

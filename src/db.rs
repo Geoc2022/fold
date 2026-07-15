@@ -42,7 +42,7 @@ pub fn oi(v: Option<i64>) -> JsValue {
 
 const ACTIVITY_COLS: &str = "a.id, a.code, a.emoji, a.title, a.description, a.category, \
     a.proposer_id, a.min_people, a.max_people, a.group_multiple, a.grouping_mode, \
-    a.allow_guests, a.duration_minutes, a.max_commit_minutes, \
+    a.allow_guests, a.private_by_link, a.duration_minutes, a.max_commit_minutes, \
     a.current_run_id, a.times_run, a.players_served, a.interest_total, a.commit_total, \
     a.last_active_at, a.created_at, a.updated_at, p.handle AS proposer_handle";
 
@@ -174,7 +174,7 @@ pub async fn list_activities(db: &D1Database, since: i64, limit: i64) -> Result<
     let sql = format!(
         "SELECT {ACTIVITY_COLS} FROM activities a \
          LEFT JOIN people p ON p.id = a.proposer_id \
-         WHERE a.last_active_at >= ?1 \
+         WHERE a.last_active_at >= ?1 AND a.private_by_link = 0 \
          ORDER BY a.last_active_at DESC LIMIT ?2"
     );
     db.prepare(&sql)

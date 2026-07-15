@@ -1,6 +1,6 @@
 use crate::ast::{
-    BinaryOp, Binding, Decl, Expr, ImplDecl, MatchArm, Pattern, Program, StrSeg, TraitDecl,
-    Ty, TypeBody, TypeDecl, UnaryOp, VariantDef,
+    BinaryOp, Binding, Decl, Expr, ImplDecl, MatchArm, Pattern, Program, StrSeg, TraitDecl, Ty,
+    TypeBody, TypeDecl, UnaryOp, VariantDef,
 };
 use crate::diag::{Diagnostic, Span};
 use crate::lex::{lex, StrPart, Token, TokenKind};

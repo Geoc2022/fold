@@ -1119,7 +1119,11 @@ pub fn typecheck_program(
         Err(()) => return Err(infer.errors),
     };
     let action_ty = infer.infer(&program.action, &env);
-    infer.unify_at(&action_ty, &Ty::action(), "a policy must end with an Action");
+    infer.unify_at(
+        &action_ty,
+        &Ty::action(),
+        "a policy must end with an Action",
+    );
     infer.solve_constraints();
     if infer.errors.is_empty() {
         Ok(TypedProgram {

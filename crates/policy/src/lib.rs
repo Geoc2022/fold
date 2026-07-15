@@ -192,9 +192,7 @@ fn token_kind_name(kind: &lex::TokenKind) -> Option<&'static str> {
         | T::By
         | T::Type
         | T::Trait
-        | T::Impl => {
-            "keyword"
-        }
+        | T::Impl => "keyword",
         T::And | T::Or | T::Not | T::Xor => "keyword",
         T::Hash
         | T::Plus

@@ -667,6 +667,11 @@ label .opt {
   gap: 0.5rem;
   color: var(--text);
 }
+.check-row-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+}
 .check-row input {
   width: auto;
   accent-color: var(--accent-solid);
