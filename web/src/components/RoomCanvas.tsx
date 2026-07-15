@@ -144,7 +144,7 @@ export function RoomCanvas({ activity, participants, me, visual, onInterested, o
   const winEaseUntilRef = useRef(0)
   const commitLockRef = useRef(alreadyCommittedElsewhere)
   const guardAlertRef = useRef(0)
-  const expireNoticeRef = useRef(0)
+  const expireNoticeArrivalRef = useRef<number | null>(null)
   const myStableNodeIdRef = useRef(`me-${me.id}`)
   visualRef.current = visual
   activityRef.current = activity
@@ -532,13 +532,16 @@ export function RoomCanvas({ activity, participants, me, visual, onInterested, o
       for (const n of nodesRef.current) {
         if (pointerRef.current?.node === n) continue
         if (n.state === 'arrived' && n.arrivalAt != null && now - n.arrivalAt >= durationMs) {
+          const expiredArrivalAt = n.arrivalAt
           n.state = 'lurker'
           n.arrivalAt = null
-          if (performance.now() - expireNoticeRef.current > 1200) {
-            expireNoticeRef.current = performance.now()
-            onAlert('Your spot expired — commit again to rejoin')
+          if (n.isMe) {
+            if (expireNoticeArrivalRef.current !== expiredArrivalAt) {
+              expireNoticeArrivalRef.current = expiredArrivalAt
+              onAlert('Your spot expired — commit again to rejoin')
+            }
+            void call(onWithdraw)
           }
-          void call(onWithdraw)
         }
       }
       step(nodesRef.current, pointerRef.current, activityRef.current, visualRef.current, now)

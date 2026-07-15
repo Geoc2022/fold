@@ -5,6 +5,7 @@ import { ActivityRoom } from './pages/ActivityRoom'
 import { PhysicsPage } from './pages/PhysicsPage'
 import { ChemistryPage } from './pages/ChemistryPage'
 import { BiologyPage } from './pages/BiologyPage'
+import { MathPage } from './pages/MathPage'
 
 export default function App() {
   // add the picture frame 404 page
@@ -14,6 +15,7 @@ export default function App() {
       <Route path="/physics" element={<PhysicsPage />} />
       <Route path="/chemistry" element={<ChemistryPage />} />
       <Route path="/biology" element={<BiologyPage />} />
+      <Route path="/math" element={<MathPage />} />
       <Route path="/:code" element={<ActivityRoom />} />
       <Route
         path="*"

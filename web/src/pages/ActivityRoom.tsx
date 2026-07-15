@@ -8,12 +8,12 @@ import type { Person } from '../types'
 import { CreateRunForm } from '../components/CreateRunForm'
 import { RoomCanvas } from '../components/RoomCanvas'
 import { RoomPanel } from '../components/RoomPanel'
-import { PolicyDemoPanel } from '../components/PolicyDemoPanel'
 import { DEFAULT_VISUAL_CONFIG, type VisualConfig } from '../nodeVisual'
-import { readJson, readString, writeJson, writeString } from '../storage'
+import { readJson, writeJson } from '../storage'
 
 const VISUAL_KEY = 'fold.room_visual'
-const POLICY_PANEL_KEY = 'fold.room_policy_panel'
+const ALERT_COOLDOWN_MS = 1000
+const ALERT_VISIBLE_MS = 3600
 
 export function ActivityRoom() {
   const params = useParams()
@@ -31,11 +31,13 @@ export function ActivityRoom() {
   const [proposingRun, setProposingRun] = useState(true)
   const [showInfo, setShowInfo] = useState(false)
   const [showVisual, setShowVisual] = useState(false)
-  const [showPolicyDemo, setShowPolicyDemo] = useState(() => readString(POLICY_PANEL_KEY) !== '0')
   const [namePrompt, setNamePrompt] = useState(false)
   const [handleInput, setHandleInput] = useState('')
   const [visual, setVisual] = useState<VisualConfig>(() => readJson(VISUAL_KEY, DEFAULT_VISUAL_CONFIG))
-  const alertCooldownRef = useRef(0)
+  const alertTimerRef = useRef<number | null>(null)
+  const alertLastShownRef = useRef(new Map<string, number>())
+  const alertQueueRef = useRef<string[]>([])
+  const currentAlertRef = useRef<string | null>(null)
   const { data, error, loading, notFound, refresh } = useRoom(code, me !== null && code !== null)
 
   useEffect(() => {
@@ -57,13 +59,21 @@ export function ActivityRoom() {
   }, [visual])
 
   useEffect(() => {
-    writeString(POLICY_PANEL_KEY, showPolicyDemo ? '1' : '0')
-  }, [showPolicyDemo])
+    currentAlertRef.current = alert
+  }, [alert])
+
+  useEffect(() => {
+    return () => {
+      if (alertTimerRef.current != null) {
+        window.clearTimeout(alertTimerRef.current)
+        alertTimerRef.current = null
+      }
+    }
+  }, [])
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.key.toLowerCase() === 'v' && !isTypingTarget(e.target)) setShowVisual((v) => !v)
-      if (e.key.toLowerCase() === 'p' && !isTypingTarget(e.target)) setShowPolicyDemo((v) => !v)
     }
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
@@ -98,12 +108,41 @@ export function ActivityRoom() {
 
   const person = me
   const activity = data.activity
+
+  const showNextAlert = () => {
+    if (alertTimerRef.current != null) return
+    const next = alertQueueRef.current.shift()
+    if (!next) return
+    currentAlertRef.current = next
+    setAlert(next)
+    alertTimerRef.current = window.setTimeout(() => {
+      alertTimerRef.current = null
+      currentAlertRef.current = null
+      setAlert(null)
+      showNextAlert()
+    }, ALERT_VISIBLE_MS)
+  }
+
   function showAlert(message: string) {
     const now = Date.now()
-    if (alert === message && now - alertCooldownRef.current < 1000) return
-    alertCooldownRef.current = now
-    setAlert(message)
-    window.setTimeout(() => setAlert((current) => (current === message ? null : current)), 3600)
+    const last = alertLastShownRef.current.get(message) ?? 0
+    if (now - last < ALERT_COOLDOWN_MS) return
+    alertLastShownRef.current.set(message, now)
+
+    if (currentAlertRef.current == null && alertTimerRef.current == null) {
+      currentAlertRef.current = message
+      setAlert(message)
+      alertTimerRef.current = window.setTimeout(() => {
+        alertTimerRef.current = null
+        currentAlertRef.current = null
+        setAlert(null)
+        showNextAlert()
+      }, ALERT_VISIBLE_MS)
+      return
+    }
+
+    const queue = alertQueueRef.current
+    if (queue.length === 0 || queue[queue.length - 1] !== message) queue.push(message)
   }
 
   async function copyRoomLink() {
@@ -173,17 +212,6 @@ export function ActivityRoom() {
       {error && <div className="room-error">{error}</div>}
       {alert && <div className="room-alert">{alert}</div>}
       {showVisual && <VisualPanel visual={visual} onChange={setVisual} />}
-      <button type="button" className="room-policy-toggle" onClick={() => setShowPolicyDemo((v) => !v)}>
-        {showPolicyDemo ? 'Hide policy demo' : 'Policy demo'}
-      </button>
-      {showPolicyDemo && (
-        <PolicyDemoPanel
-          serverTime={data.server_time}
-          activity={activity}
-          participants={data.participants}
-          onAlert={showAlert}
-        />
-      )}
       <RoomPanel
         activity={activity}
         theme={theme}
