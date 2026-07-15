@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { nodeColor } from '../nodeVisual'
 
 export type NodeState = 'lurker' | 'interested' | 'committed' | 'arrived'
 type GroupingMode = 'single' | 'parallel'
@@ -67,6 +68,8 @@ interface BiologyRoomProps {
   running?: boolean
   onRunningChange?: (running: boolean) => void
   showPlayToggle?: boolean
+  showLabels?: boolean
+  includeSelfNode?: boolean
 }
 
 const HOLD_MS = 5_000
@@ -79,7 +82,16 @@ const VOGEL_C = 28
 const PHI_RECIP_SQ = 1 / (((1 + Math.sqrt(5)) / 2) ** 2)
 const VOGEL_N_MIN = Math.ceil((WORLD_R / VOGEL_C) ** 2)
 
-export function BiologyRoom({ embedded = false, onSnapshot, selfState, running, onRunningChange, showPlayToggle = true }: BiologyRoomProps) {
+export function BiologyRoom({
+  embedded = false,
+  onSnapshot,
+  selfState,
+  running,
+  onRunningChange,
+  showPlayToggle = true,
+  showLabels = false,
+  includeSelfNode = false,
+}: BiologyRoomProps) {
   const [runningInternal, setRunningInternal] = useState(true)
   const [mode, setMode] = useState<GroupingMode>('single')
   const [perGroup, setPerGroup] = useState(3)
@@ -105,12 +117,16 @@ export function BiologyRoom({ embedded = false, onSnapshot, selfState, running, 
   const runningRef = useRef(runningValue)
   const lastSnapshotAtRef = useRef(0)
   const selfStateRef = useRef<NodeState | undefined>(selfState)
+  const showLabelsRef = useRef(showLabels)
+  const includeSelfNodeRef = useRef(includeSelfNode)
   modeRef.current = mode
   perGroupRef.current = perGroup
   simRef.current = sim
   visRef.current = vis
   snapshotRef.current = onSnapshot
   runningRef.current = runningValue
+  showLabelsRef.current = showLabels
+  includeSelfNodeRef.current = includeSelfNode
 
   const setRunningValue = (next: boolean) => {
     if (running == null) setRunningInternal(next)
@@ -274,6 +290,7 @@ export function BiologyRoom({ embedded = false, onSnapshot, selfState, running, 
 
     let lastSelfApplied: NodeState | undefined
     function ensureSelf(now: number) {
+      if (!includeSelfNodeRef.current) return
       let self = nodesRef.current.find((n) => n.isSelf)
       if (!self) {
         self = {
@@ -316,7 +333,7 @@ export function BiologyRoom({ embedded = false, onSnapshot, selfState, running, 
 
       if (runningRef.current) {
         if (nodes.length >= Math.min(c.maxNodes, MAX_NODES)) {
-          nodesRef.current = nodes.filter((n) => n.isSelf)
+          nodesRef.current = includeSelfNodeRef.current ? nodes.filter((n) => n.isSelf) : []
           vogelCounterRef.current = VOGEL_N_MIN
           spawnAccRef.current = 0
         }
@@ -342,7 +359,7 @@ export function BiologyRoom({ embedded = false, onSnapshot, selfState, running, 
 
         step(nodes, pointerRef.current, modeRef.current, perGroupRef.current, visRef.current, now)
       }
-      draw(ctx, canvas, nodes, cameraRef.current, visRef.current)
+      draw(ctx, canvas, nodes, cameraRef.current, visRef.current, showLabelsRef.current, includeSelfNodeRef.current)
 
       const snapshotCb = snapshotRef.current
       if (snapshotCb && perf - lastSnapshotAtRef.current > 350) {
@@ -551,24 +568,28 @@ function draw(
   nodes: Node[],
   camera: Camera,
   vis: VisConfig,
+  showLabels: boolean,
+  includeSelfNode: boolean,
 ) {
   const w = canvas.clientWidth
   const h = canvas.clientHeight
   ctx.clearRect(0, 0, w, h)
-  ctx.fillStyle = '#ffffff'
+  ctx.fillStyle = getCss('--bg')
   ctx.fillRect(0, 0, w, h)
   ctx.save()
   ctx.translate(w / 2 + camera.x, h / 2 + camera.y)
   ctx.scale(camera.scale, camera.scale)
 
-  const ringAlpha = 0.02
-  ctx.strokeStyle = `rgba(17,24,39,${ringAlpha})`
+  const ringAlpha = 0.06
+  ctx.globalAlpha = ringAlpha
+  ctx.strokeStyle = getCss('--text')
   ctx.lineWidth = 1 / camera.scale
   for (let r = 80; r <= WORLD_R; r += 80) {
     ctx.beginPath()
     ctx.arc(0, 0, r, 0, Math.PI * 2)
     ctx.stroke()
   }
+  ctx.globalAlpha = 1
   ctx.restore()
 
   const dpr = canvas.width / Math.max(1, w)
@@ -585,7 +606,7 @@ function draw(
   const nr = vis.nodeRadius
   lctx.globalCompositeOperation = 'source-over'
   for (const n of nodes) {
-    lctx.fillStyle = colorFor(n.state)
+    lctx.fillStyle = nodeColor(n.state)
     lctx.beginPath()
     lctx.arc(n.x, n.y, nr, 0, Math.PI * 2)
     lctx.fill()
@@ -608,30 +629,26 @@ function draw(
   lctx.textAlign = 'center'
   lctx.textBaseline = 'middle'
   lctx.font = `700 ${Math.max(11, Math.round(nr * 0.65))}px ui-monospace, SFMono-Regular, Menlo, monospace`
-  for (const n of nodes) {
-    if (n.isSelf) continue
-    lctx.fillText(nodeLabel(n.id), n.x, n.y)
+  if (showLabels) {
+    for (const n of nodes) {
+      if (n.isSelf) continue
+      lctx.fillText(nodeLabel(n.id), n.x, n.y)
+    }
   }
-  // Mark the "self" node (no character) with a small hollow center dot.
-  for (const n of nodes) {
-    if (!n.isSelf) continue
-    lctx.beginPath()
-    lctx.arc(n.x, n.y, Math.max(3, nr * 0.28), 0, Math.PI * 2)
-    lctx.fillStyle = '#0f172a'
-    lctx.fill()
+  if (includeSelfNode) {
+    for (const n of nodes) {
+      if (!n.isSelf) continue
+      lctx.beginPath()
+      lctx.arc(n.x, n.y, Math.max(3, nr * 0.28), 0, Math.PI * 2)
+      lctx.fillStyle = getCss('--text')
+      lctx.fill()
+    }
   }
 
   ctx.save()
   ctx.setTransform(1, 0, 0, 1, 0, 0)
   ctx.drawImage(layer, 0, 0)
   ctx.restore()
-}
-
-function colorFor(state: NodeState) {
-  if (state === 'arrived') return '#ef4444'
-  if (state === 'committed') return '#f59e0b'
-  if (state === 'interested') return '#22c55e'
-  return '#9ca3af'
 }
 
 function etaFromHold(holdMs: number) {
@@ -676,4 +693,8 @@ function nodesToParticipants(nodes: Node[], now: number): BioParticipant[] {
     waitedSecs: n.state === 'arrived' && n.arrivalAt != null ? Math.max(0, Math.floor((now - n.arrivalAt) / 1000)) : 0,
     isSelf: n.isSelf === true,
   }))
+}
+
+function getCss(name: string) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#111827'
 }

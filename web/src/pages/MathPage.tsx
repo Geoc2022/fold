@@ -344,6 +344,8 @@ export function MathPage() {
             selfState={selfState}
             running={roomRunning}
             showPlayToggle={false}
+            showLabels
+            includeSelfNode
           />
         </div>
       </section>

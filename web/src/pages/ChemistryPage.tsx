@@ -3,6 +3,7 @@
 // Parallel mode: arrived nodes tile into fixed-size groups of `perGroup` each.
 
 import { useEffect, useRef, useState } from 'react'
+import { nodeColor } from '../nodeVisual'
 
 type NodeState = 'lurker' | 'interested' | 'committed'
 type GroupingMode = 'single' | 'parallel'
@@ -342,18 +343,20 @@ function draw(
   const w = canvas.clientWidth
   const h = canvas.clientHeight
   ctx.clearRect(0, 0, w, h)
-  ctx.fillStyle = '#ffffff'
+  ctx.fillStyle = getCss('--bg')
   ctx.fillRect(0, 0, w, h)
   ctx.save()
   ctx.translate(w / 2, h / 2)
 
-  ctx.strokeStyle = 'rgba(17,24,39,0.08)'
+  ctx.globalAlpha = 0.06
+  ctx.strokeStyle = getCss('--text')
   ctx.lineWidth = 1
   for (let r = 80; r <= WORLD_R; r += 80) {
     ctx.beginPath()
     ctx.arc(0, 0, r, 0, Math.PI * 2)
     ctx.stroke()
   }
+  ctx.globalAlpha = 1
 
   const now = Date.now()
   for (const n of nodes) {
@@ -439,9 +442,7 @@ function drawNodes(
 }
 
 function colorFor(state: NodeState): string {
-  if (state === 'committed') return '#f59e0b'
-  if (state === 'interested') return '#22c55e'
-  return '#9ca3af'
+  return nodeColor(state)
 }
 
 // ---- helpers ---------------------------------------------------------------
@@ -480,4 +481,8 @@ function logNode(n: Node) {
   const eta =
     n.arrivalAt == null ? null : Math.max(0, Math.ceil((n.arrivalAt - Date.now()) / 1000))
   console.log(`node ${n.id}: distance=${distance}px eta=${eta ?? 'n/a'}s state=${n.state}`)
+}
+
+function getCss(name: string) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#111827'
 }

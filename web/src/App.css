@@ -1303,14 +1303,13 @@ label .opt {
   }
 }
 
-/* ---- standalone physics/chemistry playgrounds (/physics, /chemistry) ----
-   Experimental sandboxes, intentionally left outside the Nord app theme. */
+/* ---- standalone physics/chemistry playgrounds (/physics, /chemistry) ---- */
 .physics-page {
   position: fixed;
   inset: 0;
-  background: #ffffff;
+  background: var(--bg);
   overflow: hidden;
-  color: #111827;
+  color: var(--text);
 }
 .physics-canvas {
   display: block;
@@ -1325,13 +1324,13 @@ label .opt {
   top: 12px;
   z-index: 5;
   max-width: min(560px, calc(100vw - 28px));
-  background: rgba(255, 255, 255, 0.9);
-  border: 1px solid rgba(17, 24, 39, 0.12);
+  background: color-mix(in srgb, var(--panel) 90%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text) 14%, transparent);
   border-radius: 10px;
   padding: 0.55rem 0.75rem;
   font-size: 13px;
-  color: #374151;
-  box-shadow: 0 10px 30px rgba(17, 24, 39, 0.08);
+  color: var(--muted);
+  box-shadow: 0 10px 30px var(--shadow);
   display: flex;
   flex-direction: column;
   gap: 0.45rem;
@@ -1346,42 +1345,42 @@ label .opt {
   font: 600 12px system-ui, sans-serif;
   padding: 3px 10px;
   border-radius: 6px;
-  border: 1px solid rgba(17, 24, 39, 0.2);
-  background: transparent;
-  color: #374151;
+  border: 1px solid color-mix(in srgb, var(--text) 20%, transparent);
+  background: color-mix(in srgb, var(--panel) 82%, transparent);
+  color: var(--text);
   cursor: pointer;
 }
 .chem-mode-btn.active {
-  background: #111827;
-  color: #fff;
-  border-color: #111827;
+  background: var(--accent-solid);
+  color: var(--on-accent);
+  border-color: var(--accent-solid);
 }
 .chem-slider-label {
   display: flex;
   align-items: center;
   gap: 0.35rem;
   font-size: 12px;
-  color: #6b7280;
+  color: var(--muted);
   margin-left: 0.35rem;
 }
 .chem-slider-label input[type="range"] {
   width: 80px;
-  accent-color: #111827;
+  accent-color: var(--accent-solid);
 }
 
 /* ---- biology page (/biology) ---- */
 .biology-page {
   position: fixed;
   inset: 0;
-  background: #ffffff;
+  background: var(--bg);
   overflow: hidden;
-  color: #111827;
+  color: var(--text);
 }
 .biology-room.embedded {
   position: absolute;
   inset: 0;
-  background: #ffffff;
-  color: #111827;
+  background: var(--bg);
+  color: var(--text);
 }
 .biology-canvas {
   display: block;
@@ -1408,9 +1407,9 @@ label .opt {
   width: 38px;
   height: 38px;
   border-radius: 999px;
-  border: 1px solid rgba(15, 23, 42, 0.22);
-  background: rgba(255, 255, 255, 0.9);
-  color: #0f172a;
+  border: 1px solid color-mix(in srgb, var(--text) 22%, transparent);
+  background: color-mix(in srgb, var(--panel) 90%, transparent);
+  color: var(--text);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1434,24 +1433,24 @@ label .opt {
   align-items: center;
   gap: 0.4rem;
   font-size: 12px;
-  color: #374151;
+  color: var(--text);
 }
 .bio-slider-label {
-  color: #6b7280;
+  color: var(--muted);
   white-space: nowrap;
 }
 .bio-slider-val {
   text-align: right;
   font-variant-numeric: tabular-nums;
-  color: #111827;
+  color: var(--text);
   font-weight: 600;
 }
 .bio-slider-row input[type='range'] {
   width: 100%;
-  accent-color: #111827;
+  accent-color: var(--accent-solid);
 }
 .bio-hint {
-  color: #9ca3af;
+  color: var(--muted);
   font-size: 11px;
 }
 .bio-mode-btns {
@@ -1463,7 +1462,7 @@ label .opt {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: #9ca3af;
+  color: var(--muted);
   margin-top: 0.2rem;
 }
 
