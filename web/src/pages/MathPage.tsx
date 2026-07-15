@@ -5,6 +5,7 @@ import { readString, writeString } from '../storage'
 
 const DEFAULT_POLICY = '#interested + #committed > 3 => notify "critical mass" in 15s'
 const LEFT_WIDTH_KEY = 'fold.math.left_width'
+const TERMINAL_HEIGHT_KEY = 'fold.math.terminal_height'
 const CONSOLE_HEIGHT_KEY = 'fold.math.console_height'
 
 type LogLevel = 'info' | 'warn' | 'error'
@@ -36,11 +37,13 @@ export function MathPage() {
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [policyStatus, setPolicyStatus] = useState('ready')
   const [snapshot, setSnapshot] = useState<BiologySnapshot>({ now: Date.now(), participants: [] })
+  const [roomRunning, setRoomRunning] = useState(true)
   const [selfState, setSelfState] = useState<NodeState>('lurker')
   const [showHelp, setShowHelp] = useState(false)
   const [terminalInput, setTerminalInput] = useState('')
   const [terminalEntries, setTerminalEntries] = useState<TerminalEntry[]>([])
   const [leftWidth, setLeftWidth] = useState(() => Number(readString(LEFT_WIDTH_KEY) ?? '420') || 420)
+  const [terminalHeight, setTerminalHeight] = useState(() => Number(readString(TERMINAL_HEIGHT_KEY) ?? '150') || 150)
   const [consoleHeight, setConsoleHeight] = useState(() => Number(readString(CONSOLE_HEIGHT_KEY) ?? '180') || 180)
 
   const nextLogIdRef = useRef(1)
@@ -168,6 +171,10 @@ export function MathPage() {
   }, [leftWidth])
 
   useEffect(() => {
+    writeString(TERMINAL_HEIGHT_KEY, String(terminalHeight))
+  }, [terminalHeight])
+
+  useEffect(() => {
     writeString(CONSOLE_HEIGHT_KEY, String(consoleHeight))
   }, [consoleHeight])
 
@@ -179,6 +186,22 @@ export function MathPage() {
       const delta = ev.clientX - startX
       const max = Math.max(360, window.innerWidth - 380)
       setLeftWidth(clamp(startWidth + delta, 300, max))
+    }
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
+  const beginResizeTerminal = (e: ReactMouseEvent) => {
+    e.preventDefault()
+    const startY = e.clientY
+    const startHeight = terminalHeight
+    const onMove = (ev: MouseEvent) => {
+      const delta = startY - ev.clientY
+      setTerminalHeight(clamp(startHeight + delta, 120, 420))
     }
     const onUp = () => {
       window.removeEventListener('mousemove', onMove)
@@ -239,7 +262,7 @@ export function MathPage() {
   return (
     <>
       <main className="math-page" style={{ gridTemplateColumns: `${leftWidth}px 3px 1fr` }}>
-      <section className="math-left" style={{ gridTemplateRows: `auto auto minmax(220px, 1fr) 3px 150px 3px ${consoleHeight}px` }}>
+      <section className="math-left" style={{ gridTemplateRows: `auto auto minmax(220px, 1fr) 3px ${terminalHeight}px 3px ${consoleHeight}px` }}>
         <header className="math-head">
           <span className="math-status">{policySource === activePolicy ? policyStatus : `${policyStatus} (unsaved)`}</span>
         </header>
@@ -249,6 +272,14 @@ export function MathPage() {
           </button>
           <button type="button" onClick={() => setShowHelp(true)} title="Help" aria-label="Help">
             <span className="noto-emoji" aria-hidden="true">❓</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setRoomRunning((v) => !v)}
+            title={roomRunning ? 'Pause simulation' : 'Play simulation'}
+            aria-label={roomRunning ? 'Pause simulation' : 'Play simulation'}
+          >
+            <span className="noto-emoji" aria-hidden="true">{roomRunning ? '⏸️' : '▶️'}</span>
           </button>
         </div>
         <div className="math-editor-shell">
@@ -266,7 +297,7 @@ export function MathPage() {
             onChange={(e) => setPolicySource(e.target.value)}
           />
         </div>
-        <div className="math-horizontal-splitter" onMouseDown={beginResizeConsole} />
+        <div className="math-horizontal-splitter" onMouseDown={beginResizeTerminal} />
         <div className="math-terminal">
           <div className="math-terminal-head">Terminal</div>
           <div className="math-terminal-body" ref={terminalBodyRef}>
@@ -289,7 +320,7 @@ export function MathPage() {
             <input value={terminalInput} onChange={(e) => setTerminalInput(e.target.value)} />
           </form>
         </div>
-        <div className="math-horizontal-splitter" />
+        <div className="math-horizontal-splitter" onMouseDown={beginResizeConsole} />
         <div className="math-console left-dock">
           <div className="math-console-head">Console</div>
           <div className="math-console-body" ref={consoleBodyRef}>
@@ -307,7 +338,13 @@ export function MathPage() {
 
       <section className="math-right">
         <div className="math-room-wrap">
-          <BiologyRoom embedded onSnapshot={onSnapshot} selfState={selfState} />
+          <BiologyRoom
+            embedded
+            onSnapshot={onSnapshot}
+            selfState={selfState}
+            running={roomRunning}
+            showPlayToggle={false}
+          />
         </div>
       </section>
       </main>

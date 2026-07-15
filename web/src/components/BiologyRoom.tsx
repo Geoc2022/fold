@@ -63,6 +63,10 @@ interface BiologyRoomProps {
   onSnapshot?: (snapshot: BiologySnapshot) => void
   /** Externally-driven state for the "self" node (set by fired policy actions). */
   selfState?: NodeState
+  /** Optional external run-state control (used by /math toolbar). */
+  running?: boolean
+  onRunningChange?: (running: boolean) => void
+  showPlayToggle?: boolean
 }
 
 const HOLD_MS = 5_000
@@ -75,8 +79,8 @@ const VOGEL_C = 28
 const PHI_RECIP_SQ = 1 / (((1 + Math.sqrt(5)) / 2) ** 2)
 const VOGEL_N_MIN = Math.ceil((WORLD_R / VOGEL_C) ** 2)
 
-export function BiologyRoom({ embedded = false, onSnapshot, selfState }: BiologyRoomProps) {
-  const [running, setRunning] = useState(true)
+export function BiologyRoom({ embedded = false, onSnapshot, selfState, running, onRunningChange, showPlayToggle = true }: BiologyRoomProps) {
+  const [runningInternal, setRunningInternal] = useState(true)
   const [mode, setMode] = useState<GroupingMode>('single')
   const [perGroup, setPerGroup] = useState(3)
   const [sim, setSim] = useState<SimConfig>({
@@ -97,7 +101,8 @@ export function BiologyRoom({ embedded = false, onSnapshot, selfState }: Biology
   const simRef = useRef(sim)
   const visRef = useRef(vis)
   const snapshotRef = useRef(onSnapshot)
-  const runningRef = useRef(running)
+  const runningValue = running ?? runningInternal
+  const runningRef = useRef(runningValue)
   const lastSnapshotAtRef = useRef(0)
   const selfStateRef = useRef<NodeState | undefined>(selfState)
   modeRef.current = mode
@@ -105,7 +110,12 @@ export function BiologyRoom({ embedded = false, onSnapshot, selfState }: Biology
   simRef.current = sim
   visRef.current = vis
   snapshotRef.current = onSnapshot
-  runningRef.current = running
+  runningRef.current = runningValue
+
+  const setRunningValue = (next: boolean) => {
+    if (running == null) setRunningInternal(next)
+    onRunningChange?.(next)
+  }
   selfStateRef.current = selfState
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -362,15 +372,17 @@ export function BiologyRoom({ embedded = false, onSnapshot, selfState }: Biology
   return (
     <main className={rootClass}>
       <canvas ref={canvasRef} className="biology-canvas" />
-      <button
-        type="button"
-        className="biology-play-toggle"
-        onClick={() => setRunning((v) => !v)}
-        title={running ? 'Pause simulation' : 'Play simulation'}
-        aria-label={running ? 'Pause simulation' : 'Play simulation'}
-      >
-        <span className="noto-emoji" aria-hidden="true">{running ? '⏸️' : '▶️'}</span>
-      </button>
+      {showPlayToggle && (
+        <button
+          type="button"
+          className="biology-play-toggle"
+          onClick={() => setRunningValue(!runningValue)}
+          title={runningValue ? 'Pause simulation' : 'Play simulation'}
+          aria-label={runningValue ? 'Pause simulation' : 'Play simulation'}
+        >
+          <span className="noto-emoji" aria-hidden="true">{runningValue ? '⏸️' : '▶️'}</span>
+        </button>
+      )}
       <div className={helpClass}>
         <div className="bio-section-title">Simulation</div>
         <div className="bio-sliders">
