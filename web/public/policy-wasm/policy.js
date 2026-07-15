@@ -24,6 +24,32 @@ export function compile_policy_json(source) {
 }
 
 /**
+ * @param {string} source
+ * @param {string} env_json
+ * @returns {string}
+ */
+export function eval_expr_json(source, env_json) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
+        const ptr0 = passStringToWasm0(source, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(env_json, wasm.__wbindgen_export, wasm.__wbindgen_export2);
+        const len1 = WASM_VECTOR_LEN;
+        wasm.eval_expr_json(retptr, ptr0, len0, ptr1, len1);
+        var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
+        var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
+        deferred3_0 = r0;
+        deferred3_1 = r1;
+        return getStringFromWasm0(r0, r1);
+    } finally {
+        wasm.__wbindgen_add_to_stack_pointer(16);
+        wasm.__wbindgen_export3(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
  * @param {string} policy_json
  * @param {string} env_json
  * @returns {string}

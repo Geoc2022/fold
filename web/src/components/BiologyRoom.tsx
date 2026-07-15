@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import type { ParticipantView } from '../types'
 
-type NodeState = 'lurker' | 'interested' | 'committed' | 'arrived'
+export type NodeState = 'lurker' | 'interested' | 'committed' | 'arrived'
 type GroupingMode = 'single' | 'parallel'
 
 interface Node {
@@ -17,6 +16,7 @@ interface Node {
   angle: number
   vogelN: number
   simulated: boolean
+  isSelf?: boolean
 }
 
 interface PointerState {
@@ -44,14 +44,25 @@ interface VisConfig {
   clusterTightness: number
 }
 
+export interface BioParticipant {
+  id: number
+  label: string
+  state: NodeState
+  etaSecs: number
+  waitedSecs: number
+  isSelf: boolean
+}
+
 export interface BiologySnapshot {
   now: number
-  participants: ParticipantView[]
+  participants: BioParticipant[]
 }
 
 interface BiologyRoomProps {
   embedded?: boolean
   onSnapshot?: (snapshot: BiologySnapshot) => void
+  /** Externally-driven state for the "self" node (set by fired policy actions). */
+  selfState?: NodeState
 }
 
 const HOLD_MS = 5_000
@@ -59,11 +70,12 @@ const MIN_ETA_MS = 0
 const MAX_ETA_MS = 60 * 1000
 const WORLD_R = 280
 const MAX_NODES = 26
+const SELF_ID = 0
 const VOGEL_C = 28
 const PHI_RECIP_SQ = 1 / (((1 + Math.sqrt(5)) / 2) ** 2)
 const VOGEL_N_MIN = Math.ceil((WORLD_R / VOGEL_C) ** 2)
 
-export function BiologyRoom({ embedded = false, onSnapshot }: BiologyRoomProps) {
+export function BiologyRoom({ embedded = false, onSnapshot, selfState }: BiologyRoomProps) {
   const [running, setRunning] = useState(true)
   const [mode, setMode] = useState<GroupingMode>('single')
   const [perGroup, setPerGroup] = useState(3)
@@ -87,12 +99,14 @@ export function BiologyRoom({ embedded = false, onSnapshot }: BiologyRoomProps) 
   const snapshotRef = useRef(onSnapshot)
   const runningRef = useRef(running)
   const lastSnapshotAtRef = useRef(0)
+  const selfStateRef = useRef<NodeState | undefined>(selfState)
   modeRef.current = mode
   perGroupRef.current = perGroup
   simRef.current = sim
   visRef.current = vis
   snapshotRef.current = onSnapshot
   runningRef.current = running
+  selfStateRef.current = selfState
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const nodesRef = useRef<Node[]>([])
@@ -248,6 +262,38 @@ export function BiologyRoom({ embedded = false, onSnapshot }: BiologyRoomProps) 
       )
     }
 
+    let lastSelfApplied: NodeState | undefined
+    function ensureSelf(now: number) {
+      let self = nodesRef.current.find((n) => n.isSelf)
+      if (!self) {
+        self = {
+          id: SELF_ID,
+          x: 0,
+          y: 140,
+          vx: 0,
+          vy: 0,
+          state: selfStateRef.current ?? 'lurker',
+          arrivalAt: null,
+          angle: Math.PI / 2,
+          vogelN: 0,
+          simulated: false,
+          isSelf: true,
+        }
+        nodesRef.current.unshift(self)
+        lastSelfApplied = self.state
+      }
+      // Apply an externally-driven state only when it actually changes, so the
+      // sim's own committed -> arrived progression isn't clobbered each frame.
+      const desired = selfStateRef.current
+      if (desired && desired !== lastSelfApplied) {
+        self.state = desired
+        if (desired === 'committed') self.arrivalAt = now + 15_000
+        else if (desired === 'arrived') self.arrivalAt = now
+        else self.arrivalAt = null
+        lastSelfApplied = desired
+      }
+    }
+
     let raf = 0
     const frame = () => {
       const now = Date.now()
@@ -255,11 +301,12 @@ export function BiologyRoom({ embedded = false, onSnapshot }: BiologyRoomProps) 
       const dt = Math.min(0.2, (perf - lastSimRef.current) / 1000)
       lastSimRef.current = perf
       const c = simRef.current
+      ensureSelf(now)
       const nodes = nodesRef.current
 
       if (runningRef.current) {
         if (nodes.length >= Math.min(c.maxNodes, MAX_NODES)) {
-          nodesRef.current = []
+          nodesRef.current = nodes.filter((n) => n.isSelf)
           vogelCounterRef.current = VOGEL_N_MIN
           spawnAccRef.current = 0
         }
@@ -550,7 +597,16 @@ function draw(
   lctx.textBaseline = 'middle'
   lctx.font = `700 ${Math.max(11, Math.round(nr * 0.65))}px ui-monospace, SFMono-Regular, Menlo, monospace`
   for (const n of nodes) {
+    if (n.isSelf) continue
     lctx.fillText(nodeLabel(n.id), n.x, n.y)
+  }
+  // Mark the "self" node (no character) with a small hollow center dot.
+  for (const n of nodes) {
+    if (!n.isSelf) continue
+    lctx.beginPath()
+    lctx.arc(n.x, n.y, Math.max(3, nr * 0.28), 0, Math.PI * 2)
+    lctx.fillStyle = '#0f172a'
+    lctx.fill()
   }
 
   ctx.save()
@@ -599,14 +655,13 @@ function spawnTarget(canvas: HTMLCanvasElement, angle: number, nodeR: number) {
   return { x: c * (minR + extra), y: s * (minR + extra) }
 }
 
-function nodesToParticipants(nodes: Node[], now: number): ParticipantView[] {
-  return nodes
-    .filter((n) => n.state !== 'lurker')
-    .map((n) => ({
-      id: `bio-${n.id}`,
-      color: colorFor(n.state),
-      state: n.state === 'interested' ? 'interested' : 'committed',
-      arrival_at: n.state === 'interested' ? null : (n.arrivalAt ?? now),
-      is_me: false,
-    }))
+function nodesToParticipants(nodes: Node[], now: number): BioParticipant[] {
+  return nodes.map((n) => ({
+    id: n.id,
+    label: n.isSelf ? '' : nodeLabel(n.id),
+    state: n.state,
+    etaSecs: n.state === 'committed' && n.arrivalAt != null ? Math.max(0, Math.ceil((n.arrivalAt - now) / 1000)) : 0,
+    waitedSecs: n.state === 'arrived' && n.arrivalAt != null ? Math.max(0, Math.floor((now - n.arrivalAt) / 1000)) : 0,
+    isSelf: n.isSelf === true,
+  }))
 }

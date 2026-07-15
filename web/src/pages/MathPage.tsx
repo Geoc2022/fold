@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
-import { BiologyRoom, type BiologySnapshot } from '../components/BiologyRoom'
-import { compileAndEvaluate, highlightPolicy, type HighlightToken, type JsonValue } from '../policy/engine'
+import { BiologyRoom, type BiologySnapshot, type BioParticipant, type NodeState } from '../components/BiologyRoom'
+import { compileAndEvaluate, evaluateExpression, highlightPolicy, type HighlightToken, type JsonValue } from '../policy/engine'
 import { readString, writeString } from '../storage'
-import type { ActivityView, ParticipantView, RunView } from '../types'
 
 const DEFAULT_POLICY = '#interested + #committed > 3 => notify "critical mass" in 15s'
 const LEFT_WIDTH_KEY = 'fold.math.left_width'
@@ -17,10 +16,11 @@ interface LogEntry {
   message: string
 }
 
-interface NotifyPayload {
-  message: string | null
-  afterSecs: number | null
-}
+type FiredAction =
+  | { kind: 'notify'; message: string | null; afterSecs: number | null }
+  | { kind: 'commit' }
+  | { kind: 'interest' }
+  | { kind: 'lurk' }
 
 interface TerminalEntry {
   id: number
@@ -36,6 +36,7 @@ export function MathPage() {
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [policyStatus, setPolicyStatus] = useState('ready')
   const [snapshot, setSnapshot] = useState<BiologySnapshot>({ now: Date.now(), participants: [] })
+  const [selfState, setSelfState] = useState<NodeState>('lurker')
   const [showHelp, setShowHelp] = useState(false)
   const [terminalInput, setTerminalInput] = useState('')
   const [terminalEntries, setTerminalEntries] = useState<TerminalEntry[]>([])
@@ -44,17 +45,15 @@ export function MathPage() {
 
   const nextLogIdRef = useRef(1)
   const nextTerminalIdRef = useRef(1)
+  const terminalBodyRef = useRef<HTMLDivElement | null>(null)
+  const consoleBodyRef = useRef<HTMLDivElement | null>(null)
   const prevPolicyFireRef = useRef(false)
   const policyTimerRef = useRef<number | null>(null)
   const lastPolicyErrorRef = useRef<string | null>(null)
 
-  const activity = useMemo(
-    () => buildActivity(snapshot.participants, snapshot.now),
-    [snapshot.participants, snapshot.now],
-  )
   const env = useMemo(
-    () => buildPolicyEnv(snapshot.now, activity, snapshot.participants),
-    [snapshot.now, activity, snapshot.participants],
+    () => buildPolicyEnv(snapshot.now, snapshot.participants),
+    [snapshot.now, snapshot.participants],
   )
   const highlightedSegments = useMemo(
     () => buildHighlightedSegments(policySource, tokens),
@@ -105,16 +104,21 @@ export function MathPage() {
         return
       }
       lastPolicyErrorRef.current = null
-      const notify = decodeNotify(out.fired)
-      const currentlyFired = notify !== null
-      if (notify && !prevPolicyFireRef.current) {
-        const delayMs = Math.max(0, notify.afterSecs ?? 0) * 1000
-        if (policyTimerRef.current != null) window.clearTimeout(policyTimerRef.current)
-        policyTimerRef.current = window.setTimeout(() => {
-          policyTimerRef.current = null
-          const message = notify.message ?? 'policy notify fired'
-          pushLog(`policy notify: ${message}`, 'warn')
-        }, delayMs)
+      const fired = decodeFired(out.fired)
+      const currentlyFired = fired !== null
+      if (fired && !prevPolicyFireRef.current) {
+        if (fired.kind === 'notify') {
+          const delayMs = Math.max(0, fired.afterSecs ?? 0) * 1000
+          if (policyTimerRef.current != null) window.clearTimeout(policyTimerRef.current)
+          policyTimerRef.current = window.setTimeout(() => {
+            policyTimerRef.current = null
+            pushLog(`policy notify: ${fired.message ?? 'policy notify fired'}`, 'warn')
+          }, delayMs)
+        } else {
+          const nextState: NodeState = fired.kind === 'commit' ? 'committed' : fired.kind === 'interest' ? 'interested' : 'lurker'
+          setSelfState(nextState)
+          pushLog(`policy action: self -> ${nextState}`, 'warn')
+        }
       } else if (!currentlyFired && policyTimerRef.current != null) {
         window.clearTimeout(policyTimerRef.current)
         policyTimerRef.current = null
@@ -148,6 +152,16 @@ export function MathPage() {
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
+
+  useEffect(() => {
+    const el = terminalBodyRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [terminalEntries])
+
+  useEffect(() => {
+    const el = consoleBodyRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [logs])
 
   useEffect(() => {
     writeString(LEFT_WIDTH_KEY, String(leftWidth))
@@ -201,20 +215,25 @@ export function MathPage() {
     pushLog('policy saved', 'info')
   }
 
-  const runTerminal = (raw: string) => {
+  const runTerminal = async (raw: string) => {
     const input = raw.trim()
     if (!input) return
     const expr = input.startsWith('>>>') ? input.slice(3).trim() : input
-    const evaluated = evaluateTerminalExpression(expr)
+    setTerminalInput('')
+    const res = await evaluateExpression(expr, env)
+    const output = res.error
+      ? `error: ${res.error}`
+      : res.ty
+        ? `${res.output ?? ''} : ${res.ty}`
+        : res.output ?? ''
     const entry: TerminalEntry = {
       id: nextTerminalIdRef.current,
       input: expr,
-      output: evaluated.output,
-      error: evaluated.error,
+      output,
+      error: res.error != null,
     }
     nextTerminalIdRef.current += 1
     setTerminalEntries((prev) => [...prev.slice(-79), entry])
-    setTerminalInput('')
   }
 
   return (
@@ -250,8 +269,8 @@ export function MathPage() {
         <div className="math-horizontal-splitter" onMouseDown={beginResizeConsole} />
         <div className="math-terminal">
           <div className="math-terminal-head">Terminal</div>
-          <div className="math-terminal-body">
-            {terminalEntries.length === 0 && <div className="math-terminal-empty">Try: 1 + 2</div>}
+          <div className="math-terminal-body" ref={terminalBodyRef}>
+            {terminalEntries.length === 0 && <div className="math-terminal-empty">Try: #interested + 1 · avg(proj(committed).1) · (fun x -&gt; x * 2) 4</div>}
             {terminalEntries.map((entry) => (
               <div key={entry.id} className="math-terminal-entry">
                 <div className="math-terminal-line">&gt;&gt;&gt; {entry.input}</div>
@@ -263,7 +282,7 @@ export function MathPage() {
             className="math-terminal-input-row"
             onSubmit={(e) => {
               e.preventDefault()
-              runTerminal(terminalInput)
+              void runTerminal(terminalInput)
             }}
           >
             <span className="math-terminal-prompt">&gt;&gt;&gt;</span>
@@ -273,7 +292,7 @@ export function MathPage() {
         <div className="math-horizontal-splitter" />
         <div className="math-console left-dock">
           <div className="math-console-head">Console</div>
-          <div className="math-console-body">
+          <div className="math-console-body" ref={consoleBodyRef}>
             {logs.length === 0 && <div className="math-log-item">(no logs yet)</div>}
             {logs.map((log) => (
               <div key={log.id} className={`math-log-item ${log.level}`}>
@@ -288,7 +307,7 @@ export function MathPage() {
 
       <section className="math-right">
         <div className="math-room-wrap">
-          <BiologyRoom embedded onSnapshot={onSnapshot} />
+          <BiologyRoom embedded onSnapshot={onSnapshot} selfState={selfState} />
         </div>
       </section>
       </main>
@@ -305,27 +324,35 @@ export function MathPage() {
             <div>
               <h3>Keywords</h3>
               <ul>
-                <li><code>notify</code>: trigger notification action</li>
-                <li><code>in</code>: short delay syntax (<code>notify in 3min</code>)</li>
-                <li><code>after:</code>, <code>message:</code>: named notify args</li>
+                <li><code>fun x -&gt; ...</code>: lambda (ML/OCaml)</li>
+                <li><code>match</code>: strict pattern match (needs <code>_</code>)</li>
+                <li><code>type</code>: declare a record or enum</li>
+                <li><code>a = expr</code>: bind a variable (put on its own line)</li>
                 <li><code>and</code>, <code>or</code>, <code>not</code>, <code>xor</code>: boolean logic</li>
                 <li><code>true</code>, <code>false</code>: bool literals</li>
               </ul>
 
-              <h3>Counts and fields</h3>
+              <h3>Actions</h3>
               <ul>
-                <li><code>#interested</code>, <code>#committed</code>, <code>#people</code>: list counts</li>
-                <li><code>committed.eta</code>: project a field over a list</li>
+                <li><code>notify</code> (<code>in 3min</code>, <code>message:</code>, <code>after:</code>)</li>
+                <li><code>commit</code>, <code>interest</code>, <code>lurk</code>: set the self node</li>
+              </ul>
+
+              <h3>Counts</h3>
+              <ul>
+                <li><code>#interested</code>, <code>#committed</code>, <code>#arrived</code>, <code>#lurkers</code></li>
               </ul>
             </div>
 
             <div>
               <h3>Functions</h3>
               <ul>
-                <li><code>len(list)</code></li>
-                <li><code>sum(list)</code>, <code>avg(list)</code></li>
+                <li><code>len(list)</code>, <code>sum(list)</code>, <code>avg(list)</code></li>
                 <li><code>min(a, b)</code>, <code>max(a, b)</code></li>
-                <li><code>abs(x)</code>, <code>floor(x)</code>, <code>ceil(x)</code>, <code>round(x)</code></li>
+                <li><code>abs/floor/ceil/round(x)</code></li>
+                <li><code>map(f, xs)</code>, <code>filter(f, xs)</code></li>
+                <li><code>any(f, xs)</code>, <code>all(f, xs)</code></li>
+                <li><code>proj(xs)</code>: split <code>List&lt;(Str,Dur)&gt;</code> into <code>(List&lt;Str&gt;, List&lt;Dur&gt;)</code></li>
               </ul>
 
               <h3>Operators</h3>
@@ -336,20 +363,28 @@ export function MathPage() {
             </div>
 
             <div>
-              <h3>Type Examples</h3>
+              <h3>Types</h3>
               <ul>
-                <li><code>Num</code>: <code>3</code>, <code>1.5</code></li>
-                <li><code>Bool</code>: <code>true</code>, <code>false</code></li>
-                <li><code>Dur</code>: <code>15s</code>, <code>3min</code>, <code>2h</code></li>
-                <li><code>List</code>: <code>committed</code>, <code>interested</code></li>
-                <li><code>Person field</code>: <code>committed.eta</code>, <code>committed.arrived</code></li>
+                <li><code>Num</code> <code>3</code>, <code>Bool</code> <code>true</code></li>
+                <li><code>Dur</code> <code>15s</code>, <code>1m2s</code>, <code>2h</code></li>
+                <li><code>Str</code> <code>"A"</code></li>
+                <li><code>interested/lurkers : List&lt;Str&gt;</code></li>
+                <li><code>committed/arrived : List&lt;(Str, Dur)&gt;</code></li>
               </ul>
 
-              <h3>Rule Examples</h3>
+              <h3>Records &amp; enums (OCaml)</h3>
+              <ul>
+                <li><code>type user = &#123; id : int; name : string &#125;</code></li>
+                <li><code>u = &#123; id = 1; name = "A" &#125;</code></li>
+                <li><code>u.name</code> · <code>&#123; id; _ &#125; = u</code></li>
+                <li><code>type color = Red | Green | Blue</code></li>
+              </ul>
+
+              <h3>Examples</h3>
               <ul>
                 <li><code>#committed &gt; 3 =&gt; notify</code></li>
-                <li><code>#interested + #committed &gt; 5 =&gt; notify "critical mass" in 30s</code></li>
-                <li><code>avg(committed.eta) &gt; 5min =&gt; notify(message: "ETA high")</code></li>
+                <li><code>avg(proj(committed).1) &gt; 5min =&gt; notify "ETA high"</code></li>
+                <li><code>any(fun c -&gt; c &gt; 2min, proj(committed).1) =&gt; commit</code></li>
               </ul>
             </div>
             </div>
@@ -366,104 +401,57 @@ function clamp(value: number, min: number, max: number) {
   return value
 }
 
-function evaluateTerminalExpression(expr: string): { output: string; error: boolean } {
-  if (!expr) return { output: '', error: false }
-  if (!/^[0-9+\-*/%().\s]+$/.test(expr)) {
-    return { output: 'error: only numeric arithmetic is supported', error: true }
-  }
-  try {
-    // eslint-disable-next-line no-new-func
-    const value = Function(`"use strict"; return (${expr});`)() as unknown
-    if (typeof value === 'number' && Number.isFinite(value)) return { output: String(value), error: false }
-    return { output: 'error: expression did not return a finite number', error: true }
-  } catch (err) {
-    return { output: `error: ${err instanceof Error ? err.message : String(err)}`, error: true }
-  }
-}
+// Room durations (minutes) mirrored from the activity defaults.
+const DURATION_SECS = 30 * 60
+const MAX_COMMIT_SECS = 30 * 60
+const MIN_PEOPLE = 2
 
-function buildRun(participants: ParticipantView[]): RunView {
-  const interested = participants.filter((p) => p.state === 'interested').length
-  const committed = participants.filter((p) => p.state === 'committed').length
-  return {
-    id: 'math-run',
-    status: 'open',
-    location: 'Math Sandbox',
-    details: 'Policy + room simulation',
-    scheduled_for: null,
-    expires_at: null,
-    interested_count: interested,
-    committed_count: committed,
-    created_at: Date.now(),
-    updated_at: Date.now(),
-    group: {
-      complete_groups: Math.floor(committed / 2),
-      group_sizes: committed >= 2 ? [Math.min(committed, 2)] : [],
-      is_ready: committed >= 2,
-      waiting_count: Math.max(0, committed - 2),
-      spots_to_next: committed >= 2 ? 0 : 2 - committed,
-      spots_remaining: null,
-    },
-  }
-}
-
-function buildActivity(participants: ParticipantView[], now: number): ActivityView {
-  return {
-    id: 'math-activity',
-    code: 'MATH',
-    emoji: '🧮',
-    title: 'Policy Playground',
-    description: 'Local room simulation for policy development',
-    category: 'tabletop',
-    proposer_id: 'math',
-    proposer_handle: 'math',
-    min_people: 2,
-    max_people: null,
-    group_multiple: 2,
-    grouping_mode: 'single',
-    allow_guests: true,
-    duration_minutes: 30,
-    max_commit_minutes: 30,
-    times_run: 0,
-    players_served: 0,
-    interest_total: 0,
-    commit_total: 0,
-    commit_pct: null,
-    last_active_at: now,
-    created_at: now,
-    updated_at: now,
-    current_run: buildRun(participants),
-    my_state: null,
-  }
-}
-
-function buildPolicyEnv(serverTime: number, activity: ActivityView, participants: ParticipantView[]): JsonValue {
-  const interested = participants.filter((p) => p.state === 'interested').map((p) => personValue(serverTime, p))
-  const committed = participants.filter((p) => p.state === 'committed').map((p) => personValue(serverTime, p))
-  const people = [...interested, ...committed]
+function buildPolicyEnv(serverTime: number, participants: BioParticipant[]): JsonValue {
+  const others = participants.filter((p) => !p.isSelf)
+  const interested = others.filter((p) => p.state === 'interested').map((p) => str(p.label))
+  const lurkers = others.filter((p) => p.state === 'lurker').map((p) => str(p.label))
+  const committed = others
+    .filter((p) => p.state === 'committed')
+    .map((p) => tuple([str(p.label), dur(p.etaSecs)]))
+  const arrived = others
+    .filter((p) => p.state === 'arrived')
+    .map((p) => tuple([str(p.label), dur(p.waitedSecs)]))
+  const people = others.map((p) => str(p.label))
   const now = new Date(serverTime)
   const day = now.getDay()
   const isWeekend = day === 0 || day === 6
   return {
     vars: {
       interested: list(interested),
+      lurkers: list(lurkers),
       committed: list(committed),
+      arrived: list(arrived),
       people: list(people),
       hour: num(now.getHours()),
       is_weekend: bool(isWeekend),
-      min_people: num(activity.min_people),
-      max_people: num(activity.max_people ?? 0),
-      duration: dur(activity.duration_minutes * 60),
-      max_commit: dur(activity.max_commit_minutes * 60),
+      min_people: num(MIN_PEOPLE),
+      max_people: num(0),
+      duration: dur(DURATION_SECS),
+      max_commit: dur(MAX_COMMIT_SECS),
     },
   }
 }
 
-function decodeNotify(value: JsonValue | null): NotifyPayload | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+function decodeFired(value: JsonValue | null): FiredAction | null {
+  if (value == null) return null
+  // Unit variants (Commit/Interest/Lurk) serialize as a bare string.
+  if (typeof value === 'string') {
+    if (value === 'Commit') return { kind: 'commit' }
+    if (value === 'Interest') return { kind: 'interest' }
+    if (value === 'Lurk') return { kind: 'lurk' }
+    return null
+  }
+  if (typeof value !== 'object' || Array.isArray(value)) return null
   const notify = (value as Record<string, JsonValue>).Notify
   if (!notify || typeof notify !== 'object' || Array.isArray(notify)) return null
   const payload = notify as Record<string, JsonValue>
   return {
+    kind: 'notify',
     message: typeof payload.message === 'string' ? payload.message : null,
     afterSecs: typeof payload.after_secs === 'number' ? payload.after_secs : null,
   }
@@ -482,18 +470,6 @@ function buildHighlightedSegments(source: string, tokens: HighlightToken[]) {
   return out
 }
 
-function personValue(serverTime: number, p: ParticipantView): JsonValue {
-  const eta = p.arrival_at == null ? 0 : Math.max(0, Math.ceil((p.arrival_at - serverTime) / 1000))
-  const arrived = p.arrival_at != null && p.arrival_at <= serverTime
-  return {
-    Person: {
-      eta: dur(eta),
-      arrived: bool(arrived),
-      waited: dur(0),
-    },
-  }
-}
-
 function num(v: number): JsonValue {
   return { Num: v }
 }
@@ -502,10 +478,18 @@ function bool(v: boolean): JsonValue {
   return { Bool: v }
 }
 
+function str(v: string): JsonValue {
+  return { Str: v }
+}
+
 function dur(secs: number): JsonValue {
   return { DurSecs: secs }
 }
 
 function list(values: JsonValue[]): JsonValue {
   return { List: values }
+}
+
+function tuple(values: JsonValue[]): JsonValue {
+  return { Tuple: values }
 }

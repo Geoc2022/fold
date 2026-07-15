@@ -1250,8 +1250,26 @@ label .opt {
 .math-highlight-layer .token-minus,
 .math-highlight-layer .token-star,
 .math-highlight-layer .token-slash,
-.math-highlight-layer .token-percent {
+.math-highlight-layer .token-percent,
+.policy-highlight-layer .token-thinarrow,
+.policy-highlight-layer .token-fun,
+.policy-highlight-layer .token-match,
+.policy-highlight-layer .token-type,
+.policy-highlight-layer .token-pipe,
+.policy-highlight-layer .token-true,
+.policy-highlight-layer .token-false,
+.math-highlight-layer .token-thinarrow,
+.math-highlight-layer .token-fun,
+.math-highlight-layer .token-match,
+.math-highlight-layer .token-type,
+.math-highlight-layer .token-pipe,
+.math-highlight-layer .token-true,
+.math-highlight-layer .token-false {
   color: color-mix(in srgb, var(--warn) 70%, var(--text));
+}
+.policy-highlight-layer .token-wildcard,
+.math-highlight-layer .token-wildcard {
+  color: color-mix(in srgb, var(--text) 45%, transparent);
 }
 .room-info-card {
   display: flex;

@@ -3,6 +3,7 @@ type PolicyWasmModule = {
   compile_policy_json: (source: string) => string
   evaluate_policy_json: (policyJson: string, envJson: string) => string
   highlight_policy_json: (source: string) => string
+  eval_expr_json: (source: string, envJson: string) => string
 }
 
 export type JsonValue =
@@ -30,6 +31,12 @@ export interface CompileResult {
 
 export interface EvaluateResult {
   fired: JsonValue | null
+  error: string | null
+}
+
+export interface EvalExprResult {
+  output: string | null
+  ty: string | null
   error: string | null
 }
 
@@ -94,6 +101,16 @@ export async function compileAndEvaluate(source: string, env: JsonValue): Promis
     return { fired: null, error: compiled.diagnostics[0]?.message ?? 'compile failed' }
   }
   return evaluatePolicy(compiled.policy, env)
+}
+
+export async function evaluateExpression(source: string, env: JsonValue): Promise<EvalExprResult> {
+  try {
+    const wasm = await loadPolicyWasm()
+    const raw = wasm.eval_expr_json(source, JSON.stringify(env))
+    return JSON.parse(raw) as EvalExprResult
+  } catch (error) {
+    return { output: null, ty: null, error: `expression eval failed: ${String(error)}` }
+  }
 }
 
 export async function highlightPolicy(source: string): Promise<HighlightResult> {

@@ -3,6 +3,8 @@
 
 export function compile_policy_json(source: string): string;
 
+export function eval_expr_json(source: string, env_json: string): string;
+
 export function evaluate_policy_json(policy_json: string, env_json: string): string;
 
 export function highlight_policy_json(source: string): string;
@@ -12,6 +14,7 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly compile_policy_json: (a: number, b: number, c: number) => void;
+    readonly eval_expr_json: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly evaluate_policy_json: (a: number, b: number, c: number, d: number, e: number) => void;
     readonly highlight_policy_json: (a: number, b: number, c: number) => void;
     readonly __wbindgen_add_to_stack_pointer: (a: number) => number;
