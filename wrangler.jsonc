@@ -11,7 +11,7 @@
   // build on this toolchain. `--dev` skips that flag and produces a correct
   // build; we then shrink it with `wasm-opt -Oz` (see scripts/build-worker.sh).
   "build": {
-    "command": "npm --prefix web run build && bash scripts/build-worker.sh"
+    "command": "bash scripts/build-policy-web.sh && npm --prefix web run build && bash scripts/build-worker.sh"
   },
 
   // Static assets: serve the built SPA. Requests to assets are free/unlimited.

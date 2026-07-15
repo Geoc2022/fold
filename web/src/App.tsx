@@ -7,6 +7,7 @@ import { ChemistryPage } from './pages/ChemistryPage'
 import { BiologyPage } from './pages/BiologyPage'
 
 export default function App() {
+  // add the picture frame 404 page
   return (
     <Routes>
       <Route path="/" element={<HomePage />} />
@@ -18,7 +19,7 @@ export default function App() {
         path="*"
         element={
           <main className="shell">
-            <h1>fold</h1>
+            <h1>Fold</h1>
             <p className="pending">That page does not exist.</p>
           </main>
         }

@@ -145,11 +145,14 @@ export function RoomCanvas({ activity, participants, me, visual, onInterested, o
   const commitLockRef = useRef(alreadyCommittedElsewhere)
   const guardAlertRef = useRef(0)
   const expireNoticeRef = useRef(0)
+  const myStableNodeIdRef = useRef(`me-${me.id}`)
   visualRef.current = visual
   activityRef.current = activity
 
   const source = useMemo(() => {
     const now = Date.now()
+    const meParticipant = participants.find((p) => p.is_me)
+    if (meParticipant) myStableNodeIdRef.current = meParticipant.id
     const nodes = participants.map((p) => ({
       id: p.id,
       state: visualState(p, now),
@@ -158,14 +161,14 @@ export function RoomCanvas({ activity, participants, me, visual, onInterested, o
     }))
     if (!nodes.some((n) => n.isMe)) {
       nodes.unshift({
-        id: `me-${me.id}`,
+        id: myStableNodeIdRef.current,
         state: 'lurker' as const,
         arrivalAt: null,
         isMe: true,
       })
     }
     return nodes
-  }, [participants, me.id])
+  }, [participants])
 
   useEffect(() => {
     commitLockRef.current = alreadyCommittedElsewhere
@@ -173,9 +176,12 @@ export function RoomCanvas({ activity, participants, me, visual, onInterested, o
 
   useEffect(() => {
     const existing = new Map(nodesRef.current.map((n) => [n.id, n]))
+    const existingMe = nodesRef.current.find((n) => n.isMe)
     nodesRef.current = source.map((s, index) => {
-      const old = existing.get(s.id)
+      let old = existing.get(s.id)
+      if (!old && s.isMe) old = existingMe
       if (old) {
+        if (old.id !== s.id) old.id = s.id
         const pointerOwnsNode = pointerRef.current?.node === old
         if (!pointerOwnsNode) {
           old.state = s.state
