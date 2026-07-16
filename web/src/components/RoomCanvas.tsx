@@ -5,6 +5,7 @@ import {
   MAX_ETA_MIN,
   MIN_ETA_MIN,
   etaFromHold,
+  getCssVar,
   nodeColor,
   targetOpacity,
   visualState,
@@ -789,7 +790,7 @@ function draw(
   const w = canvas.clientWidth
   const h = canvas.clientHeight
   ctx.clearRect(0, 0, w, h)
-  ctx.fillStyle = getCss('--bg')
+  ctx.fillStyle = getCssVar('--bg')
   ctx.fillRect(0, 0, w, h)
 
   const isDragging = !!pointer?.dragging
@@ -800,7 +801,7 @@ function draw(
   // so they read correctly against either theme's background, and fade in
   // while manipulating a node -- same as Biology's isDragging-based alpha.
   ctx.globalAlpha = isDragging ? 0.08 : 0.02
-  ctx.strokeStyle = getCss('--text')
+  ctx.strokeStyle = getCssVar('--text')
   ctx.lineWidth = 1 / camera.scale
   for (let r = 80; r <= WORLD_R; r += 80) {
     ctx.beginPath()
@@ -905,6 +906,3 @@ function etaRemainingMinutes(arrivalAt: number | null, now: number) {
   return Math.max(0, Math.ceil((arrivalAt - now) / 60000))
 }
 
-function getCss(name: string) {
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim()
-}

@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { MarkdownBlock } from '../components/MarkdownBlock'
-import { highlightPolicy, policyDocs, type HighlightToken } from '../policy/engine'
+import { highlightPolicy, type HighlightToken } from '../policy/engine'
 import { buildHighlightedSegments } from '../policy/highlight'
 import { newPolicyRule, type PolicyRule } from '../policy/rules'
+import { PolicyHelp } from './PolicyHelp'
 
 interface Props {
   rules: PolicyRule[]
@@ -19,7 +19,6 @@ export function PolicyPanel({ rules, onRulesChange, onClose, notifyStatus, onReq
   const [draft, setDraft] = useState(selected?.source ?? '')
   const [tokens, setTokens] = useState<HighlightToken[]>([])
   const [showHelp, setShowHelp] = useState(false)
-  const [helpText, setHelpText] = useState('Loading documentation…')
   const highlightRef = useRef<HTMLPreElement | null>(null)
 
   // Reset the draft whenever a different rule is selected, when the
@@ -42,16 +41,6 @@ export function PolicyPanel({ rules, onRulesChange, onClose, notifyStatus, onReq
       cancelled = true
     }
   }, [draft])
-
-  useEffect(() => {
-    let cancelled = false
-    void policyDocs().then((text) => {
-      if (!cancelled) setHelpText(text)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [])
 
   const highlightedSegments = useMemo(() => buildHighlightedSegments(draft, tokens), [draft, tokens])
   const dirty = selected != null && draft !== selected.source
@@ -209,21 +198,7 @@ export function PolicyPanel({ rules, onRulesChange, onClose, notifyStatus, onReq
           </label>
         </form>
       </div>
-      {showHelp && (
-        <div
-          className="math-help-backdrop"
-          onClick={(e) => {
-            e.stopPropagation()
-            setShowHelp(false)
-          }}
-        >
-          <section className="math-help-panel" onClick={(e) => e.stopPropagation()}>
-            <header className="math-help-head">
-            </header>
-            <MarkdownBlock className="math-help-markdown" source={helpText} />
-          </section>
-        </div>
-      )}
+      {showHelp && <PolicyHelp onClose={() => setShowHelp(false)} />}
     </div>
   )
 }

@@ -41,6 +41,12 @@ export function nodeColor(state: VisualNodeState): string {
   return '#969696'
 }
 
+/** Read a CSS custom property off `:root` (used by canvas renderers to track
+ * the active theme). `fallback` is returned when the variable is unset. */
+export function getCssVar(name: string, fallback = ''): string {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback
+}
+
 // ---- liveness / reachability -------------------------------------------
 //
 // There's no realtime layer (HTTP polling only, see usePolling.ts), so

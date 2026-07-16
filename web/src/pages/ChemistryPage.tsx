@@ -3,7 +3,16 @@
 // Parallel mode: arrived nodes tile into fixed-size groups of `perGroup` each.
 
 import { useEffect, useRef, useState } from 'react'
-import { nodeColor } from '../nodeVisual'
+import { getCssVar, nodeColor } from '../nodeVisual'
+import {
+  angleFromCenter,
+  etaFromDistance,
+  etaFromHold,
+  logNode,
+  SANDBOX_HOLD_MS,
+  SANDBOX_MAX_ETA_MS,
+  spawnOutsideRing,
+} from '../sandbox'
 import { useForceTheme } from '../useForceTheme'
 
 type NodeState = 'lurker' | 'interested' | 'committed'
@@ -32,9 +41,6 @@ interface PointerState {
 }
 
 const NODE_R = 25
-const HOLD_MS = 5_000
-const MIN_ETA_MS = 0
-const MAX_ETA_MS = 60 * 1000
 const WORLD_R = 300
 
 export function ChemistryPage() {
@@ -111,7 +117,7 @@ export function ChemistryPage() {
       const dist = Math.hypot(p.x, p.y)
       if (dist > 1) ps.node.angle = Math.atan2(p.y, p.x)
       if (ps.node.state === 'committed') {
-        ps.node.arrivalAt = Date.now() + etaFromDistance(p.x, p.y)
+        ps.node.arrivalAt = Date.now() + etaFromDistance(p.x, p.y, WORLD_R)
         logNode(ps.node)
       }
     }
@@ -123,9 +129,8 @@ export function ChemistryPage() {
 
       if (!ps.node) {
         const click = toWorld(e)
-        const angle =
-          Math.hypot(click.x, click.y) < 0.001 ? -Math.PI / 2 : Math.atan2(click.y, click.x)
-        const target = spawnTarget(canvas, angle)
+        const angle = angleFromCenter(click.x, click.y)
+        const target = spawnOutsideRing(canvas, angle, WORLD_R, NODE_R)
         nodesRef.current.push({
           id: nextIdRef.current++,
           x: click.x,
@@ -307,8 +312,8 @@ function computeGroupTargets(
 
   // In-flight nodes move inward along their angle as ETA approaches
   for (const n of inFlight) {
-    const remaining = n.arrivalAt == null ? MAX_ETA_MS : Math.max(0, n.arrivalAt - now)
-    const orbitR = (remaining / MAX_ETA_MS) * WORLD_R
+    const remaining = n.arrivalAt == null ? SANDBOX_MAX_ETA_MS : Math.max(0, n.arrivalAt - now)
+    const orbitR = (remaining / SANDBOX_MAX_ETA_MS) * WORLD_R
     targets.set(n.id, {
       x: Math.cos(n.angle) * orbitR,
       y: Math.sin(n.angle) * orbitR,
@@ -345,13 +350,13 @@ function draw(
   const w = canvas.clientWidth
   const h = canvas.clientHeight
   ctx.clearRect(0, 0, w, h)
-  ctx.fillStyle = getCss('--bg')
+  ctx.fillStyle = getCssVar('--bg', '#ffffff')
   ctx.fillRect(0, 0, w, h)
   ctx.save()
   ctx.translate(w / 2, h / 2)
 
   ctx.globalAlpha = 0.06
-  ctx.strokeStyle = getCss('--text')
+  ctx.strokeStyle = getCssVar('--text', '#111827')
   ctx.lineWidth = 1
   for (let r = 80; r <= WORLD_R; r += 80) {
     ctx.beginPath()
@@ -363,7 +368,7 @@ function draw(
   const now = Date.now()
   for (const n of nodes) {
     if (n.state !== 'committed') continue
-    const remaining = n.arrivalAt == null ? MAX_ETA_MS : Math.max(0, n.arrivalAt - now)
+    const remaining = n.arrivalAt == null ? SANDBOX_MAX_ETA_MS : Math.max(0, n.arrivalAt - now)
     if (remaining > 0) {
       ctx.strokeStyle = 'rgba(17,24,39,0.14)'
       ctx.lineWidth = 1.25
@@ -400,7 +405,7 @@ function drawNodes(
 
   lctx.globalCompositeOperation = 'source-over'
   for (const n of nodes) {
-    lctx.fillStyle = colorFor(n.state)
+    lctx.fillStyle = nodeColor(n.state)
     lctx.beginPath()
     lctx.arc(n.x, n.y, NODE_R, 0, Math.PI * 2)
     lctx.fill()
@@ -429,7 +434,7 @@ function drawNodes(
     }
   }
   if (pointer?.node?.state === 'interested' && !pointer.dragging) {
-    const held = Math.min(HOLD_MS, performance.now() - pointer.downAt)
+    const held = Math.min(SANDBOX_HOLD_MS, performance.now() - pointer.downAt)
     lctx.fillText(
       `${Math.round(etaFromHold(held) / 1000)}s`,
       pointer.node.x,
@@ -443,48 +448,4 @@ function drawNodes(
   ctx.restore()
 }
 
-function colorFor(state: NodeState): string {
-  return nodeColor(state)
-}
 
-// ---- helpers ---------------------------------------------------------------
-
-function etaFromHold(holdMs: number): number {
-  const t = Math.min(1, Math.max(0, holdMs / HOLD_MS))
-  return MIN_ETA_MS + (MAX_ETA_MS - MIN_ETA_MS) * (1 - t * t)
-}
-
-function etaFromDistance(x: number, y: number): number {
-  const r = Math.min(WORLD_R, Math.max(0, Math.hypot(x, y)))
-  return (r / WORLD_R) * MAX_ETA_MS
-}
-
-function spawnTarget(canvas: HTMLCanvasElement, angle: number): { x: number; y: number } {
-  const margin = NODE_R + 8
-  const halfW = Math.max(margin, canvas.clientWidth / 2 - margin)
-  const halfH = Math.max(margin, canvas.clientHeight / 2 - margin)
-  const c = Math.cos(angle)
-  const s = Math.sin(angle)
-  const maxR = Math.min(
-    Math.abs(c) < 0.0001 ? Number.POSITIVE_INFINITY : halfW / Math.abs(c),
-    Math.abs(s) < 0.0001 ? Number.POSITIVE_INFINITY : halfH / Math.abs(s),
-  )
-  const minR = WORLD_R + NODE_R + 8
-  if (maxR <= minR) return { x: c * maxR, y: s * maxR }
-  const scale = 72
-  const maxExtra = maxR - minR
-  const u = Math.random()
-  const extra = -scale * Math.log(1 - u * (1 - Math.exp(-maxExtra / scale)))
-  return { x: c * (minR + extra), y: s * (minR + extra) }
-}
-
-function logNode(n: Node) {
-  const distance = Math.round(Math.hypot(n.x, n.y))
-  const eta =
-    n.arrivalAt == null ? null : Math.max(0, Math.ceil((n.arrivalAt - Date.now()) / 1000))
-  console.log(`node ${n.id}: distance=${distance}px eta=${eta ?? 'n/a'}s state=${n.state}`)
-}
-
-function getCss(name: string) {
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#111827'
-}

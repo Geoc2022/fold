@@ -1,5 +1,14 @@
 import { useEffect, useRef } from 'react'
-import { nodeColor } from '../nodeVisual'
+import { getCssVar, nodeColor } from '../nodeVisual'
+import {
+  angleFromCenter,
+  etaFromDistance,
+  etaFromHold,
+  logNode,
+  SANDBOX_HOLD_MS,
+  SANDBOX_MAX_ETA_MS,
+  spawnOutsideRing,
+} from '../sandbox'
 import { useForceTheme } from '../useForceTheme'
 
 type NodeState = 'lurker' | 'interested' | 'committed'
@@ -28,9 +37,6 @@ interface PointerState {
 }
 
 const NODE_R = 25
-const HOLD_MS = 5_000
-const MIN_ETA_MS = 0
-const MAX_ETA_MS = 60 * 1000
 const WORLD_R = 320
 
 export function PhysicsPage() {
@@ -99,7 +105,7 @@ export function PhysicsPage() {
       ps.node.vx = 0
       ps.node.vy = 0
       if (ps.node.state === 'committed') {
-        ps.node.arrivalAt = Date.now() + etaFromDistance(ps.node.x, ps.node.y)
+        ps.node.arrivalAt = Date.now() + etaFromDistance(ps.node.x, ps.node.y, WORLD_R)
         logNode(ps.node)
       }
       ps.lastX = p.x
@@ -113,7 +119,7 @@ export function PhysicsPage() {
 
       if (!ps.node) {
         const click = toWorld(e)
-        const target = spawnOutsideOuterRing(canvas, click.x, click.y)
+        const target = spawnOutsideRing(canvas, angleFromCenter(click.x, click.y), WORLD_R, NODE_R)
         nodesRef.current.push({
           id: nextIdRef.current,
           x: click.x,
@@ -199,7 +205,7 @@ function step(nodes: Node[], pointer: PointerState | null) {
     }
     if (n.state !== 'committed' || n.arrivalAt == null) continue
     const remaining = Math.max(0, n.arrivalAt - now)
-    const targetR = Math.min(1, remaining / MAX_ETA_MS) * WORLD_R
+    const targetR = Math.min(1, remaining / SANDBOX_MAX_ETA_MS) * WORLD_R
     const angle = Math.atan2(n.y, n.x) || 0
     const tx = Math.cos(angle) * targetR
     const ty = Math.sin(angle) * targetR
@@ -221,20 +227,20 @@ function draw(
   const w = canvas.clientWidth
   const h = canvas.clientHeight
   ctx.clearRect(0, 0, w, h)
-  ctx.fillStyle = getCss('--bg')
+  ctx.fillStyle = getCssVar('--bg', '#ffffff')
   ctx.fillRect(0, 0, w, h)
   ctx.save()
   ctx.translate(w / 2, h / 2)
 
   ctx.globalAlpha = 0.06
-  ctx.strokeStyle = getCss('--text')
+  ctx.strokeStyle = getCssVar('--text', '#111827')
   for (let r = 80; r <= WORLD_R; r += 80) {
     ctx.beginPath()
     ctx.arc(0, 0, r, 0, Math.PI * 2)
     ctx.stroke()
   }
   ctx.globalAlpha = 1
-  ctx.fillStyle = getCss('--text')
+  ctx.fillStyle = getCssVar('--text', '#111827')
   ctx.beginPath()
   ctx.arc(0, 0, 5, 0, Math.PI * 2)
   ctx.fill()
@@ -242,10 +248,6 @@ function draw(
   drawNodesWithOutlineCutout(ctx, canvas, nodes, pointer)
 
   ctx.restore()
-}
-
-function colorFor(state: NodeState) {
-  return nodeColor(state)
 }
 
 function drawNodesWithOutlineCutout(
@@ -267,7 +269,7 @@ function drawNodesWithOutlineCutout(
   lctx.translate(w / 2, h / 2)
   lctx.globalCompositeOperation = 'source-over'
   for (const n of nodes) {
-    lctx.fillStyle = colorFor(n.state)
+    lctx.fillStyle = nodeColor(n.state)
     lctx.beginPath()
     lctx.arc(n.x, n.y, NODE_R, 0, Math.PI * 2)
     lctx.fill()
@@ -296,7 +298,7 @@ function drawNodesWithOutlineCutout(
     }
   }
   if (pointer?.node?.state === 'interested' && !pointer.dragging) {
-    const held = Math.min(HOLD_MS, performance.now() - pointer.downAt)
+    const held = Math.min(SANDBOX_HOLD_MS, performance.now() - pointer.downAt)
     const etaMs = etaFromHold(held)
     lctx.fillText(`${Math.round(etaMs / 1000)}s`, pointer.node.x, pointer.node.y)
   }
@@ -307,55 +309,6 @@ function drawNodesWithOutlineCutout(
   ctx.restore()
 }
 
-function etaFromHold(holdMs: number) {
-  const t = Math.min(1, Math.max(0, holdMs / HOLD_MS))
-  return MIN_ETA_MS + (MAX_ETA_MS - MIN_ETA_MS) * (1 - t * t)
-}
-
-function etaFromDistance(x: number, y: number) {
-  const r = Math.min(WORLD_R, Math.max(0, Math.hypot(x, y)))
-  return MIN_ETA_MS + (MAX_ETA_MS - MIN_ETA_MS) * (r / WORLD_R)
-}
-
-function spawnOutsideOuterRing(canvas: HTMLCanvasElement, clickX: number, clickY: number) {
-  const margin = NODE_R + 8
-  const halfW = Math.max(margin, canvas.clientWidth / 2 - margin)
-  const halfH = Math.max(margin, canvas.clientHeight / 2 - margin)
-
-  // Keep the user's click direction, but project the node beyond the outer
-  // timing ring. A center click has no direction, so pick an arbitrary upward
-  // ray rather than producing NaN coordinates.
-  const angle = Math.hypot(clickX, clickY) < 0.001 ? -Math.PI / 2 : Math.atan2(clickY, clickX)
-  const c = Math.cos(angle)
-  const s = Math.sin(angle)
-  const maxR = Math.min(
-    Math.abs(c) < 0.0001 ? Number.POSITIVE_INFINITY : halfW / Math.abs(c),
-    Math.abs(s) < 0.0001 ? Number.POSITIVE_INFINITY : halfH / Math.abs(s),
-  )
-  const minR = WORLD_R + NODE_R + 8
-
-  // In normal-size windows this puts the node just outside WORLD_R, with a
-  // bounded exponential falloff farther outward on the same ray. In small
-  // windows, clamp to the farthest visible point on that ray.
-  if (maxR <= minR) return { x: c * maxR, y: s * maxR }
-  const scale = 72
-  const maxExtra = maxR - minR
-  const u = Math.random()
-  const extra = -scale * Math.log(1 - u * (1 - Math.exp(-maxExtra / scale)))
-  const r = minR + extra
-  return { x: c * r, y: s * r }
-}
-
 function etaSeconds(arrivalAt: number) {
   return Math.max(0, Math.ceil((arrivalAt - Date.now()) / 1000))
-}
-
-function logNode(n: Node) {
-  const distance = Math.round(Math.hypot(n.x, n.y))
-  const eta = n.arrivalAt == null ? null : etaSeconds(n.arrivalAt)
-  console.log(`node ${n.id}: distance=${distance}px eta=${eta ?? 'n/a'}s state=${n.state}`)
-}
-
-function getCss(name: string) {
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#111827'
 }

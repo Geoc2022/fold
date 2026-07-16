@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { nodeColor } from '../nodeVisual'
+import { getCssVar, nodeColor } from '../nodeVisual'
+import { etaFromDistance, etaFromHold, SANDBOX_MAX_ETA_MS, SANDBOX_MIN_ETA_MS, spawnOutsideRing } from '../sandbox'
 import { createTugModel, tugPositionInward, tugPositionOutward } from '../tugOfWar'
 
 export type NodeState = 'lurker' | 'interested' | 'committed' | 'arrived'
@@ -73,9 +74,6 @@ interface BiologyRoomProps {
   includeSelfNode?: boolean
 }
 
-const HOLD_MS = 5_000
-const MIN_ETA_MS = 0
-const MAX_ETA_MS = 60 * 1000
 const WORLD_R = 280
 const MAX_NODES = 26
 const MIN_PEOPLE_MIN = 1
@@ -263,7 +261,7 @@ export function BiologyRoom({
           setNodeRadius(ps.node, targetR, angle)
           if (advanceTugWork(TUG.commitMaxR - rawR, nowPerf)) {
             ps.node.state = 'committed'
-            ps.node.arrivalAt = nowMs + etaFromDistance(ps.node.x, ps.node.y)
+            ps.node.arrivalAt = nowMs + etaFromDistance(ps.node.x, ps.node.y, WORLD_R)
             resetTug()
           }
         } else if (rawR > TUG.interestedMaxR) {
@@ -327,7 +325,7 @@ export function BiologyRoom({
     function addNode(wx: number, wy: number, simulated: boolean) {
       if (nodesRef.current.length >= MAX_NODES) return
       const angle = Math.hypot(wx, wy) < 0.001 ? -Math.PI / 2 : Math.atan2(wy, wx)
-      const target = spawnTarget(canvas!, angle, visRef.current.nodeRadius)
+      const target = spawnOutsideRing(canvas!, angle, WORLD_R, visRef.current.nodeRadius)
       nodesRef.current.push({ id: nextIdRef.current, x: wx, y: wy, vx: 0, vy: 0, state: 'lurker', arrivalAt: null, targetX: target.x, targetY: target.y, angle, vogelN: vogelCounterRef.current, simulated })
       nextIdRef.current += 1
       vogelCounterRef.current += 1
@@ -403,7 +401,7 @@ export function BiologyRoom({
         if (n.state === 'lurker' && n.targetX == null && Math.random() < c.interestRate * dt) n.state = 'interested'
         else if (n.state === 'interested' && Math.random() < c.commitRate * dt) {
           n.state = 'committed'
-          n.arrivalAt = now + Math.min(MAX_ETA_MS, Math.max(MIN_ETA_MS, -c.avgEtaSec * Math.log(Math.max(0.001, Math.random())) * 1000))
+          n.arrivalAt = now + Math.min(SANDBOX_MAX_ETA_MS, Math.max(SANDBOX_MIN_ETA_MS, -c.avgEtaSec * Math.log(Math.max(0.001, Math.random())) * 1000))
         }
       }
       for (const n of nodes) {
@@ -609,8 +607,8 @@ function computeGroupTargets(
   }
 
   for (const n of inFlight) {
-    const remaining = n.arrivalAt == null ? MAX_ETA_MS : Math.max(0, n.arrivalAt - now)
-    const r = (remaining / MAX_ETA_MS) * WORLD_R
+    const remaining = n.arrivalAt == null ? SANDBOX_MAX_ETA_MS : Math.max(0, n.arrivalAt - now)
+    const r = (remaining / SANDBOX_MAX_ETA_MS) * WORLD_R
     targets.set(n.id, { x: Math.cos(n.angle) * r, y: Math.sin(n.angle) * r })
   }
   return targets
@@ -637,7 +635,7 @@ function draw(
   const w = canvas.clientWidth
   const h = canvas.clientHeight
   ctx.clearRect(0, 0, w, h)
-  ctx.fillStyle = getCss('--bg')
+  ctx.fillStyle = getCssVar('--bg', '#111827')
   ctx.fillRect(0, 0, w, h)
   ctx.save()
   ctx.translate(w / 2 + camera.x, h / 2 + camera.y)
@@ -645,7 +643,7 @@ function draw(
 
   const ringAlpha = 0.06
   ctx.globalAlpha = ringAlpha
-  ctx.strokeStyle = getCss('--text')
+  ctx.strokeStyle = getCssVar('--text', '#111827')
   ctx.lineWidth = 1 / camera.scale
   for (let r = 80; r <= WORLD_R; r += 80) {
     ctx.beginPath()
@@ -722,7 +720,7 @@ function draw(
       if (!n.isSelf) continue
       lctx.beginPath()
       lctx.arc(n.x, n.y, Math.max(3, nr * 0.28), 0, Math.PI * 2)
-      lctx.fillStyle = getCss('--text')
+      lctx.fillStyle = getCssVar('--text', '#111827')
       lctx.fill()
     }
   }
@@ -741,37 +739,9 @@ function setNodeRadius(node: Node, r: number, angle: number) {
   node.angle = angle
 }
 
-function etaFromHold(holdMs: number) {
-  const t = Math.min(1, Math.max(0, holdMs / HOLD_MS))
-  return MIN_ETA_MS + (MAX_ETA_MS - MIN_ETA_MS) * (1 - t * t)
-}
-
 function nodeLabel(id: number) {
   const base = 'A'.charCodeAt(0)
   return String.fromCharCode(base + ((id - 1) % MAX_NODES))
-}
-
-function etaFromDistance(x: number, y: number) {
-  return (Math.min(WORLD_R, Math.max(0, Math.hypot(x, y))) / WORLD_R) * MAX_ETA_MS
-}
-
-function spawnTarget(canvas: HTMLCanvasElement, angle: number, nodeR: number) {
-  const margin = nodeR + 8
-  const halfW = Math.max(margin, canvas.clientWidth / 2 - margin)
-  const halfH = Math.max(margin, canvas.clientHeight / 2 - margin)
-  const c = Math.cos(angle)
-  const s = Math.sin(angle)
-  const maxR = Math.min(
-    Math.abs(c) < 0.0001 ? Infinity : halfW / Math.abs(c),
-    Math.abs(s) < 0.0001 ? Infinity : halfH / Math.abs(s),
-  )
-  const minR = WORLD_R + nodeR + 8
-  if (maxR <= minR) return { x: c * maxR, y: s * maxR }
-  const scale = 72
-  const maxExtra = maxR - minR
-  const u = Math.random()
-  const extra = -scale * Math.log(1 - u * (1 - Math.exp(-maxExtra / scale)))
-  return { x: c * (minR + extra), y: s * (minR + extra) }
 }
 
 function nodesToParticipants(nodes: Node[], now: number): BioParticipant[] {
@@ -785,6 +755,4 @@ function nodesToParticipants(nodes: Node[], now: number): BioParticipant[] {
   }))
 }
 
-function getCss(name: string) {
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#111827'
-}
+

@@ -4,13 +4,14 @@ import {
   compileAndEvaluate,
   evaluateExpression,
   highlightPolicy,
-  policyDocs,
   type Effect,
   type HighlightToken,
   type JsonValue,
   type PolicyValue,
 } from '../policy/engine'
-import { MarkdownBlock } from '../components/MarkdownBlock'
+import { buildHighlightedSegments } from '../policy/highlight'
+import { bool, dur, envFromVars, list, num, record, str, variant } from '../policy/values'
+import { PolicyHelp } from '../components/PolicyHelp'
 import { readString, writeString } from '../storage'
 import { useForceTheme } from '../useForceTheme'
 
@@ -50,7 +51,6 @@ export function MathPage() {
   })
   const [selfState, setSelfState] = useState<NodeState>('lurker')
   const [showHelp, setShowHelp] = useState(false)
-  const [helpText, setHelpText] = useState('Loading documentation…')
   const [terminalInput, setTerminalInput] = useState('')
   const [terminalEntries, setTerminalEntries] = useState<TerminalEntry[]>([])
   const [terminalHistory, setTerminalHistory] = useState<string[]>([])
@@ -160,16 +160,6 @@ export function MathPage() {
       clearEffectTimers()
     }
   }, [clearEffectTimers])
-
-  useEffect(() => {
-    let cancelled = false
-    void policyDocs().then((text) => {
-      if (!cancelled) setHelpText(text)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [])
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -419,16 +409,7 @@ export function MathPage() {
         </div>
       </section>
       </main>
-      {showHelp && (
-        <div className="math-help-backdrop" onClick={() => setShowHelp(false)}>
-          <section className="math-help-panel" onClick={(e) => e.stopPropagation()}>
-            <header className="math-help-head">
-              <h2>Policy Language</h2>
-            </header>
-            <MarkdownBlock className="math-help-markdown" source={helpText} />
-          </section>
-        </div>
-      )}
+      {showHelp && <PolicyHelp title="Policy Language" onClose={() => setShowHelp(false)} />}
     </>
   )
 }
@@ -492,7 +473,7 @@ function buildPolicyEnv(
     is_ready: bool(committed.length >= minPeople),
     ready_in: readyIn,
   }
-  return { vars } as unknown as JsonValue
+  return envFromVars(vars)
 }
 
 function person(p: BioParticipant): PolicyValue {
@@ -546,43 +527,4 @@ function scheduleEffect(
   }
 }
 
-function buildHighlightedSegments(source: string, tokens: HighlightToken[]) {
-  const out: Array<{ text: string; kind: string | null }> = []
-  let cursor = 0
-  for (const token of tokens) {
-    if (token.start > cursor) out.push({ text: source.slice(cursor, token.start), kind: null })
-    out.push({ text: source.slice(token.start, token.end), kind: token.kind })
-    cursor = token.end
-  }
-  if (cursor < source.length) out.push({ text: source.slice(cursor), kind: null })
-  if (out.length === 0) out.push({ text: source || ' ', kind: null })
-  return out
-}
 
-function num(v: number): PolicyValue {
-  return { kind: 'Num', value: v }
-}
-
-function bool(v: boolean): PolicyValue {
-  return { kind: 'Bool', value: v }
-}
-
-function str(v: string): PolicyValue {
-  return { kind: 'Str', value: v }
-}
-
-function dur(secs: number): PolicyValue {
-  return { kind: 'Dur', value: secs }
-}
-
-function list(values: PolicyValue[]): PolicyValue {
-  return { kind: 'List', value: values }
-}
-
-function variant(type: string, name: string, values: PolicyValue[]): PolicyValue {
-  return { kind: 'Variant', value: { type, name, values } }
-}
-
-function record(type: string, fields: Record<string, PolicyValue>): PolicyValue {
-  return { kind: 'Record', value: { type, fields } }
-}
