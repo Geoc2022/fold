@@ -340,64 +340,62 @@ export function ProposeForm({ initialCode, activity, categoryOptions, onCreated,
         </>
       )}
 
-      <div className="grouping-block">
-        <div className="grouping-toggle" role="group" aria-label="Grouping mode">
-          <button type="button" className={mode === 'single' ? 'active' : ''} onClick={() => setMode('single')}>
-            Single group
-          </button>
-          <button type="button" className={mode === 'tiling' ? 'active' : ''} onClick={() => setMode('tiling')}>
-            Parallel groups
-          </button>
-        </div>
-
-        <div className="people-row">
-          <label className="num-field">
-            Min
-            <input
-              type="number"
-              min={1}
-              value={minPeople}
-              onChange={(e) => {
-                const v = Math.max(1, Number(e.target.value) || 1)
-                setMinPeople(v)
-                if (maxPeople != null && maxPeople < v) setMaxPeople(v)
-              }}
-            />
-          </label>
-          <label className="num-field">
-            Max
-            <input
-              type="number"
-              min={1}
-              placeholder="∞"
-              value={maxPeople ?? ''}
-              onChange={(e) => {
-                const raw = e.target.value
-                if (raw.trim() === '') {
-                  setMaxPeople(null)
-                  return
-                }
-                const v = Math.max(1, Number(raw) || 1)
-                setMaxPeople(v)
-                if (v < minPeople) setMinPeople(v)
-              }}
-            />
-          </label>
-          {mode === 'tiling' && (
-            <label className="num-field">
-              Per group
-              <input
-                type="number"
-                min={1}
-                value={groupMultiple}
-                onChange={(e) => setGroupMultiple(Math.max(1, Number(e.target.value) || 1))}
-              />
-            </label>
-          )}
-        </div>
-
-        <GroupPreview mode={mode} min={minPeople} max={maxPeople} groupMultiple={mode === 'tiling' ? groupMultiple : 1} />
+      <div className="grouping-toggle" role="group" aria-label="Grouping mode">
+        <button type="button" className={mode === 'single' ? 'active' : ''} onClick={() => setMode('single')}>
+          Single group
+        </button>
+        <button type="button" className={mode === 'tiling' ? 'active' : ''} onClick={() => setMode('tiling')}>
+          Parallel groups
+        </button>
       </div>
+
+      <div className="people-row">
+        <label className="num-field">
+          Min
+          <input
+            type="number"
+            min={1}
+            value={minPeople}
+            onChange={(e) => {
+              const v = Math.max(1, Number(e.target.value) || 1)
+              setMinPeople(v)
+              if (maxPeople != null && maxPeople < v) setMaxPeople(v)
+            }}
+          />
+        </label>
+        <label className="num-field">
+          Max
+          <input
+            type="number"
+            min={1}
+            placeholder="∞"
+            value={maxPeople ?? ''}
+            onChange={(e) => {
+              const raw = e.target.value
+              if (raw.trim() === '') {
+                setMaxPeople(null)
+                return
+              }
+              const v = Math.max(1, Number(raw) || 1)
+              setMaxPeople(v)
+              if (v < minPeople) setMinPeople(v)
+            }}
+          />
+        </label>
+        {mode === 'tiling' && (
+          <label className="num-field">
+            Per group
+            <input
+              type="number"
+              min={1}
+              value={groupMultiple}
+              onChange={(e) => setGroupMultiple(Math.max(1, Number(e.target.value) || 1))}
+            />
+          </label>
+        )}
+      </div>
+
+      <GroupPreview mode={mode} min={minPeople} max={maxPeople} groupMultiple={mode === 'tiling' ? groupMultiple : 1} />
 
       {formMode === 'expanded' && !isEdit && (
         <input

@@ -709,7 +709,7 @@ label .opt {
 .create-run-form {
   display: flex;
   flex-direction: column;
-  gap: 0.7rem;
+  gap: 1rem;
   margin-bottom: 1rem;
 }
 .propose-form input,
