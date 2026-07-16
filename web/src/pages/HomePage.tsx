@@ -473,7 +473,7 @@ export function HomePage() {
       </main>
 
       {creating && (
-        <div className="modal-backdrop" onClick={() => setCreating(false)}>
+        <div className="modal-backdrop modal-backdrop-lower" onClick={() => setCreating(false)}>
           <div className="modal-card" onClick={(e) => e.stopPropagation()}>
             <ProposeForm
               initialCode={prefillCode}

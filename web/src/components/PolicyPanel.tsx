@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { MarkdownBlock } from '../components/MarkdownBlock'
 import { highlightPolicy, policyDocs, type HighlightToken } from '../policy/engine'
 import { buildHighlightedSegments } from '../policy/highlight'
 import { newPolicyRule, type PolicyRule } from '../policy/rules'
@@ -77,56 +78,96 @@ export function PolicyPanel({ rules, onRulesChange, onClose, notifyStatus, onReq
   }
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div className="modal-backdrop modal-backdrop-lower" onClick={onClose}>
       <div className="modal-card policy-panel-card" onClick={(e) => e.stopPropagation()}>
-        <section className="policy-home-panel">
-          <div className="bio-section-title">Notification policy</div>
+        <form
+          className="card propose-form policy-home-panel"
+          onSubmit={(e) => {
+            e.preventDefault()
+            save()
+          }}
+        >
+          <div className="propose-head">
+            <h2>Notification policy</h2>
+            <div className="propose-head-actions">
+              <button type="button" className="ghost danger" onClick={onClose}>
+                Cancel
+              </button>
+            </div>
+          </div>
+
           <p className="policy-demo-hint">
             Rules run against activities you've joined. {notifyStatus}
           </p>
 
-          <div className="policy-demo-row">
+          <div className="policy-actions-row">
             <button type="button" className="panel-button" onClick={onRequestNotifications}>
               Enable notifications
             </button>
+            <button
+              type="button"
+              className={`panel-button policy-emoji-button policy-icon-only ${dirty ? 'dirty' : ''}`}
+              onClick={save}
+              title="Save"
+              aria-label="Save"
+            >
+              <span className="noto-emoji" aria-hidden="true">💾</span>
+              {dirty && <span className="policy-dirty-star" aria-hidden="true">*</span>}
+            </button>
+            <button
+              type="button"
+              className="panel-button policy-emoji-button policy-icon-only"
+              onClick={onShare}
+              title="Share"
+              aria-label="Share"
+            >
+              <span className="noto-emoji" aria-hidden="true">🔗</span>
+            </button>
+            <button
+              type="button"
+              className="panel-button policy-emoji-button policy-icon-only"
+              onClick={() => setShowHelp(true)}
+              title="Help"
+              aria-label="Help"
+            >
+              <span className="noto-emoji" aria-hidden="true">❓</span>
+            </button>
           </div>
 
-          <div className="policy-rule-list">
+          <div className="policy-tabs" role="tablist" aria-label="Policy rules">
             {rules.map((rule) => (
-              <div key={rule.id} className={`policy-rule-item ${rule.id === selected?.id ? 'active' : ''}`}>
-                <button type="button" className="policy-rule-select" onClick={() => setSelectedId(rule.id)}>
-                  {shortId(rule.id)}
+              <div
+                key={rule.id}
+                className={`policy-tab ${rule.id === selected?.id ? 'active' : ''} ${rule.enabled ? '' : 'disabled'}`}
+              >
+                <button
+                  type="button"
+                  className="policy-tab-title"
+                  role="tab"
+                  aria-selected={rule.id === selected?.id}
+                  onClick={() => setSelectedId(rule.id)}
+                >
+                  Rule {rules.findIndex((r) => r.id === rule.id) + 1}
                 </button>
-                <label className="policy-rule-enabled">
-                  <input
-                    type="checkbox"
-                    checked={rule.enabled}
-                    onChange={(e) => patchRule(rule.id, { enabled: e.target.checked })}
-                  />
-                  on
-                </label>
-                <button type="button" className="panel-button" onClick={() => removeRule(rule.id)}>
-                  remove
+                <button
+                  type="button"
+                  className="policy-tab-remove"
+                  onClick={() => removeRule(rule.id)}
+                  title="Remove rule"
+                  aria-label="Remove rule"
+                >
+                  ×
                 </button>
               </div>
             ))}
-          </div>
-
-          <div className="policy-demo-row">
-            <button type="button" className="panel-button" onClick={addRule}>
-              add rule
-            </button>
-            <button type="button" className="panel-button" onClick={save} disabled={!dirty}>
-              {dirty ? 'save*' : 'save'}
-            </button>
-            <button type="button" className="panel-button" onClick={onShare}>
-              share
-            </button>
-            <button type="button" className="panel-button" onClick={() => setShowHelp(true)}>
-              help
-            </button>
-            <button type="button" className="panel-button" onClick={onClose}>
-              close
+            <button
+              type="button"
+              className="policy-tab-add"
+              onClick={addRule}
+              title="Add rule"
+              aria-label="Add rule"
+            >
+              +
             </button>
           </div>
 
@@ -143,6 +184,7 @@ export function PolicyPanel({ rules, onRulesChange, onClose, notifyStatus, onReq
               value={draft}
               rows={4}
               spellCheck={false}
+              disabled={!selected}
               onScroll={(e) => {
                 if (highlightRef.current) highlightRef.current.scrollTop = e.currentTarget.scrollTop
               }}
@@ -152,7 +194,20 @@ export function PolicyPanel({ rules, onRulesChange, onClose, notifyStatus, onReq
               }}
             />
           </div>
-        </section>
+
+          <label className="check-row policy-enabled-row">
+            <input
+              type="checkbox"
+              checked={selected?.enabled ?? false}
+              disabled={!selected}
+              onChange={(e) => {
+                if (!selected) return
+                patchRule(selected.id, { enabled: e.target.checked })
+              }}
+            />
+            <span>Enabled</span>
+          </label>
+        </form>
       </div>
       {showHelp && (
         <div
@@ -164,19 +219,14 @@ export function PolicyPanel({ rules, onRulesChange, onClose, notifyStatus, onReq
         >
           <section className="math-help-panel" onClick={(e) => e.stopPropagation()}>
             <header className="math-help-head">
-              <h2>Policy Language</h2>
               <button type="button" onClick={() => setShowHelp(false)} title="Close help" aria-label="Close help">
                 <span className="noto-emoji" aria-hidden="true">✖️</span>
               </button>
             </header>
-            <pre className="math-help-markdown">{helpText}</pre>
+            <MarkdownBlock className="math-help-markdown" source={helpText} />
           </section>
         </div>
       )}
     </div>
   )
-}
-
-function shortId(id: string) {
-  return id.slice(0, 4)
 }

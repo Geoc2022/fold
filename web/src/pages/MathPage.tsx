@@ -10,6 +10,7 @@ import {
   type JsonValue,
   type PolicyValue,
 } from '../policy/engine'
+import { MarkdownBlock } from '../components/MarkdownBlock'
 import { readString, writeString } from '../storage'
 import { useForceTheme } from '../useForceTheme'
 
@@ -427,7 +428,7 @@ export function MathPage() {
                 <span className="noto-emoji" aria-hidden="true">✖️</span>
               </button>
             </header>
-            <pre className="math-help-markdown">{helpText}</pre>
+            <MarkdownBlock className="math-help-markdown" source={helpText} />
           </section>
         </div>
       )}
