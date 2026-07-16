@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 import type { ActivityView } from '../types'
 import { ActivityBadge } from './ActivityBadge'
 import { ActivityInfo } from './ActivityInfo'
+import { myActivityPresenceState } from '../activityPresence'
 
 interface Props {
   activity: ActivityView
@@ -20,6 +21,7 @@ interface Props {
 export function ActivityTile({ activity: a, now, size, expanded, onToggle, cta }: Props) {
   const colSpan = expanded ? 4 : size
   const rowSpan = expanded ? 3 : size
+  const presenceState = myActivityPresenceState(a, now)
 
   return (
     <motion.article
@@ -31,7 +33,16 @@ export function ActivityTile({ activity: a, now, size, expanded, onToggle, cta }
       className={`tile size-${size} ${expanded ? 'expanded' : ''}`}
       style={{ gridColumn: `span ${colSpan}`, gridRow: `span ${rowSpan}` }}
     >
-      {!expanded && <ActivityBadge activity={a} variant="card" size={size} onClick={onToggle} ariaExpanded={expanded} />}
+      {!expanded && (
+        <ActivityBadge
+          activity={a}
+          variant="card"
+          size={size}
+          onClick={onToggle}
+          ariaExpanded={expanded}
+          presenceState={presenceState}
+        />
+      )}
       {expanded && (
         <div className="tile-expanded">
           <ActivityInfo activity={a} now={now} cta={cta} />

@@ -131,6 +131,10 @@ pub enum Expr {
         base: Box<Expr>,
         index: usize,
     },
+    Index {
+        base: Box<Expr>,
+        index: Box<Expr>,
+    },
     Lambda {
         param: String,
         body: Box<Expr>,

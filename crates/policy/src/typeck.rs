@@ -619,6 +619,14 @@ impl<'a> Infer<'a> {
                     }
                 }
             }
+            Expr::Index { base, index } => {
+                let bt = self.infer(base, env);
+                let it = self.infer(index, env);
+                self.unify_at(&it, &Ty::num(), "list index must be a Num");
+                let elem = self.fresh();
+                self.unify_at(&bt, &Ty::list(elem.clone()), "indexing requires a list");
+                elem
+            }
             Expr::Lambda { param, body } => {
                 let pty = self.fresh();
                 let mut inner = env.clone();

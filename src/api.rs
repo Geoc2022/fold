@@ -208,11 +208,19 @@ async fn build_activity_view(
         Some(rid) => db::get_run(db, rid).await?,
         None => None,
     };
-    let my_state = match (&run, my_person_id) {
-        (Some(r), Some(pid)) => db::participation_state(db, &r.id, pid).await?,
-        _ => None,
+    let (my_state, my_arrival_at) = match (&run, my_person_id) {
+        (Some(r), Some(pid)) => match db::participation_for_person(db, &r.id, pid).await? {
+            Some(part) => (Some(part.state), part.arrival_at),
+            None => (None, None),
+        },
+        _ => (None, None),
     };
-    Ok(Some(ActivityView::from_row(activity, run, my_state)))
+    Ok(Some(ActivityView::from_row(
+        activity,
+        run,
+        my_state,
+        my_arrival_at,
+    )))
 }
 
 // ---- session ---------------------------------------------------------------
@@ -1112,8 +1120,8 @@ pub async fn sync(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let (my_states, notifications) = match &me {
         Some(p) => {
             let parts = db::participations_for_person(&db, &p.id).await?;
-            let map: std::collections::HashMap<String, String> =
-                parts.into_iter().map(|x| (x.run_id, x.state)).collect();
+            let map: std::collections::HashMap<String, ParticipationLite> =
+                parts.into_iter().map(|x| (x.run_id.clone(), x)).collect();
             let notifs = db::unread_notifications(&db, &p.id, NOTIFICATION_LIMIT).await?;
             (map, notifs)
         }
@@ -1127,8 +1135,10 @@ pub async fn sync(req: Request, ctx: RouteContext<()>) -> Result<Response> {
                 .current_run_id
                 .as_ref()
                 .and_then(|rid| run_by_id.get(rid).cloned());
-            let my_state = run.as_ref().and_then(|r| my_states.get(&r.id).cloned());
-            ActivityView::from_row(row, run, my_state)
+            let my_part = run.as_ref().and_then(|r| my_states.get(&r.id));
+            let my_state = my_part.map(|p| p.state.clone());
+            let my_arrival_at = my_part.and_then(|p| p.arrival_at);
+            ActivityView::from_row(row, run, my_state, my_arrival_at)
         })
         .collect();
 

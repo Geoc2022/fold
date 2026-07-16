@@ -307,6 +307,7 @@ export function HomePage() {
                 <ActivityListItem
                   key={a.id}
                   activity={a}
+                  now={now}
                   canEdit={a.proposer_id === me.id}
                   onEdit={() => setEditingActivity(a)}
                 />

@@ -52,10 +52,14 @@ html[data-theme="dark"] {
   --muted: var(--gray-500);
   --accent: var(--blue-400);
   --accent-2: var(--blue-300);
+  --accent-up: var(--blue-100);
   --accent-solid: var(--blue-500);
   --ok: var(--green-400);
+  --ok-up: var(--green-300);
   --warn: var(--yellow-500);
+  --warn-up: var(--yellow-300);
   --danger: var(--red-400);
+  --danger-up: var(--red-300);
   --on-accent: var(--white);
   --shadow: rgba(0, 0, 0, 0.45);
 }
@@ -70,10 +74,14 @@ html[data-theme="light"] {
   --muted: var(--gray-700);
   --accent: var(--blue-500);
   --accent-2: var(--blue-700);
+  --accent-up: var(--blue-400);
   --accent-solid: var(--blue-700);
   --ok: var(--green-500);
+  --ok-up: var(--green-400);
   --warn: var(--yellow-500);
+  --warn-up: var(--yellow-300);
   --danger: var(--red-500);
+  --danger-up: var(--red-400);
   --on-accent: var(--white);
   --shadow: rgba(0, 40, 127, 0.18);
 }
@@ -86,12 +94,15 @@ body {
   transition: background 0.15s ease, color 0.15s ease;
 }
 
-/* Every activity icon renders as Noto Emoji: a single-color font, so
-   `color` tints the glyph directly (unlike system color-emoji fonts) and
-   nothing changes visually when an emoji goes from picker to tile. */
+/* Emoji glyph stack: prefer Noto Emoji (single-color, tintable via
+   `currentColor`), then fall back to Noto Color Emoji/system color emoji.
+   Fallbacks are forced grayscale so the visual language still reads as
+   monochrome in places like emoji-lab. */
 .noto-emoji {
-  font-family: "Noto Emoji", sans-serif;
+  font-family: "Noto Emoji", "NotoColorEmoji", "Noto Color Emoji", sans-serif;
   font-weight: 400;
+  display: inline-block;
+  filter: grayscale(1);
 }
 
 h1,
@@ -550,6 +561,7 @@ label .opt {
   gap: 0.6rem;
 }
 .list-item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 0.9rem;
@@ -783,12 +795,16 @@ label .opt {
   font-family: "Noto Emoji", sans-serif;
 }
 .emoji-nav {
+  --emoji-cell: 36px;
+  --emoji-gap: 0.3rem;
+  --emoji-cols: 5;
+  --emoji-rows-visible: 7;
   position: absolute;
   top: calc(100% + 0.35rem);
   left: 0;
   z-index: 20;
-  width: 260px;
-  max-height: 320px;
+  width: calc(var(--emoji-cols) * var(--emoji-cell) + (var(--emoji-cols) - 1) * var(--emoji-gap) + 1.2rem);
+  max-height: calc(var(--emoji-rows-visible) * var(--emoji-cell) + (var(--emoji-rows-visible) - 1) * var(--emoji-gap) + 1.2rem);
   padding: 0.6rem;
   background: var(--panel);
   border: 1px solid var(--border);
@@ -800,9 +816,9 @@ label .opt {
    identically tall regardless of a given glyph's own metrics. */
 .emoji-grid {
   display: grid;
-  grid-template-columns: repeat(6, 36px);
-  grid-auto-rows: 36px;
-  gap: 0.3rem;
+  grid-template-columns: repeat(var(--emoji-cols), var(--emoji-cell));
+  grid-auto-rows: var(--emoji-cell);
+  gap: var(--emoji-gap);
   justify-content: center;
 }
 .emoji-pick {
@@ -813,13 +829,16 @@ label .opt {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--panel-2);
+  border: none;
+  background: transparent;
+  border-radius: 8px;
 }
 .emoji-pick:hover:not(:disabled) {
-  background: var(--surface-3);
+  background: transparent;
 }
 .emoji-pick.active {
-  border-color: var(--accent);
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
 }
 
 /* ---- grouping controls ---- */
@@ -1257,39 +1276,39 @@ label .opt {
 .policy-highlight-layer .token-duration,
 .math-highlight-layer .token-number,
 .math-highlight-layer .token-duration {
-  color: var(--accent-2);
+  color: var(--accent-up);
 }
 .policy-highlight-layer .token-ident,
 .math-highlight-layer .token-ident {
-  color: var(--ok);
+  color: var(--accent-up);
 }
 .policy-highlight-layer .token-string,
 .math-highlight-layer .token-string {
-  color: color-mix(in srgb, var(--accent-2) 82%, var(--text));
+  color: var(--ok-up);
 }
 .policy-highlight-layer .token-type,
 .math-highlight-layer .token-type {
-  color: color-mix(in srgb, var(--accent) 78%, var(--text));
+  color: var(--warn-up);
   font-weight: 600;
 }
 .policy-highlight-layer .token-keyword,
 .policy-highlight-layer .token-bool,
 .math-highlight-layer .token-keyword,
 .math-highlight-layer .token-bool {
-  color: color-mix(in srgb, var(--warn) 70%, var(--text));
+  color: var(--warn);
   font-weight: 600;
 }
 .policy-highlight-layer .token-operator,
 .math-highlight-layer .token-operator {
-  color: color-mix(in srgb, var(--warn) 55%, var(--text));
+  color: var(--danger-up);
 }
 .policy-highlight-layer .token-punct,
 .math-highlight-layer .token-punct {
-  color: color-mix(in srgb, var(--text) 55%, transparent);
+  color: var(--muted);
 }
 .policy-highlight-layer .token-comment,
 .math-highlight-layer .token-comment {
-  color: color-mix(in srgb, var(--text) 45%, transparent);
+  color: var(--muted);
   font-style: italic;
 }
 .room-info-card {
@@ -1766,14 +1785,25 @@ label .opt {
   background: color-mix(in srgb, var(--panel) 70%, transparent);
 }
 .emoji-lab-results {
-  border: 1px solid var(--border);
+  --emoji-lab-cols: 5;
+  --emoji-lab-rows-visible: 7;
+  --emoji-lab-cell-w: 42px;
+  --emoji-lab-cell-h: 40px;
+  --emoji-lab-gap: 0.35rem;
+  border: 0.5px solid var(--border);
   border-radius: 12px;
-  padding: 0.5rem;
+  padding: 0.35rem;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(42px, 1fr));
-  gap: 0.35rem;
-  max-height: 56vh;
-  overflow: auto;
+  grid-template-columns: repeat(var(--emoji-lab-cols), var(--emoji-lab-cell-w));
+  grid-auto-rows: var(--emoji-lab-cell-h);
+  gap: var(--emoji-lab-gap);
+  width: calc(var(--emoji-lab-cols) * var(--emoji-lab-cell-w) + (var(--emoji-lab-cols) - 1) * var(--emoji-lab-gap) + 0.7rem);
+  max-width: 100%;
+  box-sizing: border-box;
+  max-height: calc(var(--emoji-lab-rows-visible) * var(--emoji-lab-cell-h) + (var(--emoji-lab-rows-visible) - 1) * var(--emoji-lab-gap) + 0.7rem);
+  justify-content: center;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 .emoji-lab-results:focus-visible {
   outline: 2px solid var(--accent);
@@ -1814,6 +1844,7 @@ label .opt {
   }
 }
 .activity-badge {
+  position: relative;
   width: 100%;
   border: none;
   border-radius: 16px;
@@ -1867,4 +1898,27 @@ label .opt {
 .activity-badge.size-3 .activity-badge-emoji {
   font-size: 9.5rem;
   margin-top: 0.6rem;
+}
+
+.activity-state-dot {
+  position: absolute;
+  top: 0.45rem;
+  right: 0.45rem;
+  width: 0.62rem;
+  height: 0.62rem;
+  border-radius: 999px;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08);
+}
+.activity-state-dot.state-lurker {
+  background: #969696;
+}
+.activity-state-dot.state-interested {
+  background: #00a651;
+}
+.activity-state-dot.state-committed {
+  background: #fa841e;
+}
+.activity-state-dot.state-arrived {
+  background: #f0282d;
 }

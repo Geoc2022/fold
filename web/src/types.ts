@@ -73,6 +73,8 @@ export interface ActivityView {
   current_run: RunView | null
   /** The requesting person's state in the current run: interested | committed | null. */
   my_state: MyState
+  /** If my_state is committed, this is my ETA timestamp (ms since epoch). */
+  my_arrival_at: number | null
 }
 
 export type NotificationKind =

@@ -457,6 +457,39 @@ mod smoke {
             eval_expr(&e, &env).expect("eval"),
             Value::Dur(240)
         ));
+
+        let e = parse_expr_str("head [5, 2, 8]").expect("parse");
+        assert!(matches!(
+            eval_expr(&e, &env).expect("eval"),
+            Value::Variant { ref name, ref values, .. } if name == "Some" && matches!(values.as_slice(), [Value::Num(n)] if *n == 5.0)
+        ));
+
+        let e = parse_expr_str("tail [5, 2, 8]").expect("parse");
+        assert!(matches!(
+            eval_expr(&e, &env).expect("eval"),
+            Value::List(v) if matches!(v.as_slice(), [Value::Num(a), Value::Num(b)] if *a == 2.0 && *b == 8.0)
+        ));
+
+        let e = parse_expr_str("take 3 [5, 2, 8, 1, 4]").expect("parse");
+        assert!(matches!(
+            eval_expr(&e, &env).expect("eval"),
+            Value::List(v) if matches!(v.as_slice(), [Value::Num(a), Value::Num(b), Value::Num(c)] if *a == 5.0 && *b == 2.0 && *c == 8.0)
+        ));
+
+        let e = parse_expr_str("drop 2 [5, 2, 8, 1, 4]").expect("parse");
+        assert!(matches!(
+            eval_expr(&e, &env).expect("eval"),
+            Value::List(v) if matches!(v.as_slice(), [Value::Num(a), Value::Num(b), Value::Num(c)] if *a == 8.0 && *b == 1.0 && *c == 4.0)
+        ));
+
+        let e = parse_expr_str("sort (fun a b -> a <= b) [5, 2, 8, 1, 4]").expect("parse");
+        assert!(matches!(
+            eval_expr(&e, &env).expect("eval"),
+            Value::List(v) if matches!(v.as_slice(), [Value::Num(a), Value::Num(b), Value::Num(c), Value::Num(d), Value::Num(e)] if *a == 1.0 && *b == 2.0 && *c == 4.0 && *d == 5.0 && *e == 8.0)
+        ));
+
+        let e = parse_expr_str("[5, 2, 8, 1, 4][0]").expect("parse");
+        assert!(matches!(eval_expr(&e, &env).expect("eval"), Value::Num(n) if n == 5.0));
     }
 
     #[test]

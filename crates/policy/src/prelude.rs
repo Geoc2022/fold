@@ -25,10 +25,50 @@ map f xs = match xs with
   | [] -> []
   | x :: rest -> f x :: map f rest
 
+(** First element of a list, if present. *)
+head xs = match xs with
+  | [] -> None
+  | x :: _ -> Some(x)
+
+(** All but the first element of a list (or [] for empty). *)
+tail xs = match xs with
+  | [] -> []
+  | _ :: rest -> rest
+
+(** First n elements of a list. *)
+take n xs = if n <= 0 then [] else match xs with
+  | [] -> []
+  | x :: rest -> x :: take (n - 1) rest
+
+(** List without its first n elements. *)
+drop n xs = if n <= 0 then xs else match xs with
+  | [] -> []
+  | _ :: rest -> drop (n - 1) rest
+
+(** Left-associative fold over a list. *)
+foldl f acc xs = match xs with
+  | [] -> acc
+  | x :: rest -> foldl f (f acc x) rest
+
+(** Right-associative fold over a list. *)
+foldr f acc xs = match xs with
+  | [] -> acc
+  | x :: rest -> f x (foldr f acc rest)
+
 (** Keep only the elements for which the test is true. *)
 filter test xs = match xs with
   | [] -> []
   | x :: rest -> if test x then x :: filter test rest else filter test rest
+
+(** Insert one value into an already-sorted list using a comparator. *)
+insert_sorted compare x xs = match xs with
+  | [] -> [x]
+  | y :: rest -> if compare x y then x :: xs else y :: insert_sorted compare x rest
+
+(** Sort a list using a comparator (like OCaml's sort compare xs). *)
+sort compare xs = match xs with
+  | [] -> []
+  | x :: rest -> insert_sorted compare x (sort compare rest)
 
 (** True if the test holds for any element. *)
 any test xs = match xs with

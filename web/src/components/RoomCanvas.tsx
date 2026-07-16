@@ -90,7 +90,7 @@ const TUG = createTugModel(WORLD_R)
 //   lurker (and any node the server has removed, mid-exit-animation):
 //                        just outside interestedMaxR
 const INTERESTED_R = (TUG.commitMaxR + TUG.interestedMaxR) / 2
-const LURKER_R = TUG.interestedMaxR + 80
+const LURKER_R = TUG.interestedMaxR + 12
 /** How long the fade+outward-travel plays before a removed node is actually
  * dropped from the sim -- see the reconciliation effect and frame loop. */
 const EXIT_MS = 900

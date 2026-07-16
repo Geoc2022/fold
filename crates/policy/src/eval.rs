@@ -322,6 +322,20 @@ impl Evaluator {
                     _ => Err(EvalError(format!("cannot take .{index}"))),
                 }
             }
+            Expr::Index { base, index } => {
+                let b = self.eval(base, env)?;
+                let i = self.eval(index, env)?;
+                let idx = as_num(&i)?;
+                if idx.fract() != 0.0 || idx < 0.0 {
+                    return Err(EvalError("list index must be a non-negative integer".to_string()));
+                }
+                let idx = idx as usize;
+                match b {
+                    Value::List(items) if idx < items.len() => Ok(items[idx].clone()),
+                    Value::List(_) => Err(EvalError(format!("list index out of bounds: {idx}"))),
+                    _ => Err(EvalError("indexing requires a list".to_string())),
+                }
+            }
             Expr::Lambda { param, body } => Ok(Value::Closure(Rc::new(Closure {
                 param: param.clone(),
                 body: (**body).clone(),

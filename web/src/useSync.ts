@@ -17,7 +17,7 @@ function signature(s: SyncResponse): string {
   const acts = s.activities
     .map((a) => {
       const r = a.current_run
-      return `${a.id}:${a.updated_at}:${r?.id ?? ''}:${r?.status ?? ''}:${r?.interested_count ?? 0}:${r?.committed_count ?? 0}:${a.my_state ?? ''}`
+      return `${a.id}:${a.updated_at}:${r?.id ?? ''}:${r?.status ?? ''}:${r?.interested_count ?? 0}:${r?.committed_count ?? 0}:${a.my_state ?? ''}:${a.my_arrival_at ?? ''}`
     })
     .join('|')
   const notifs = s.notifications.map((n) => n.id).join(',')

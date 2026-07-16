@@ -14,8 +14,8 @@ pub fn language_docs() -> String {
     let mut out = String::new();
 
     out.push_str("# Policy language\n\n");
-    out.push_str("A small, strongly-typed language for writing room policies.");
-    out.push_str("It's similar to ocaml with friendlier syntax");
+    out.push_str("A small, strongly-typed language for writing room policies.\n");
+    out.push_str("It's similar to ocaml with friendlier syntax\n\n");
 
     out.push_str("## Syntax Examples\n\n```\n");
     out.push_str(
@@ -38,6 +38,7 @@ count > min_people => notify \"ready! ({count})\"\n",
         ("`and or not xor`", "boolean logic"),
         ("`::`", "prepend to a list"),
         ("`#xs`", "length of a list"),
+        ("`xs[i]`", "list indexing (0-based)"),
         ("`.field` / `.0`", "record field / tuple element"),
     ] {
         out.push_str(&format!("| {op} | {meaning} |\n"));
@@ -89,7 +90,7 @@ Plus `List<T>`, tuples `(A, B)`, functions `A -> B`, and `Action`.\n\n",
     out.push_str("## Comments\n\n");
     out.push_str(
         "`(* ... *)` is a comment (they can nest). `(** ... *)` documents the \
-next definition.\n",
+next definition.\n\n",
     );
 
     out.push_str("## Traits\n\n");

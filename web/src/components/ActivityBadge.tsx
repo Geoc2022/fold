@@ -1,6 +1,7 @@
 import { memo } from 'react'
 import type { ActivityView } from '../types'
 import { tileAccentColor } from '../tileAccent'
+import type { VisualNodeState } from '../nodeVisual'
 
 type Variant = 'card' | 'square'
 type Size = 1 | 2 | 3
@@ -11,9 +12,10 @@ interface Props {
   onClick?: () => void
   ariaExpanded?: boolean
   size?: Size
+  presenceState?: VisualNodeState | null
 }
 
-export const ActivityBadge = memo(function ActivityBadge({ activity, variant = 'card', onClick, ariaExpanded, size = 1 }: Props) {
+export const ActivityBadge = memo(function ActivityBadge({ activity, variant = 'card', onClick, ariaExpanded, size = 1, presenceState = null }: Props) {
   const accent = tileAccentColor(activity.title)
   const variantClass = variant === 'square' ? 'square' : 'card'
   const className = `activity-badge ${variantClass} size-${size}`
@@ -26,6 +28,7 @@ export const ActivityBadge = memo(function ActivityBadge({ activity, variant = '
       onClick={onClick}
       aria-expanded={ariaExpanded}
     >
+      {presenceState && <span className={`activity-state-dot state-${presenceState}`} aria-hidden="true" />}
       <span className="activity-badge-title">{activity.title}</span>
       <span className="activity-badge-emoji noto-emoji" aria-hidden="true">
         {activity.emoji}

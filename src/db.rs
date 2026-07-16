@@ -398,7 +398,7 @@ pub async fn participations_for_person(
     db: &D1Database,
     person_id: &str,
 ) -> Result<Vec<ParticipationLite>> {
-    db.prepare("SELECT run_id, state FROM participations WHERE person_id = ?")
+    db.prepare("SELECT run_id, state, arrival_at FROM participations WHERE person_id = ?")
         .bind(&[s(person_id)])?
         .all()
         .await?
@@ -411,11 +411,22 @@ pub async fn participation_state(
     person_id: &str,
 ) -> Result<Option<String>> {
     let row = db
-        .prepare("SELECT run_id, state FROM participations WHERE run_id = ? AND person_id = ?")
+        .prepare("SELECT run_id, state, arrival_at FROM participations WHERE run_id = ? AND person_id = ?")
         .bind(&[s(run_id), s(person_id)])?
         .first::<ParticipationLite>(None)
         .await?;
     Ok(row.map(|r| r.state))
+}
+
+pub async fn participation_for_person(
+    db: &D1Database,
+    run_id: &str,
+    person_id: &str,
+) -> Result<Option<ParticipationLite>> {
+    db.prepare("SELECT run_id, state, arrival_at FROM participations WHERE run_id = ? AND person_id = ?")
+        .bind(&[s(run_id), s(person_id)])?
+        .first::<ParticipationLite>(None)
+        .await
 }
 
 /// The other run (and its activity) a person is currently committed to, if

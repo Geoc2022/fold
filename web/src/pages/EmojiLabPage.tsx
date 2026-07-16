@@ -36,7 +36,7 @@ export function EmojiLabPage() {
           <h1>Emoji Lab</h1>
           <Link to="/" className="ghost sm">Back</Link>
         </header>
-        <p className="emoji-lab-sub">Simple Noto Emoji search for quick picker experiments.</p>
+        <p className="emoji-lab-sub">Simple Noto Emoji search for experiments.</p>
         <input
           className="emoji-lab-input"
           placeholder="Search: smile, sports, animal, food..."

@@ -709,30 +709,85 @@ impl Parser {
 
     fn parse_postfix(&mut self) -> Expr {
         let mut base = self.parse_atom();
-        while matches!(self.kind(), TokenKind::Dot) {
-            self.bump();
+        loop {
             match self.kind().clone() {
-                TokenKind::Ident(field) => {
+                TokenKind::Dot => {
                     self.bump();
-                    base = Expr::Field {
+                    match self.kind().clone() {
+                        TokenKind::Ident(field) => {
+                            self.bump();
+                            base = Expr::Field {
+                                base: Box::new(base),
+                                field,
+                            };
+                        }
+                        TokenKind::Number(n) if n.fract() == 0.0 && n >= 0.0 => {
+                            self.bump();
+                            base = Expr::TupleIndex {
+                                base: Box::new(base),
+                                index: n as usize,
+                            };
+                        }
+                        _ => {
+                            self.error("expected a field name or tuple index after '.'");
+                            break;
+                        }
+                    }
+                }
+                TokenKind::LBracket => {
+                    // Disambiguate postfix indexing (`list[0]`) from applying
+                    // a function to a list literal (`f [1, 2]`). We only treat
+                    // `[...]` as an index when the bracket contents have no
+                    // top-level comma; otherwise leave it for parse_app's
+                    // argument parsing.
+                    if !self.bracket_looks_like_index() {
+                        break;
+                    }
+                    self.bump();
+                    self.skip_newlines();
+                    let index = self.parse_expr();
+                    self.skip_newlines();
+                    self.expect(&TokenKind::RBracket, "']' after list index");
+                    base = Expr::Index {
                         base: Box::new(base),
-                        field,
+                        index: Box::new(index),
                     };
                 }
-                TokenKind::Number(n) if n.fract() == 0.0 && n >= 0.0 => {
-                    self.bump();
-                    base = Expr::TupleIndex {
-                        base: Box::new(base),
-                        index: n as usize,
-                    };
-                }
-                _ => {
-                    self.error("expected a field name or tuple index after '.'");
-                    break;
-                }
+                _ => break,
             }
         }
         base
+    }
+
+    fn bracket_looks_like_index(&self) -> bool {
+        if !matches!(self.kind(), TokenKind::LBracket) {
+            return false;
+        }
+        let mut i = self.at + 1;
+        let mut paren = 0i32;
+        let mut brace = 0i32;
+        let mut bracket = 1i32;
+        while i < self.tokens.len() {
+            match self.tokens[i].kind {
+                TokenKind::LParen => paren += 1,
+                TokenKind::RParen => paren -= 1,
+                TokenKind::LBrace => brace += 1,
+                TokenKind::RBrace => brace -= 1,
+                TokenKind::LBracket => bracket += 1,
+                TokenKind::RBracket => {
+                    bracket -= 1;
+                    if bracket == 0 {
+                        return true;
+                    }
+                }
+                TokenKind::Comma if paren == 0 && brace == 0 && bracket == 1 => {
+                    return false;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        false
     }
 
     fn parse_atom(&mut self) -> Expr {

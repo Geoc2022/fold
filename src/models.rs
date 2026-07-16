@@ -86,6 +86,7 @@ pub struct NotificationRow {
 pub struct ParticipationLite {
     pub run_id: String,
     pub state: String,
+    pub arrival_at: Option<i64>,
 }
 
 // ---- Request inputs --------------------------------------------------------
@@ -262,6 +263,8 @@ pub struct ActivityView {
     pub current_run: Option<RunView>,
     /// The requesting person's state in the current run: interested | committed | null.
     pub my_state: Option<String>,
+    /// If `my_state` is committed, this is that commitment's ETA timestamp.
+    pub my_arrival_at: Option<i64>,
 }
 
 impl ActivityView {
@@ -269,6 +272,7 @@ impl ActivityView {
         row: ActivityRow,
         current_run: Option<RunRow>,
         my_state: Option<String>,
+        my_arrival_at: Option<i64>,
     ) -> ActivityView {
         let commit_pct = {
             let total = row.interest_total + row.commit_total;
@@ -306,6 +310,7 @@ impl ActivityView {
             updated_at: row.updated_at,
             current_run: current_run_view,
             my_state,
+            my_arrival_at,
         }
     }
 }

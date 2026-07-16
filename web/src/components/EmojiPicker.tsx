@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import { loadAllEmoji } from '../emojiSearch'
+import { loadEmojiKeywords, searchEmoji } from '../emojiSearch'
 import { EmojiGlyph } from './EmojiGlyph'
 
 interface Props {
   value: string
   onChange: (value: string) => void
+  searchText?: string
 }
 
 /** Exactly one grapheme cluster -- a user's idea of "one character", even
@@ -21,14 +22,19 @@ function firstGrapheme(s: string): string {
 
 /** A small editable box (type or paste one emoji directly) that also pops
  * up a simple scrollable grid of every Noto Emoji to pick from. */
-export function EmojiPicker({ value, onChange }: Props) {
+export function EmojiPicker({ value, onChange, searchText = '' }: Props) {
   const [open, setOpen] = useState(false)
-  const [allEmoji, setAllEmoji] = useState<string[]>([])
+  const [entries, setEntries] = useState<Array<{ emoji: string; keywords: string[] }>>([])
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    loadAllEmoji().then(setAllEmoji)
+    loadEmojiKeywords().then((data) => {
+      const all = Object.entries(data).map(([emoji, keywords]) => ({ emoji, keywords }))
+      setEntries(all)
+    })
   }, [])
+
+  const results = searchEmoji(searchText, entries, 160)
 
   useEffect(() => {
     function onDocPointerDown(e: PointerEvent) {
@@ -51,7 +57,7 @@ export function EmojiPicker({ value, onChange }: Props) {
       {open && (
         <div className="emoji-nav">
           <div className="emoji-grid">
-            {allEmoji.map((em) => (
+            {results.map((em) => (
               <button
                 type="button"
                 key={em}

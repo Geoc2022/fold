@@ -31,6 +31,7 @@ count > min_people => notify "ready! ({count})"
 | `and or not xor` | boolean logic |
 | `::` | prepend to a list |
 | `#xs` | length of a list |
+| `xs[i]` | list indexing (0-based) |
 | `.field` / `.0` | record field / tuple element |
 
 ## Built-in types
@@ -104,7 +105,14 @@ Ready-made functions (written in the language itself):
 - `sum : List<Num> -> Num` — Sum of a list of numbers.
 - `avg : List<Num> -> Num` — Average of a list of numbers.
 - `map : (a -> b) -> List<a> -> List<b>` — Apply a function to every element of a list.
+- `head : List<a> -> Option<a>` — First element of a list, if present.
+- `tail : List<a> -> List<a>` — All but the first element of a list (or [] for empty).
+- `take : Num -> List<a> -> List<a>` — First n elements of a list.
+- `drop : Num -> List<a> -> List<a>` — List without its first n elements.
+- `foldl : (a -> b -> a) -> a -> List<b> -> a` — Left-associative fold over a list.
+- `foldr : (a -> b -> b) -> b -> List<a> -> b` — Right-associative fold over a list.
 - `filter : (a -> Bool) -> List<a> -> List<a>` — Keep only the elements for which the test is true.
+- `sort : (a -> a -> Bool) -> List<a> -> List<a>` — Sort a list using a comparator (`sort compare xs`).
 - `any : (a -> Bool) -> List<a> -> Bool` — True if the test holds for any element.
 - `all : (a -> Bool) -> List<a> -> Bool` — True if the test holds for every element.
 - `is_some : Option<a> -> Bool` — True if the option holds a value.

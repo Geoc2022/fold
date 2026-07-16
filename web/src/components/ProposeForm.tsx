@@ -259,7 +259,7 @@ export function ProposeForm({ initialCode, activity, categoryOptions, onCreated,
       </div>
 
       <div className="title-row">
-        <EmojiPicker value={emoji} onChange={setEmoji} />
+        <EmojiPicker value={emoji} onChange={setEmoji} searchText={title} />
         <input
           autoFocus
           maxLength={14}
