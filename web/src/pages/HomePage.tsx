@@ -1,6 +1,6 @@
 import { AnimatePresence } from 'framer-motion'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { api, clearPersonId, ensureSession } from '../api'
 import { useTheme } from '../theme'
 import { popularityOrder, tileSizes } from '../tileLayout'
@@ -104,6 +104,7 @@ export function HomePage() {
   }
 
   const [creating, setCreating] = useState(false)
+  const [editingActivity, setEditingActivity] = useState<ActivityView | null>(null)
   const [prefillCode, setPrefillCode] = useState<string | null>(null)
 
   // Arriving at /?code=TEST (redirected from a nonexistent /TEST room) opens
@@ -280,6 +281,20 @@ export function HomePage() {
                   size={sizes.get(a.id) ?? 1}
                   expanded={expandedId === a.id}
                   onToggle={() => setExpandedId((cur) => (cur === a.id ? null : a.id))}
+                  cta={
+                    a.proposer_id === me.id
+                      ? (
+                        <div className="activity-actions">
+                          <Link className="activity-launch primary" to={`/${a.code}`}>
+                            Join activity
+                          </Link>
+                          <button className="activity-launch ghost" type="button" onClick={() => setEditingActivity(a)}>
+                            Edit
+                          </button>
+                        </div>
+                        )
+                      : undefined
+                  }
                 />
               ))}
             </AnimatePresence>
@@ -289,7 +304,12 @@ export function HomePage() {
             <CreateTile view={view} onClick={() => setCreating(true)} />
             <AnimatePresence mode="popLayout">
               {listOrder.map((a) => (
-                <ActivityListItem key={a.id} activity={a} />
+                <ActivityListItem
+                  key={a.id}
+                  activity={a}
+                  canEdit={a.proposer_id === me.id}
+                  onEdit={() => setEditingActivity(a)}
+                />
               ))}
             </AnimatePresence>
           </div>
@@ -315,6 +335,27 @@ export function HomePage() {
                 setCreating(false)
                 setPrefillCode(null)
               }}
+            />
+          </div>
+        </div>
+      )}
+
+      {editingActivity && (
+        <div className="modal-backdrop" onClick={() => setEditingActivity(null)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <ProposeForm
+              activity={editingActivity}
+              categoryOptions={categoryOptions}
+              onCreated={() => {
+                setEditingActivity(null)
+                refresh()
+              }}
+              onDeleted={() => {
+                setExpandedId((prev) => (prev === editingActivity.id ? null : prev))
+                setEditingActivity(null)
+                refresh()
+              }}
+              onClose={() => setEditingActivity(null)}
             />
           </div>
         </div>

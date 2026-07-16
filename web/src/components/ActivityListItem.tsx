@@ -6,10 +6,12 @@ import { ActivityStats } from './ActivityStats'
 
 interface Props {
   activity: ActivityView
+  canEdit?: boolean
+  onEdit?: () => void
 }
 
 /** List-view row: SE's lv-item, with our stats swapped in for theirs. */
-export function ActivityListItem({ activity: a }: Props) {
+export function ActivityListItem({ activity: a, canEdit = false, onEdit }: Props) {
   return (
     <motion.div
       layout
@@ -27,9 +29,16 @@ export function ActivityListItem({ activity: a }: Props) {
       <div className="list-stats">
         <ActivityStats activity={a} variant="pill" />
       </div>
-      <Link className="list-launch primary sm" to={`/${a.code}`}>
-        Join
-      </Link>
+      <div className="list-actions">
+        <Link className="list-launch primary sm" to={`/${a.code}`}>
+          Join
+        </Link>
+        {canEdit && (
+          <button type="button" className="list-launch ghost sm" onClick={onEdit}>
+            Edit
+          </button>
+        )}
+      </div>
     </motion.div>
   )
 }

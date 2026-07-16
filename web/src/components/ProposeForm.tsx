@@ -16,8 +16,11 @@ interface CategoryOption {
 interface Props {
   /** Prefills the code field, e.g. when arriving at a nonexistent /CODE. */
   initialCode?: string | null
+  /** When set, the form edits an existing activity instead of creating one. */
+  activity?: ActivityView | null
   categoryOptions: CategoryOption[]
   onCreated: (activity: ActivityView) => void
+  onDeleted?: (activityId: string) => void
   onClose: () => void
 }
 
@@ -73,26 +76,27 @@ function deriveCodeCandidates(title: string): string[] {
   return candidates
 }
 
-export function ProposeForm({ initialCode, categoryOptions, onCreated, onClose }: Props) {
+export function ProposeForm({ initialCode, activity, categoryOptions, onCreated, onDeleted, onClose }: Props) {
   const navigate = useNavigate()
   const [last] = useState(loadLastProposal)
+  const isEdit = activity != null
 
-  const [formMode, setFormMode] = useState<FormMode>('simple')
-  const [emoji, setEmoji] = useState(last.emoji ?? '🎲')
-  const [title, setTitle] = useState('')
-  const [description, setDescription] = useState('')
+  const [formMode, setFormMode] = useState<FormMode>(isEdit ? 'expanded' : 'simple')
+  const [emoji, setEmoji] = useState(activity?.emoji ?? last.emoji ?? '🎲')
+  const [title, setTitle] = useState(activity?.title ?? '')
+  const [description, setDescription] = useState(activity?.description ?? '')
   const [location, setLocation] = useState(last.location ?? '')
-  const [mode, setMode] = useState<GroupingMode>(last.grouping_mode ?? 'single')
-  const [minPeople, setMinPeople] = useState(last.min_people ?? 2)
-  const [maxPeople, setMaxPeople] = useState<number | null>(last.max_people ?? null)
-  const [groupMultiple, setGroupMultiple] = useState(last.group_multiple ?? 2)
-  const [allowGuests, setAllowGuests] = useState(last.allow_guests ?? true)
-  const [privateByLink, setPrivateByLink] = useState(last.private_by_link ?? false)
-  const [category, setCategory] = useState(last.category ?? categoryOptions[0]?.value ?? 'board game')
-  const [durationMinutes, setDurationMinutes] = useState(last.duration_minutes ?? 30)
-  const [maxCommitMinutes, setMaxCommitMinutes] = useState(last.max_commit_minutes ?? 30)
-  const [durationInput, setDurationInput] = useState(() => minutesToHuman(last.duration_minutes ?? 30))
-  const [maxCommitInput, setMaxCommitInput] = useState(() => minutesToHuman(last.max_commit_minutes ?? 30))
+  const [mode, setMode] = useState<GroupingMode>(activity?.grouping_mode ?? last.grouping_mode ?? 'single')
+  const [minPeople, setMinPeople] = useState(activity?.min_people ?? last.min_people ?? 2)
+  const [maxPeople, setMaxPeople] = useState<number | null>(activity?.max_people ?? last.max_people ?? null)
+  const [groupMultiple, setGroupMultiple] = useState(activity?.group_multiple ?? last.group_multiple ?? 2)
+  const [allowGuests, setAllowGuests] = useState(activity?.allow_guests ?? last.allow_guests ?? true)
+  const [privateByLink, setPrivateByLink] = useState(activity?.private_by_link ?? last.private_by_link ?? false)
+  const [category, setCategory] = useState(activity?.category ?? last.category ?? categoryOptions[0]?.value ?? 'board game')
+  const [durationMinutes, setDurationMinutes] = useState(activity?.duration_minutes ?? last.duration_minutes ?? 30)
+  const [maxCommitMinutes, setMaxCommitMinutes] = useState(activity?.max_commit_minutes ?? last.max_commit_minutes ?? 30)
+  const [durationInput, setDurationInput] = useState(() => minutesToHuman(activity?.duration_minutes ?? last.duration_minutes ?? 30))
+  const [maxCommitInput, setMaxCommitInput] = useState(() => minutesToHuman(activity?.max_commit_minutes ?? last.max_commit_minutes ?? 30))
   const [code, setCode] = useState(initialCode ?? '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -103,6 +107,25 @@ export function ProposeForm({ initialCode, categoryOptions, onCreated, onClose }
       setFormMode('expanded')
     }
   }, [initialCode])
+
+  useEffect(() => {
+    if (!activity) return
+    setFormMode('expanded')
+    setEmoji(activity.emoji)
+    setTitle(activity.title)
+    setDescription(activity.description ?? '')
+    setMode(activity.grouping_mode)
+    setMinPeople(activity.min_people)
+    setMaxPeople(activity.max_people)
+    setGroupMultiple(activity.group_multiple)
+    setAllowGuests(activity.allow_guests)
+    setPrivateByLink(activity.private_by_link)
+    setCategory(activity.category)
+    setDurationMinutes(activity.duration_minutes)
+    setMaxCommitMinutes(activity.max_commit_minutes)
+    setDurationInput(minutesToHuman(activity.duration_minutes))
+    setMaxCommitInput(minutesToHuman(activity.max_commit_minutes))
+  }, [activity])
 
   // Esc closes the form, same as clicking Cancel.
   useEffect(() => {
@@ -159,15 +182,30 @@ export function ProposeForm({ initialCode, categoryOptions, onCreated, onClose }
     }
 
     try {
-      let activity: ActivityView
+      let saved: ActivityView
       const explicitCode = code.trim()
-      if (explicitCode) {
-        activity = await api.createActivity({ ...basePayload, code: explicitCode })
+      if (isEdit && activity) {
+        saved = await api.updateActivity(activity.id, {
+          emoji: emoji.trim() || null,
+          title: t,
+          description: description.trim() || null,
+          min_people: minPeople,
+          max_people: maxPeople,
+          group_multiple: mode === 'tiling' ? groupMultiple : 1,
+          grouping_mode: mode,
+          allow_guests: allowGuests,
+          private_by_link: privateByLink,
+          category,
+          duration_minutes: durationMinutes,
+          max_commit_minutes: maxCommitMinutes,
+        })
+      } else if (explicitCode) {
+        saved = await api.createActivity({ ...basePayload, code: explicitCode })
       } else {
-        activity = await createWithDerivedCode(basePayload, t)
+        saved = await createWithDerivedCode(basePayload, t)
       }
       saveLastProposal({
-        emoji: activity.emoji,
+        emoji: saved.emoji,
         min_people: minPeople,
         max_people: maxPeople,
         group_multiple: groupMultiple,
@@ -179,8 +217,8 @@ export function ProposeForm({ initialCode, categoryOptions, onCreated, onClose }
         max_commit_minutes: maxCommitMinutes,
         category,
       })
-      onCreated(activity)
-      navigate(`/${activity.code}`)
+      onCreated(saved)
+      if (!isEdit) navigate(`/${saved.code}`)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -188,10 +226,23 @@ export function ProposeForm({ initialCode, categoryOptions, onCreated, onClose }
     }
   }
 
+  async function handleDelete() {
+    if (!activity) return
+    setBusy(true)
+    setError(null)
+    try {
+      await api.deleteActivity(activity.id)
+      onDeleted?.(activity.id)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+      setBusy(false)
+    }
+  }
+
   return (
     <form className="card propose-form" onSubmit={submit}>
       <div className="propose-head">
-        <h2>Add an Activity</h2>
+        <h2>{isEdit ? 'Edit an Activity' : 'Add an Activity'}</h2>
         <div className="propose-head-actions">
           <button
             type="button"
@@ -229,13 +280,15 @@ export function ProposeForm({ initialCode, categoryOptions, onCreated, onClose }
             onChange={(e) => setDescription(e.target.value)}
           />
 
-          <input
-            aria-label="Location"
-            maxLength={120}
-            placeholder="Location (optional)"
-            value={location}
-            onChange={(e) => setLocation(e.target.value)}
-          />
+          {!isEdit && (
+            <input
+              aria-label="Location"
+              maxLength={120}
+              placeholder="Location (optional)"
+              value={location}
+              onChange={(e) => setLocation(e.target.value)}
+            />
+          )}
           <div className="check-row-group">
             <label className="check-row">
               <input type="checkbox" checked={allowGuests} onChange={(e) => setAllowGuests(e.target.checked)} />
@@ -346,7 +399,7 @@ export function ProposeForm({ initialCode, categoryOptions, onCreated, onClose }
         <GroupPreview mode={mode} min={minPeople} max={maxPeople} groupMultiple={mode === 'tiling' ? groupMultiple : 1} />
       </div>
 
-      {formMode === 'expanded' && (
+      {formMode === 'expanded' && !isEdit && (
         <input
           aria-label="Code"
           maxLength={4}
@@ -357,9 +410,16 @@ export function ProposeForm({ initialCode, categoryOptions, onCreated, onClose }
       )}
 
       {error && <p className="err">{error}</p>}
-      <button type="submit" disabled={busy || !title.trim() || !feasible}>
-        {busy ? 'Posting…' : 'Post activity'}
-      </button>
+      <div className="row">
+        {isEdit && (
+          <button type="button" className="danger" onClick={handleDelete} disabled={busy}>
+            Delete activity
+          </button>
+        )}
+        <button type="submit" disabled={busy || !title.trim() || !feasible}>
+          {busy ? (isEdit ? 'Saving…' : 'Posting…') : (isEdit ? 'Edit Activity' : 'Post activity')}
+        </button>
+      </div>
     </form>
   )
 }

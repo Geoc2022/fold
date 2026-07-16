@@ -37,6 +37,8 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         // Activities (persistent tiles/templates).
         .post_async("/api/activities", api::activity_create)
         .get_async("/api/activities/:id", api::activity_get)
+        .patch_async("/api/activities/:id", api::activity_update)
+        .delete_async("/api/activities/:id", api::activity_delete)
         .post_async("/api/activities/:id/runs", api::activity_create_run)
         .get_async("/api/rooms/:code", api::room_get)
         // Participation (on the activity's current run).

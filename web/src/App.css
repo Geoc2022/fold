@@ -524,6 +524,24 @@ label .opt {
 .list-launch.primary {
   border: none;
 }
+.activity-actions {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: nowrap;
+  align-items: center;
+  margin-top: 0.6rem;
+}
+.activity-actions .activity-launch {
+  margin-top: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  height: 42px;
+  box-sizing: border-box;
+  -webkit-appearance: none;
+  appearance: none;
+}
 
 /* ---- list view ---- */
 .list-view {
@@ -595,6 +613,11 @@ label .opt {
   font-weight: 650;
   border: none;
 }
+.list-actions {
+  display: flex;
+  gap: 0.45rem;
+  margin-left: auto;
+}
 .create-list-item {
   background: transparent;
   border: 1px dashed var(--border);
@@ -622,6 +645,10 @@ label .opt {
     justify-content: space-between;
   }
   .list-launch {
+    order: 2;
+    margin-left: 0;
+  }
+  .list-actions {
     order: 2;
     margin-left: auto;
   }

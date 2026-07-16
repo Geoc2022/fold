@@ -144,6 +144,21 @@ export interface CreateActivityInput {
   expires_at?: number | null
 }
 
+export interface UpdateActivityInput {
+  emoji?: string | null
+  title: string
+  description?: string | null
+  category?: string | null
+  min_people: number
+  max_people?: number | null
+  group_multiple?: number | null
+  grouping_mode?: GroupingMode
+  allow_guests?: boolean
+  private_by_link?: boolean
+  duration_minutes?: number | null
+  max_commit_minutes?: number | null
+}
+
 /** Creates a new run on an existing activity whose room is currently empty. */
 export interface CreateRunInput {
   location?: string | null

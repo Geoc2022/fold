@@ -10,6 +10,7 @@ import type {
   Person,
   RoomResponse,
   SyncResponse,
+  UpdateActivityInput,
 } from './types'
 import { readString, removeItem, writeString } from './storage'
 
@@ -127,6 +128,19 @@ export const api = {
     return request<ActivityView>('/api/activities', {
       method: 'POST',
       body: input,
+    })
+  },
+
+  updateActivity(id: string, input: UpdateActivityInput): Promise<ActivityView> {
+    return request<ActivityView>(`/api/activities/${id}`, {
+      method: 'PATCH',
+      body: input,
+    })
+  },
+
+  deleteActivity(id: string): Promise<{ ok: boolean }> {
+    return request<{ ok: boolean }>(`/api/activities/${id}`, {
+      method: 'DELETE',
     })
   },
 

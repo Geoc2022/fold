@@ -1,4 +1,5 @@
 import { motion } from 'framer-motion'
+import type { ReactNode } from 'react'
 import type { ActivityView } from '../types'
 import { ActivityBadge } from './ActivityBadge'
 import { ActivityInfo } from './ActivityInfo'
@@ -9,13 +10,14 @@ interface Props {
   size: 1 | 2 | 3
   expanded: boolean
   onToggle: () => void
+  cta?: ReactNode
 }
 
 /** Grid tile: collapsed is a solid-color square (title + icon, sized
  * 1x1/2x2/3x3 units by popularity). Click expands to a fixed 4x3 stats
  * panel with Join. Only one tile can be expanded at a time (controlled by
  * the parent). */
-export function ActivityTile({ activity: a, now, size, expanded, onToggle }: Props) {
+export function ActivityTile({ activity: a, now, size, expanded, onToggle, cta }: Props) {
   const colSpan = expanded ? 4 : size
   const rowSpan = expanded ? 3 : size
 
@@ -32,7 +34,7 @@ export function ActivityTile({ activity: a, now, size, expanded, onToggle }: Pro
       {!expanded && <ActivityBadge activity={a} variant="card" size={size} onClick={onToggle} ariaExpanded={expanded} />}
       {expanded && (
         <div className="tile-expanded">
-          <ActivityInfo activity={a} now={now} />
+          <ActivityInfo activity={a} now={now} cta={cta} />
         </div>
       )}
     </motion.article>

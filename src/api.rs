@@ -428,6 +428,139 @@ pub async fn activity_get(req: Request, ctx: RouteContext<()>) -> Result<Respons
     }
 }
 
+pub async fn activity_update(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let db = ctx.env.d1("DB")?;
+    let person = match require_person(&db, &req).await? {
+        Ok(p) => p,
+        Err(resp) => return Ok(resp),
+    };
+    let id = ctx.param("id").cloned().unwrap_or_default();
+    let existing = match db::get_activity(&db, &id).await? {
+        Some(a) => a,
+        None => return err_json("activity not found", 404),
+    };
+    if existing.proposer_id != person.id {
+        return err_json("only the proposer can edit this activity", 403);
+    }
+
+    let body: UpdateActivity = match req.json().await {
+        Ok(b) => b,
+        Err(_) => return err_json("invalid JSON body", 400),
+    };
+
+    let title = body.title.trim();
+    if title.is_empty() || title.chars().count() > 100 {
+        return err_json("title must be 1-100 characters", 400);
+    }
+    if let Some(conflict) = db::get_activity_by_title(&db, title).await? {
+        if conflict.id != existing.id {
+            let response_body = serde_json::json!({
+                "error": "an activity with this title already exists",
+                "conflict": "title",
+            });
+            return json_status(&response_body, 409);
+        }
+    }
+    if body.min_people < 1 {
+        return err_json("min_people must be >= 1", 400);
+    }
+    let group_multiple = body.group_multiple.unwrap_or(1).max(1);
+    let grouping_mode = match body.grouping_mode.as_deref() {
+        None | Some("single") => "single",
+        Some("tiling") => "tiling",
+        Some(_) => return err_json("grouping_mode must be 'single' or 'tiling'", 400),
+    };
+    if let Some(max) = body.max_people {
+        if max < body.min_people {
+            return err_json("max_people must be >= min_people", 400);
+        }
+    }
+    if !grouping_is_feasible(
+        GroupingMode::parse(grouping_mode),
+        body.min_people,
+        body.max_people,
+        group_multiple,
+    ) {
+        return err_json(
+            "this min/max/group-size combination can never form a complete group",
+            400,
+        );
+    }
+
+    let emoji = clean_emoji(body.emoji.as_deref());
+    let category = clean_category(body.category.as_deref());
+    let duration_minutes = body.duration_minutes.unwrap_or(30).clamp(1, 24 * 60);
+    let max_commit_minutes = body.max_commit_minutes.unwrap_or(30).clamp(0, 24 * 60);
+    let now = now_ms();
+
+    db.prepare(
+        "UPDATE activities SET \
+            emoji = ?1, title = ?2, description = ?3, category = ?4, \
+            min_people = ?5, max_people = ?6, group_multiple = ?7, grouping_mode = ?8, \
+            allow_guests = ?9, private_by_link = ?10, duration_minutes = ?11, \
+            max_commit_minutes = ?12, updated_at = ?13 \
+         WHERE id = ?14",
+    )
+    .bind(&[
+        db::s(&emoji),
+        db::s(title),
+        db::os(body.description.as_deref()),
+        db::s(&category),
+        db::i(body.min_people as i64),
+        db::oi(body.max_people.map(|m| m as i64)),
+        db::i(group_multiple as i64),
+        db::s(grouping_mode),
+        db::i(if body.allow_guests.unwrap_or(true) {
+            1
+        } else {
+            0
+        }),
+        db::i(if body.private_by_link.unwrap_or(false) {
+            1
+        } else {
+            0
+        }),
+        db::i(duration_minutes as i64),
+        db::i(max_commit_minutes as i64),
+        db::i(now),
+        db::s(&existing.id),
+    ])?
+    .run()
+    .await?;
+
+    if let Some(updated) = db::get_activity(&db, &existing.id).await? {
+        if let Some(run_id) = updated.current_run_id.clone() {
+            let _ = refresh_run(&db, &run_id, &updated, now).await?;
+        }
+    }
+
+    match build_activity_view(&db, &existing.id, Some(&person.id)).await? {
+        Some(view) => Response::from_json(&view),
+        None => err_json("activity not found", 404),
+    }
+}
+
+pub async fn activity_delete(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let db = ctx.env.d1("DB")?;
+    let person = match require_person(&db, &req).await? {
+        Ok(p) => p,
+        Err(resp) => return Ok(resp),
+    };
+    let id = ctx.param("id").cloned().unwrap_or_default();
+    let existing = match db::get_activity(&db, &id).await? {
+        Some(a) => a,
+        None => return err_json("activity not found", 404),
+    };
+    if existing.proposer_id != person.id {
+        return err_json("only the proposer can delete this activity", 403);
+    }
+    db.prepare("DELETE FROM activities WHERE id = ?")
+        .bind(&[db::s(&existing.id)])?
+        .run()
+        .await?;
+    Response::from_json(&serde_json::json!({ "ok": true }))
+}
+
 /// Create a new run on an existing activity whose room is currently empty
 /// (no active run). Inherits grouping/code/emoji from the activity; the
 /// caller only supplies time/location/details, defaulting to the last run
@@ -882,9 +1015,7 @@ pub async fn room_get(req: Request, ctx: RouteContext<()>) -> Result<Response> {
         participants,
         already_committed_elsewhere,
         other_committed_room_code: other_commitment.as_ref().map(|c| c.activity_code.clone()),
-        other_committed_activity_title: other_commitment
-            .as_ref()
-            .map(|c| c.activity_title.clone()),
+        other_committed_activity_title: other_commitment.as_ref().map(|c| c.activity_title.clone()),
     };
     Response::from_json(&resp)
 }

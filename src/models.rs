@@ -135,6 +135,23 @@ pub struct CreateRun {
     pub expires_at: Option<i64>,
 }
 
+/// Updates an existing activity template.
+#[derive(Debug, Deserialize)]
+pub struct UpdateActivity {
+    pub emoji: Option<String>,
+    pub title: String,
+    pub description: Option<String>,
+    pub category: Option<String>,
+    pub min_people: u32,
+    pub max_people: Option<u32>,
+    pub group_multiple: Option<u32>,
+    pub grouping_mode: Option<String>,
+    pub allow_guests: Option<bool>,
+    pub private_by_link: Option<bool>,
+    pub duration_minutes: Option<u32>,
+    pub max_commit_minutes: Option<u32>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ScheduleRun {
     pub scheduled_for: i64,

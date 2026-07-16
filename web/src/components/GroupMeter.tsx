@@ -1,10 +1,26 @@
 import type { GroupingMode, RunView } from '../types'
 
 /** Visualizes committed people as filled dots grouped into complete groups. */
-export function GroupMeter({ run, groupingMode }: { run: RunView; groupingMode: GroupingMode }) {
+export function GroupMeter({
+  run,
+  groupingMode,
+  minPeople,
+  maxPeople,
+  groupMultiple,
+}: {
+  run: RunView
+  groupingMode: GroupingMode
+  minPeople: number
+  maxPeople: number | null
+  groupMultiple: number
+}) {
   const { group, committed_count } = run
   const inGroups = group.group_sizes.reduce((a, b) => a + b, 0)
   const waiting = group.waiting_count
+  const groupingSummary =
+    groupingMode === 'tiling'
+      ? `(min ${minPeople}, max ${maxPeople ?? '∞'}, per group ${groupMultiple})`
+      : `(min ${minPeople}, max ${maxPeople ?? '∞'})`
 
   return (
     <div className="meter">
@@ -39,6 +55,8 @@ export function GroupMeter({ run, groupingMode }: { run: RunView; groupingMode: 
         ) : group.spots_to_next != null ? (
           <span>
             {group.spots_to_next} more to {committed_count > 0 ? 'form a group' : 'get started'}
+            {' '}
+            {groupingSummary}
           </span>
         ) : (
           <span>full</span>
