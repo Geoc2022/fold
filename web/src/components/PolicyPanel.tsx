@@ -219,9 +219,6 @@ export function PolicyPanel({ rules, onRulesChange, onClose, notifyStatus, onReq
         >
           <section className="math-help-panel" onClick={(e) => e.stopPropagation()}>
             <header className="math-help-head">
-              <button type="button" onClick={() => setShowHelp(false)} title="Close help" aria-label="Close help">
-                <span className="noto-emoji" aria-hidden="true">✖️</span>
-              </button>
             </header>
             <MarkdownBlock className="math-help-markdown" source={helpText} />
           </section>

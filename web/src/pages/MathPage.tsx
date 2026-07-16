@@ -424,9 +424,6 @@ export function MathPage() {
           <section className="math-help-panel" onClick={(e) => e.stopPropagation()}>
             <header className="math-help-head">
               <h2>Policy Language</h2>
-              <button type="button" onClick={() => setShowHelp(false)} title="Close help" aria-label="Close help">
-                <span className="noto-emoji" aria-hidden="true">✖️</span>
-              </button>
             </header>
             <MarkdownBlock className="math-help-markdown" source={helpText} />
           </section>

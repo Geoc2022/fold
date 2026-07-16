@@ -727,9 +727,9 @@ label .opt {
   gap: 1rem;
   margin-bottom: 1rem;
 }
-.propose-form input,
-.propose-form textarea,
-.propose-form select {
+.propose-form:not(.policy-home-panel) input,
+.propose-form:not(.policy-home-panel) textarea,
+.propose-form:not(.policy-home-panel) select {
   border: none;
   background: color-mix(in srgb, var(--panel) 84%, transparent);
 }
@@ -1302,6 +1302,9 @@ label .opt {
 .policy-editor-shell {
   position: relative;
   min-height: 92px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--panel);
 }
 .policy-highlight-layer,
 .policy-overlay-input {
@@ -1318,8 +1321,8 @@ label .opt {
   line-height: 1.4;
 }
 .policy-highlight-layer {
-  border: 1px solid var(--text);
-  background: var(--bg);
+  border: none;
+  background: var(--panel);
   color: var(--text);
   pointer-events: none;
 }
@@ -1327,6 +1330,7 @@ label .opt {
   position: absolute;
   inset: 0;
   color: transparent;
+  -webkit-text-fill-color: transparent;
   caret-color: var(--text);
   background: transparent;
   border: none;
@@ -1350,19 +1354,19 @@ label .opt {
 .policy-highlight-layer .token-duration,
 .math-highlight-layer .token-number,
 .math-highlight-layer .token-duration {
-  color: var(--accent-up);
+  color: var(--accent-solid);
 }
 .policy-highlight-layer .token-ident,
 .math-highlight-layer .token-ident {
-  color: var(--accent-up);
+  color: var(--accent-solid);
 }
 .policy-highlight-layer .token-string,
 .math-highlight-layer .token-string {
-  color: var(--ok-up);
+  color: var(--ok);
 }
 .policy-highlight-layer .token-type,
 .math-highlight-layer .token-type {
-  color: var(--warn-up);
+  color: var(--warn);
   font-weight: 600;
 }
 .policy-highlight-layer .token-keyword,
@@ -1374,11 +1378,11 @@ label .opt {
 }
 .policy-highlight-layer .token-operator,
 .math-highlight-layer .token-operator {
-  color: var(--danger-up);
+  color: var(--danger);
 }
 .policy-highlight-layer .token-punct,
 .math-highlight-layer .token-punct {
-  color: var(--muted);
+  color: var(--text);
 }
 .policy-highlight-layer .token-comment,
 .math-highlight-layer .token-comment {
