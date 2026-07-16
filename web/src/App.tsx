@@ -6,6 +6,7 @@ import { PhysicsPage } from './pages/PhysicsPage'
 import { ChemistryPage } from './pages/ChemistryPage'
 import { BiologyPage } from './pages/BiologyPage'
 import { MathPage } from './pages/MathPage'
+import { EmojiLabPage } from './pages/EmojiLabPage'
 
 export default function App() {
   // add the picture frame 404 page
@@ -16,6 +17,7 @@ export default function App() {
       <Route path="/chemistry" element={<ChemistryPage />} />
       <Route path="/biology" element={<BiologyPage />} />
       <Route path="/math" element={<MathPage />} />
+      <Route path="/emoji-lab" element={<EmojiLabPage />} />
       <Route path="/:code" element={<ActivityRoom />} />
       <Route
         path="*"

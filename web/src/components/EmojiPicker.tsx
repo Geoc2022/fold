@@ -58,6 +58,7 @@ export function EmojiPicker({ value, onChange }: Props) {
                 className={`emoji-pick ${value === em ? 'active' : ''}`}
                 onClick={() => {
                   onChange(em)
+                  void navigator.clipboard?.writeText(em)
                   setOpen(false)
                 }}
               >

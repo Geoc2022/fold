@@ -6,6 +6,7 @@ import {
   MIN_ETA_MIN,
   etaFromHold,
   nodeColor,
+  targetOpacity,
   visualState,
   type VisualConfig,
   type VisualNodeState,
@@ -42,6 +43,18 @@ interface SimNode {
   vx: number
   vy: number
   angle: number
+  /** Last heartbeat for this participant, null for your own synthetic
+   * lurker node (always reachable) -- see nodeVisual.targetOpacity. */
+  lastSeenAt: number | null
+  /** Rendered opacity, eased toward targetOpacity() each frame -- never
+   * snapped, so reachability/removal always animates. */
+  opacity: number
+  /** True once the server has dropped this participant (despondent reap or
+   * event-over) and it's no longer in the polled participant list. Kept in
+   * the sim and animated outward-and-fading for EXIT_MS instead of being
+   * removed instantly -- see the reconciliation effect and frame loop. */
+  exiting: boolean
+  exitStartedAt: number | null
 }
 
 interface PointerState {
@@ -66,6 +79,24 @@ const WORLD_R = 280
 const ABS_MAX_ETA_MIN = 240
 const ABS_MAX_DURATION_MIN = 240
 const TUG = createTugModel(WORLD_R)
+
+// Resting radii for the two "outer" states, so every state has an explicit
+// target position (not just committed/arrived, which are ETA/cluster-driven
+// -- see computeTargets). Centered in each tug zone's band, so a
+// state change always visibly travels from one ring to the next rather than
+// snapping or lingering wherever it happened to be:
+//   committed/arrived: 0..commitMaxR (ETA/cluster-driven, unchanged)
+//   interested:         ~midway between commitMaxR and interestedMaxR
+//   lurker (and any node the server has removed, mid-exit-animation):
+//                        just outside interestedMaxR
+const INTERESTED_R = (TUG.commitMaxR + TUG.interestedMaxR) / 2
+const LURKER_R = TUG.interestedMaxR + 80
+/** How long the fade+outward-travel plays before a removed node is actually
+ * dropped from the sim -- see the reconciliation effect and frame loop. */
+const EXIT_MS = 900
+/** Per-frame opacity easing rate (matches the SPRING_DAMPING feel used for
+ * position). */
+const OPACITY_EASE = 0.12
 
 // Each state boundary is a "tug of war" zone that works in both directions:
 // pulling a node past the boundary away from center clings toward the edge
@@ -143,11 +174,18 @@ export function RoomCanvas({
     const now = Date.now()
     const meParticipant = participants.find((p) => p.is_me)
     if (meParticipant) myStableNodeIdRef.current = meParticipant.id
-    const nodes = participants.map((p) => ({
+    const nodes: Array<{
+      id: string
+      state: VisualNodeState
+      arrivalAt: number | null
+      isMe: boolean
+      lastSeenAt: number | null
+    }> = participants.map((p) => ({
       id: p.id,
       state: visualState(p, now),
       arrivalAt: p.arrival_at,
       isMe: p.is_me,
+      lastSeenAt: p.last_seen_at,
     }))
     if (!nodes.some((n) => n.isMe)) {
       nodes.unshift({
@@ -155,6 +193,7 @@ export function RoomCanvas({
         state: 'lurker' as const,
         arrivalAt: null,
         isMe: true,
+        lastSeenAt: null,
       })
     }
     return nodes
@@ -171,7 +210,9 @@ export function RoomCanvas({
   useEffect(() => {
     const existing = new Map(nodesRef.current.map((n) => [n.id, n]))
     const existingMe = nodesRef.current.find((n) => n.isMe)
-    nodesRef.current = source.map((s, index) => {
+    const sourceIds = new Set(source.map((s) => s.id))
+
+    const next = source.map((s, index) => {
       let old = existing.get(s.id)
       if (!old && s.isMe) old = existingMe
       if (old) {
@@ -182,10 +223,24 @@ export function RoomCanvas({
           old.arrivalAt = s.arrivalAt
         }
         old.isMe = s.isMe
+        old.lastSeenAt = s.lastSeenAt
+        old.exiting = false
+        old.exitStartedAt = null
         return old
       }
+      // New participant: place it already at its resting ring (rather than
+      // an arbitrary interior point) so there's no jarring initial jump --
+      // committed/arrived still snap toward their ETA/cluster target over
+      // the following frames via the normal spring.
       const angle = s.isMe ? -Math.PI / 2 : (index / Math.max(1, source.length)) * Math.PI * 2
-      const restR = s.isMe ? WORLD_R + visual.nodeRadius + 40 : WORLD_R * 0.6
+      const isOuter = s.state === 'lurker' || s.state === 'interested'
+      const restR = s.isMe
+        ? WORLD_R + visual.nodeRadius + 40
+        : s.state === 'interested'
+          ? INTERESTED_R
+          : s.state === 'lurker'
+            ? LURKER_R
+            : WORLD_R * 0.6
       return {
         ...s,
         x: Math.cos(angle) * restR,
@@ -193,8 +248,26 @@ export function RoomCanvas({
         vx: 0,
         vy: 0,
         angle,
+        opacity: isOuter || s.isMe ? 1 : 0,
+        exiting: false,
+        exitStartedAt: null,
       }
     })
+
+    // A participant that dropped out of `source` (the server reaped a
+    // despondent or event-over participation) keeps animating -- outward to
+    // the lurker ring, fading out -- instead of vanishing the instant a poll
+    // resolves. Purged for real in the frame loop once EXIT_MS elapses.
+    for (const n of nodesRef.current) {
+      if (n.isMe || sourceIds.has(n.id)) continue
+      if (!n.exiting) {
+        n.exiting = true
+        n.exitStartedAt = performance.now()
+      }
+      next.push(n)
+    }
+
+    nodesRef.current = next
   }, [source, visual.nodeRadius])
 
   useEffect(() => {
@@ -535,6 +608,12 @@ export function RoomCanvas({
       for (const n of nodesRef.current) {
         if (pointerRef.current?.node === n) continue
         if (n.state === 'arrived' && n.arrivalAt != null && now - n.arrivalAt >= durationMs) {
+          // Local prediction, ahead of the next poll: the server
+          // independently reaps the same condition (event-over) and, if
+          // this participant is still reachable, reverts them to lurker
+          // rather than removing them -- see db::reap_run. Calling
+          // onWithdraw here is just an idempotent nudge so *this* client
+          // doesn't have to wait a full poll cycle to see it.
           const expiredArrivalAt = n.arrivalAt
           n.state = 'lurker'
           n.arrivalAt = null
@@ -547,6 +626,24 @@ export function RoomCanvas({
           }
         }
       }
+
+      // Ease every node's opacity toward its target tier (reachable / dimmed
+      // / fading out) -- see nodeVisual.targetOpacity. Own node is always
+      // fully opaque.
+      for (const n of nodesRef.current) {
+        const target = targetOpacity({ isMe: n.isMe, exiting: n.exiting, lastSeenAt: n.lastSeenAt, now })
+        n.opacity += (target - n.opacity) * OPACITY_EASE
+      }
+      // Purge nodes that finished their exit animation (server-removed
+      // participant that's now fully faded + traveled out to the lurker
+      // ring) -- only reallocate the array when something actually needs
+      // dropping.
+      if (nodesRef.current.some((n) => n.exiting && n.exitStartedAt != null && performance.now() - n.exitStartedAt > EXIT_MS)) {
+        nodesRef.current = nodesRef.current.filter(
+          (n) => !(n.exiting && n.exitStartedAt != null && performance.now() - n.exitStartedAt > EXIT_MS),
+        )
+      }
+
       step(nodesRef.current, pointerRef.current, activityRef.current, visualRef.current, now)
       draw(ctx, canvas, nodesRef.current, pointerRef.current, cameraRef.current, visualRef.current, activityRef.current, now)
       raf = requestAnimationFrame(frame)
@@ -568,34 +665,43 @@ export function RoomCanvas({
   return <canvas ref={canvasRef} className="room-canvas" />
 }
 
+// Every node now gets an explicit target from computeTargets (lurker and
+// interested included, not just committed/arrived) and springs toward it
+// uniformly -- so demotion/fade-back/removal always visibly travels through
+// the same zones a node arrived through, instead of lingering wherever it
+// happened to be (there used to be no target at all for lurker/interested).
 function step(nodes: SimNode[], pointer: PointerState | null, activity: ActivityView, vis: VisualConfig, now: number) {
   const targets = computeTargets(nodes, activity, vis, now)
-  const arrived = nodes.filter((n) => n.state === 'arrived')
+  // Only a still-clustered arrived node repels others away from the group;
+  // one that's mid-exit-animation is leaving the cluster, not part of it.
+  const arrived = nodes.filter((n) => n.state === 'arrived' && !n.exiting)
   for (const n of nodes) {
     if (pointer?.node === n) continue
-    if (n.state === 'committed' || n.state === 'arrived') {
-      const t = targets.get(n.id) ?? { x: 0, y: 0 }
-      n.vx += (t.x - n.x) * 0.04
-      n.vy += (t.y - n.y) * 0.04
-      n.vx *= 0.82
-      n.vy *= 0.82
-      n.x += n.vx
-      n.y += n.vy
-      continue
-    }
-    const repulseR = vis.nodeRadius * 6
-    for (const src of arrived) {
-      const dx = n.x - src.x
-      const dy = n.y - src.y
-      const dist = Math.max(1, Math.hypot(dx, dy))
-      if (dist < repulseR) {
-        const force = ((repulseR - dist) / repulseR) * 0.6
-        n.vx += (dx / dist) * force
-        n.vy += (dy / dist) * force
+    const t = targets.get(n.id) ?? { x: 0, y: 0 }
+    n.vx += (t.x - n.x) * 0.04
+    n.vy += (t.y - n.y) * 0.04
+    n.vx *= 0.82
+    n.vy *= 0.82
+
+    // Nodes not fused into a committed/arrived cluster (lurker, interested,
+    // or anything currently exiting regardless of its last known state)
+    // additionally get pushed away from arrived clusters, so they visibly
+    // part around a fused group instead of drifting through it.
+    const clustered = (n.state === 'committed' || n.state === 'arrived') && !n.exiting
+    if (!clustered) {
+      const repulseR = vis.nodeRadius * 6
+      for (const src of arrived) {
+        if (src === n) continue
+        const dx = n.x - src.x
+        const dy = n.y - src.y
+        const dist = Math.max(1, Math.hypot(dx, dy))
+        if (dist < repulseR) {
+          const force = ((repulseR - dist) / repulseR) * 0.6
+          n.vx += (dx / dist) * force
+          n.vy += (dy / dist) * force
+        }
       }
     }
-    n.vx *= 0.88
-    n.vy *= 0.88
     n.x += n.vx
     n.y += n.vy
   }
@@ -603,7 +709,10 @@ function step(nodes: SimNode[], pointer: PointerState | null, activity: Activity
 
 function computeTargets(nodes: SimNode[], activity: ActivityView, vis: VisualConfig, now: number) {
   const targets = new Map<string, { x: number; y: number }>()
-  const committed = nodes.filter((n) => n.state === 'committed' || n.state === 'arrived')
+  // Exiting nodes are always headed out to the lurker ring, never into a
+  // cluster, regardless of what they were committed/interested as before
+  // the server removed them.
+  const committed = nodes.filter((n) => !n.exiting && (n.state === 'committed' || n.state === 'arrived'))
   const arrived = committed.filter((n) => n.state === 'arrived')
   const inFlight = committed.filter((n) => n.state === 'committed')
   const groupSizes = activity.current_run?.group.group_sizes ?? []
@@ -623,6 +732,17 @@ function computeTargets(nodes: SimNode[], activity: ActivityView, vis: VisualCon
   for (const n of inFlight) {
     const remaining = n.arrivalAt == null ? defaultEtaMs : Math.max(0, Math.min(etaSpanMs, n.arrivalAt - now))
     const r = (remaining / etaSpanMs) * WORLD_R
+    targets.set(n.id, { x: Math.cos(n.angle) * r, y: Math.sin(n.angle) * r })
+  }
+
+  // Everything else -- lurker, interested, and any exiting node regardless
+  // of its last known state -- rests on a fixed ring along its own angle,
+  // rather than having no target (the previous behavior for lurker/
+  // interested: only repulsion, no homing, so a demoted/removed node just
+  // lingered near the center instead of visibly retreating outward).
+  for (const n of nodes) {
+    if (targets.has(n.id)) continue
+    const r = !n.exiting && n.state === 'interested' ? INTERESTED_R : LURKER_R
     targets.set(n.id, { x: Math.cos(n.angle) * r, y: Math.sin(n.angle) * r })
   }
   return targets
@@ -701,11 +821,20 @@ function draw(
   lctx.scale(camera.scale, camera.scale)
 
   for (const n of nodes) {
+    // Reachable participants are fully opaque; unreachable ones dim to
+    // ~50%, and exiting (server-removed) ones fade all the way to 0 as they
+    // travel out to the lurker ring -- eased every frame in the sim loop
+    // (see nodeVisual.targetOpacity), never snapped.
+    lctx.globalAlpha = Math.max(0, Math.min(1, n.opacity))
     lctx.fillStyle = nodeColor(n.state)
     lctx.beginPath()
     lctx.arc(n.x, n.y, vis.nodeRadius, 0, Math.PI * 2)
     lctx.fill()
   }
+  // Reset before the outline pass: that punch-through should always be
+  // fully opaque regardless of the last-drawn node's opacity, or it
+  // wouldn't fully cut the outline hole.
+  lctx.globalAlpha = 1
   lctx.globalCompositeOperation = 'destination-out'
   lctx.strokeStyle = '#000'
   lctx.fillStyle = '#000'
@@ -762,7 +891,7 @@ function activityMaxEta(activity: ActivityView) {
 }
 
 function activityDuration(activity: ActivityView) {
-  return clampNumber(activity.duration_minutes ?? DEFAULT_ETA_MIN, 1, ABS_MAX_DURATION_MIN)
+  return clampNumber(activity.duration_minutes ?? DEFAULT_ETA_MIN, 0, ABS_MAX_DURATION_MIN)
 }
 
 function clampNumber(value: number, min: number, max: number) {

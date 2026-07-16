@@ -148,7 +148,7 @@ export function ProposeForm({ initialCode, activity, categoryOptions, onCreated,
   function handleDurationChange(value: string) {
     setDurationInput(value)
     const parsed = parseDuration(value)
-    if (parsed !== null) setDurationMinutes(clampMinutes(parsed, 5, 24 * 60))
+    if (parsed !== null) setDurationMinutes(clampMinutes(parsed, 0, 24 * 60))
   }
 
   function handleMaxEtaChange(value: string) {
@@ -315,7 +315,7 @@ export function ProposeForm({ initialCode, activity, categoryOptions, onCreated,
           </label>
           <div className="row">
             <label>
-              Duration
+              Arrived Window
               <input
                 type="text"
                 placeholder="10m 30s"
@@ -323,10 +323,10 @@ export function ProposeForm({ initialCode, activity, categoryOptions, onCreated,
                 onChange={(e) => handleDurationChange(e.target.value)}
                 onBlur={() => setDurationInput(minutesToHuman(durationMinutes))}
               />
-              <span className="hint">How long someone stays arrived</span>
+              <span className="hint">How long someone stays in the arrived state</span>
             </label>
             <label>
-              Max Commitment Time
+              Max Arrival ETA
               <input
                 type="text"
                 placeholder="30m"
@@ -334,7 +334,7 @@ export function ProposeForm({ initialCode, activity, categoryOptions, onCreated,
                 onChange={(e) => handleMaxEtaChange(e.target.value)}
                 onBlur={() => setMaxCommitInput(minutesToHuman(maxCommitMinutes))}
               />
-              <span className="hint">Farthest-out commitment allowed</span>
+              <span className="hint">Largest ETA someone can choose when committing</span>
             </label>
           </div>
         </>
@@ -410,7 +410,7 @@ export function ProposeForm({ initialCode, activity, categoryOptions, onCreated,
       )}
 
       {error && <p className="err">{error}</p>}
-      <div className="row">
+      <div className={`row propose-actions${isEdit ? '' : ' solo'}`}>
         {isEdit && (
           <button type="button" className="danger" onClick={handleDelete} disabled={busy}>
             Delete activity

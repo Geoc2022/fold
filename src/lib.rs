@@ -79,9 +79,24 @@ async fn run_maintenance(env: &Env) -> Result<()> {
     const EXPIRE_BATCH: i64 = 20;
     const READ_TTL_MS: i64 = 7 * 24 * 60 * 60 * 1000; // 7 days
     const HARD_TTL_MS: i64 = 30 * 24 * 60 * 60 * 1000; // 30 days
+    // Cron backstop for the lazy on-read reaps in `room_get`/`run_commit`/
+    // `run_interest`: catches despondent (unreachable >5min, see
+    // `api::DESPONDENT_MS`) or event-over participations in rooms nobody is
+    // actively polling. Bounded to stay within the free-plan subrequest
+    // budget per 15-min tick, same pattern as EXPIRE_BATCH above.
+    const REAP_BATCH: i64 = 40;
 
     let db = env.d1("DB")?;
     let now = util::now_ms();
+
+    let reaped_run_ids = db::reap_global(&db, now, now - api::DESPONDENT_MS, REAP_BATCH).await?;
+    for run_id in &reaped_run_ids {
+        if let Some(run) = db::get_run(&db, run_id).await? {
+            if let Some(activity) = db::get_activity(&db, &run.activity_id).await? {
+                api::refresh_run(&db, run_id, &activity, now).await?;
+            }
+        }
+    }
 
     let expiring = db::expiring_runs(&db, now, EXPIRE_BATCH).await?;
     for r in &expiring {

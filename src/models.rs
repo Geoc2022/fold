@@ -327,6 +327,14 @@ pub struct ParticipantView {
     pub state: String,
     pub arrival_at: Option<i64>,
     pub is_me: bool,
+    /// This participant's `people.last_seen_at`, so the client can derive a
+    /// "reachable" / "unreachable" (dimmed) visual tier itself, the same way
+    /// it already derives `arrived` from `arrival_at` -- kept as a raw
+    /// timestamp rather than a precomputed bool to avoid baking a threshold
+    /// into the API and to sidestep server/client clock-skew questions
+    /// (compared the same way `arrival_at` already is: against the
+    /// client's own `Date.now()`).
+    pub last_seen_at: i64,
 }
 
 #[derive(Debug, Serialize)]

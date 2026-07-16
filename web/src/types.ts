@@ -111,6 +111,11 @@ export interface ParticipantView {
   state: 'interested' | 'committed'
   arrival_at: number | null
   is_me: boolean
+  /** This participant's last heartbeat (see usePolling/room polling). Used
+   * client-side to derive a reachable/unreachable dimming tier the same way
+   * `arrival_at` already derives `arrived` -- compared against the client's
+   * own clock, not server_time, for consistency with existing code. */
+  last_seen_at: number
 }
 
 export interface RoomResponse {

@@ -17,6 +17,17 @@ const DEFAULT_COMMIT_MINUTES: i64 = 30;
 /// running the activity again resets the clock.
 const ACTIVITY_VISIBLE_WINDOW_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 
+/// Liveness tuning (see db.rs "heartbeat + reap"). A participant unreachable
+/// longer than this is removed to keep rooms mostly live -- see
+/// `docs/*` drop-matrix notes. Also used by the cron backstop in lib.rs.
+pub(crate) const DESPONDENT_MS: i64 = 5 * 60 * 1000;
+/// Only rewrite `last_seen_at` when it's already stale by this much, and
+/// only for people who hold a participation row -- keeps the heartbeat
+/// free-plan-safe (see `db::heartbeat`). Must stay well under the client's
+/// ~60s "unreachable" dimming threshold so a genuinely-live poller never
+/// crosses it.
+const HEARTBEAT_COALESCE_MS: i64 = 30_000;
+
 // ---- helpers ---------------------------------------------------------------
 
 async fn require_person(
@@ -97,7 +108,7 @@ fn clean_category(raw: Option<&str>) -> String {
 /// Recompute a run's counts, reconcile open/ready status against the
 /// activity's grouping config, latch `reached_ready`, and return the fresh
 /// row plus whether it just transitioned into "ready".
-async fn refresh_run(
+pub(crate) async fn refresh_run(
     db: &D1Database,
     run_id: &str,
     activity: &ActivityRow,
@@ -341,7 +352,7 @@ pub async fn activity_create(mut req: Request, ctx: RouteContext<()>) -> Result<
 
     let emoji = clean_emoji(body.emoji.as_deref());
     let category = clean_category(body.category.as_deref());
-    let duration_minutes = body.duration_minutes.unwrap_or(30).clamp(1, 24 * 60);
+    let duration_minutes = body.duration_minutes.unwrap_or(30).clamp(0, 24 * 60);
     let max_commit_minutes = body.max_commit_minutes.unwrap_or(30).clamp(0, 24 * 60);
 
     let now = now_ms();
@@ -489,7 +500,7 @@ pub async fn activity_update(mut req: Request, ctx: RouteContext<()>) -> Result<
 
     let emoji = clean_emoji(body.emoji.as_deref());
     let category = clean_category(body.category.as_deref());
-    let duration_minutes = body.duration_minutes.unwrap_or(30).clamp(1, 24 * 60);
+    let duration_minutes = body.duration_minutes.unwrap_or(30).clamp(0, 24 * 60);
     let max_commit_minutes = body.max_commit_minutes.unwrap_or(30).clamp(0, 24 * 60);
     let now = now_ms();
 
@@ -646,6 +657,14 @@ pub async fn run_interest(req: Request, ctx: RouteContext<()>) -> Result<Respons
     };
 
     let now = now_ms();
+    // Reap this run's ghosts first so `prior_interested` (and the
+    // min_people-crossing check below) reflect real people, not stale
+    // despondent/event-over participations.
+    let run = if db::reap_run(&db, &run.id, now, now - DESPONDENT_MS).await? {
+        refresh_run(&db, &run.id, &activity, now).await?.0
+    } else {
+        run
+    };
     let prior_interested = run.interested_count;
     db::upsert_participation(&db, &run.id, &person.id, "interested", None, now).await?;
     db::touch_person(&db, &person.id, now).await?;
@@ -707,6 +726,34 @@ pub async fn run_commit(mut req: Request, ctx: RouteContext<()>) -> Result<Respo
         None => return err_json("activity not found", 404),
     };
 
+    let now = now_ms();
+    let despondent_cutoff = now - DESPONDENT_MS;
+    // Reap ghosts before evaluating capacity/exclusivity, so a stale
+    // participation (someone else's despondent commit filling `max_people`,
+    // or this person's own despondent/event-over commit elsewhere) never
+    // blocks a live person from committing. `reap_person` is the automatic
+    // "clear my stuck commit" escape hatch for the exclusive-commit lock.
+    let run = if db::reap_run(&db, &run.id, now, despondent_cutoff).await? {
+        refresh_run(&db, &run.id, &activity, now).await?.0
+    } else {
+        run
+    };
+    // reap_person can clear a stale commit on a *different* run (that's the
+    // whole point -- clearing the exclusive-lock deadlock). That other
+    // run's denormalized counts/readiness need their own refresh, since
+    // refresh_run above only re-derived *this* run.
+    let other_reaped_run_ids = db::reap_person(&db, &person.id, now, despondent_cutoff).await?;
+    for other_run_id in &other_reaped_run_ids {
+        if other_run_id == &run.id {
+            continue; // already covered by the refresh_run call above
+        }
+        if let Some(other_run) = db::get_run(&db, other_run_id).await? {
+            if let Some(other_activity) = db::get_activity(&db, &other_run.activity_id).await? {
+                refresh_run(&db, other_run_id, &other_activity, now).await?;
+            }
+        }
+    }
+
     let current = db::participation_state(&db, &run.id, &person.id).await?;
     let already_committed = current.as_deref() == Some("committed");
 
@@ -737,6 +784,8 @@ pub async fn run_commit(mut req: Request, ctx: RouteContext<()>) -> Result<Respo
         }
     };
 
+    // Re-stamp `now` after the body read (an await point) rather than
+    // reusing the pre-reap timestamp, matching prior behavior.
     let now = now_ms();
     let max_commit = activity.max_commit_minutes.max(0);
     let default_eta = max_commit.min(DEFAULT_COMMIT_MINUTES);
@@ -996,6 +1045,20 @@ pub async fn room_get(req: Request, ctx: RouteContext<()>) -> Result<Response> {
         None => return err_json("activity not found", 404),
     };
     let me_id = person_id(&req);
+    let now = now_ms();
+
+    if let Some(pid) = &me_id {
+        db::heartbeat(&db, pid, now, HEARTBEAT_COALESCE_MS).await?;
+    }
+    // Lazy reap: this is the primary "look at the room" read path, so keep
+    // its participant list/counts free of despondent or event-over ghosts
+    // before anyone sees them, rather than waiting on the 15-min cron.
+    if let Some(run_id) = &row.current_run_id {
+        if db::reap_run(&db, run_id, now, now - DESPONDENT_MS).await? {
+            refresh_run(&db, run_id, &row, now).await?;
+        }
+    }
+
     let view = match build_activity_view(&db, &row.id, me_id.as_deref()).await? {
         Some(v) => v,
         None => return err_json("activity not found", 404),
@@ -1027,6 +1090,9 @@ pub async fn sync(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let now = now_ms();
 
     let me_id = person_id(&req);
+    if let Some(pid) = &me_id {
+        db::heartbeat(&db, pid, now, HEARTBEAT_COALESCE_MS).await?;
+    }
     let me = match &me_id {
         Some(pid) => db::get_person(&db, pid).await?,
         None => None,

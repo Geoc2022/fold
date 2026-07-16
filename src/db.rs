@@ -498,10 +498,11 @@ pub async fn participants_for_run(
         color: String,
         state: String,
         arrival_at: Option<i64>,
+        last_seen_at: i64,
     }
     let rows = db
         .prepare(
-            "SELECT part.id, part.person_id, p.color, part.state, part.arrival_at \
+            "SELECT part.id, part.person_id, p.color, part.state, part.arrival_at, p.last_seen_at \
              FROM participations part \
              JOIN people p ON p.id = part.person_id \
              WHERE part.run_id = ? \
@@ -519,6 +520,7 @@ pub async fn participants_for_run(
             state: r.state,
             arrival_at: r.arrival_at,
             is_me: Some(r.person_id.as_str()) == me_id,
+            last_seen_at: r.last_seen_at,
         })
         .collect())
 }
@@ -529,6 +531,194 @@ pub async fn delete_participation(db: &D1Database, run_id: &str, person_id: &str
         .run()
         .await?;
     Ok(())
+}
+
+// ---- liveness: heartbeat + reap ---------------------------------------------
+//
+// There is no realtime/socket layer (see lib.rs) -- liveness is entirely
+// derived from `people.last_seen_at`, refreshed by a coalesced heartbeat on
+// every poll and consumed by three reap entry points (run-scoped, person-
+// scoped, and a global cron backstop). A participation is stale, and gets
+// deleted (there is no "lurking" DB state -- see migrations/0001_init.sql),
+// when either:
+//   - the person hasn't been seen in `despondent_cutoff` (unreachable too
+//     long -- keeps rooms mostly live), or
+//   - it's `committed` and the event is over (`arrival_at` + the activity's
+//     `duration_minutes` has passed), regardless of reachability -- the
+//     commitment itself is done even if the person is still watching, so
+//     they simply revert to lurker (see `run_withdraw`/`build_activity_view`:
+//     deleting the row is exactly what a withdraw does).
+const STALE_PARTICIPATION_PREDICATE: &str = "( pe.last_seen_at < ?despondent \
+     OR (part.state = 'committed' AND part.arrival_at IS NOT NULL \
+         AND part.arrival_at + a.duration_minutes * 60000 <= ?now) )";
+
+/// Bump `last_seen_at` for a person, but only if (a) it's already stale by
+/// `coalesce_window_ms` and (b) they currently hold at least one
+/// participation row. Both conditions keep this free on the D1 free plan:
+/// D1 charges by rows *written*, so a no-op UPDATE (condition (a) not met)
+/// writes zero rows regardless of how often it's called, and (b) means
+/// lurkers/viewers -- the overwhelming majority of polls -- never write at
+/// all. Net cost is ~1 write per window per *active participant*, not per
+/// poll.
+pub async fn heartbeat(
+    db: &D1Database,
+    person_id: &str,
+    now: i64,
+    coalesce_window_ms: i64,
+) -> Result<()> {
+    db.prepare(
+        "UPDATE people SET last_seen_at = ?1 \
+         WHERE id = ?2 AND last_seen_at < ?3 \
+           AND EXISTS (SELECT 1 FROM participations WHERE person_id = ?2)",
+    )
+    .bind(&[i(now), s(person_id), i(now - coalesce_window_ms)])?
+    .run()
+    .await?;
+    Ok(())
+}
+
+/// Delete stale participations scoped to one run (lazy, on-read reap).
+/// Returns true if anything was deleted, so the caller knows to
+/// recompute that run's denormalized counts. Cheap and small in scope --
+/// safe to call on every room read.
+pub async fn reap_run(db: &D1Database, run_id: &str, now: i64, despondent_cutoff: i64) -> Result<bool> {
+    #[derive(serde::Deserialize)]
+    struct Row {
+        id: String,
+    }
+    let sql = format!(
+        "SELECT part.id AS id \
+         FROM participations part \
+         JOIN people pe ON pe.id = part.person_id \
+         JOIN runs r ON r.id = part.run_id \
+         JOIN activities a ON a.id = r.activity_id \
+         WHERE part.run_id = ?1 \
+           AND {}",
+        STALE_PARTICIPATION_PREDICATE
+            .replace("?despondent", "?2")
+            .replace("?now", "?3")
+    );
+    let rows = db
+        .prepare(&sql)
+        .bind(&[s(run_id), i(despondent_cutoff), i(now)])?
+        .all()
+        .await?
+        .results::<Row>()?;
+    if rows.is_empty() {
+        return Ok(false);
+    }
+    let mut stmts = Vec::with_capacity(rows.len());
+    for row in &rows {
+        stmts.push(
+            db.prepare("DELETE FROM participations WHERE id = ?")
+                .bind(&[s(&row.id)])?,
+        );
+    }
+    db.batch(stmts).await?;
+    Ok(true)
+}
+
+/// Delete stale participations for one person across *all* their runs.
+/// Called right before the exclusive-commit check so a person's own stale
+/// ghost (e.g. a despondent commit elsewhere) can never deadlock them out
+/// of committing here -- an automatic "clear my stuck commit", scoped
+/// tightly (one person) so it's cheap enough to run on every commit attempt.
+pub async fn reap_person(
+    db: &D1Database,
+    person_id: &str,
+    now: i64,
+    despondent_cutoff: i64,
+) -> Result<Vec<String>> {
+    #[derive(serde::Deserialize)]
+    struct Row {
+        id: String,
+        run_id: String,
+    }
+    let sql = format!(
+        "SELECT part.id AS id, part.run_id AS run_id \
+         FROM participations part \
+         JOIN people pe ON pe.id = part.person_id \
+         JOIN runs r ON r.id = part.run_id \
+         JOIN activities a ON a.id = r.activity_id \
+         WHERE part.person_id = ?1 \
+           AND {}",
+        STALE_PARTICIPATION_PREDICATE
+            .replace("?despondent", "?2")
+            .replace("?now", "?3")
+    );
+    let rows = db
+        .prepare(&sql)
+        .bind(&[s(person_id), i(despondent_cutoff), i(now)])?
+        .all()
+        .await?
+        .results::<Row>()?;
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut stmts = Vec::with_capacity(rows.len());
+    let mut run_ids = Vec::with_capacity(rows.len());
+    for row in &rows {
+        stmts.push(
+            db.prepare("DELETE FROM participations WHERE id = ?")
+                .bind(&[s(&row.id)])?,
+        );
+        run_ids.push(row.run_id.clone());
+    }
+    db.batch(stmts).await?;
+    Ok(run_ids)
+}
+
+/// Global cron backstop (see lib.rs `run_maintenance`): catches stale
+/// participations in rooms nobody is actively polling (so `reap_run`/
+/// `reap_person` never get a chance to run there). Bounded by `limit` to
+/// stay within the free-plan subrequest budget per cron tick. Returns the
+/// distinct affected run ids so the caller can refresh their counts.
+pub async fn reap_global(
+    db: &D1Database,
+    now: i64,
+    despondent_cutoff: i64,
+    limit: i64,
+) -> Result<Vec<String>> {
+    #[derive(serde::Deserialize)]
+    struct Row {
+        id: String,
+        run_id: String,
+    }
+    let sql = format!(
+        "SELECT part.id AS id, part.run_id AS run_id \
+         FROM participations part \
+         JOIN people pe ON pe.id = part.person_id \
+         JOIN runs r ON r.id = part.run_id \
+         JOIN activities a ON a.id = r.activity_id \
+         WHERE r.status IN ('open','ready','scheduled') \
+           AND {} \
+         LIMIT ?3",
+        STALE_PARTICIPATION_PREDICATE
+            .replace("?despondent", "?1")
+            .replace("?now", "?2")
+    );
+    let rows = db
+        .prepare(&sql)
+        .bind(&[i(despondent_cutoff), i(now), i(limit)])?
+        .all()
+        .await?
+        .results::<Row>()?;
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut stmts = Vec::with_capacity(rows.len());
+    let mut run_ids: Vec<String> = Vec::with_capacity(rows.len());
+    for row in &rows {
+        stmts.push(
+            db.prepare("DELETE FROM participations WHERE id = ?")
+                .bind(&[s(&row.id)])?,
+        );
+        run_ids.push(row.run_id.clone());
+    }
+    db.batch(stmts).await?;
+    run_ids.sort();
+    run_ids.dedup();
+    Ok(run_ids)
 }
 
 // ---- notifications ---------------------------------------------------------
