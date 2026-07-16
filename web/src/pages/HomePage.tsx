@@ -9,10 +9,16 @@ import type { ActivityView, Person } from '../types'
 import { ActivityListItem } from '../components/ActivityListItem'
 import { ActivityTile } from '../components/ActivityTile'
 import { CreateTile } from '../components/CreateTile'
+import { PolicyPanel } from '../components/PolicyPanel'
 import { ProposeForm } from '../components/ProposeForm'
 import { SortSelect, type SortKey } from '../components/SortSelect'
 import { TagBar } from '../components/TagBar'
 import { ViewToggle, type HomeView } from '../components/ViewToggle'
+import { requestNotificationPermission, showLocalNotification } from '../notify-client'
+import { compileAndEvaluate, type Effect } from '../policy/engine'
+import { buildHomePolicyEnv } from '../policy/homeEnv'
+import { newPolicyRule, type PolicyRule } from '../policy/rules'
+import { readJson, writeJson } from '../storage'
 
 const CODE_PATTERN = /^[a-zA-Z]{4}$/
 const SORT_KEYS: SortKey[] = ['newest', 'oldest', 'runs', 'served', 'commit', 'name']
@@ -23,6 +29,38 @@ const CATEGORY_PRESETS = [
   { value: 'tabletop', label: 'Tabletop' },
   { value: 'outside', label: 'Outside' },
 ]
+
+const POLICY_RULES_KEY = 'fold.policy.home.rules'
+const DEFAULT_POLICY = 'is_ready => notify "{title} is ready"'
+const TOAST_VISIBLE_MS = 4000
+
+function toBase64Url(text: string): string {
+  const bytes = new TextEncoder().encode(text)
+  let binary = ''
+  bytes.forEach((b) => {
+    binary += String.fromCharCode(b)
+  })
+  return btoa(binary)
+}
+
+function fromBase64Url(b64: string): string {
+  const binary = atob(b64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
+  return new TextDecoder().decode(bytes)
+}
+
+function firstNotifyMessage(effect: Effect | null): string | null {
+  if (!effect) return null
+  if (effect.op === 'notify') return effect.message
+  if (effect.op === 'seq') {
+    for (const step of effect.steps) {
+      const msg = firstNotifyMessage(step)
+      if (msg) return msg
+    }
+  }
+  return null
+}
 
 function sortActivities(list: ActivityView[], key: SortKey): ActivityView[] {
   const arr = [...list]
@@ -125,8 +163,112 @@ export function HomePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams])
 
+  const [showPolicyPanel, setShowPolicyPanel] = useState(false)
+  const [notifyStatus, setNotifyStatus] = useState('')
+  const [toast, setToast] = useState<string | null>(null)
+  const toastTimerRef = useRef<number | null>(null)
+  const [rules, setRules] = useState<PolicyRule[]>(() => readJson(POLICY_RULES_KEY, [newPolicyRule(DEFAULT_POLICY)]))
+  const policyFireRef = useRef(new Map<string, boolean>())
+
+  useEffect(() => {
+    writeJson(POLICY_RULES_KEY, rules)
+  }, [rules])
+
+  // A shared policy link (?policy=<base64 of source[]>) loads those rules
+  // and opens the panel, mirroring the ?code= propose-form flow above.
+  useEffect(() => {
+    const policyParam = searchParams.get('policy')
+    if (policyParam) {
+      try {
+        const sources = JSON.parse(fromBase64Url(policyParam)) as unknown
+        if (Array.isArray(sources) && sources.length > 0) {
+          setRules(sources.filter((s) => typeof s === 'string').map((s) => newPolicyRule(s)))
+          setShowPolicyPanel(true)
+        }
+      } catch {
+        // Malformed/garbled policy link; ignore rather than crash the page.
+      }
+      setSearchParams(
+        (p) => {
+          p.delete('policy')
+          return p
+        },
+        { replace: true },
+      )
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams])
+
+  function showToast(message: string) {
+    setToast(message)
+    if (toastTimerRef.current != null) window.clearTimeout(toastTimerRef.current)
+    toastTimerRef.current = window.setTimeout(() => {
+      toastTimerRef.current = null
+      setToast(null)
+    }, TOAST_VISIBLE_MS)
+  }
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current != null) window.clearTimeout(toastTimerRef.current)
+    }
+  }, [])
+
+  async function enableNotifications() {
+    setNotifyStatus(await requestNotificationPermission())
+  }
+
+  function sharePolicy() {
+    const sources = rules.map((r) => r.source)
+    const encoded = toBase64Url(JSON.stringify(sources))
+    const params = new URLSearchParams(searchParams)
+    params.set('policy', encoded)
+    const url = `${window.location.origin}${location.pathname}?${params.toString()}`
+    navigator.clipboard
+      .writeText(url)
+      .then(() => showToast('Policy link copied'))
+      .catch(() => showToast('Could not copy link'))
+  }
+
   const activities = data?.activities ?? EMPTY_ACTIVITIES
   const now = data?.server_time ?? Date.now()
+
+  // Run enabled policy rules against activities the user has joined
+  // (my_state != null) every time fresh sync data arrives, firing a
+  // notification + toast on the rising edge of a `notify` action.
+  useEffect(() => {
+    if (!data) return
+    let cancelled = false
+    const joined = activities.filter((a) => a.my_state != null)
+    const activeIds = new Set<string>()
+    ;(async () => {
+      for (const activity of joined) {
+        const env = buildHomePolicyEnv(activity, now)
+        for (const rule of rules) {
+          if (!rule.enabled || !rule.source.trim()) continue
+          const key = `${activity.id}:${rule.id}`
+          activeIds.add(key)
+          const out = await compileAndEvaluate(rule.source, env)
+          if (cancelled) return
+          const message = firstNotifyMessage(out.fired)
+          const isFired = out.fired != null && out.fired.op !== 'noop'
+          const wasFired = policyFireRef.current.get(key) ?? false
+          if (message && !wasFired) {
+            showToast(message)
+            void showLocalNotification(activity.title, message, `/${activity.code}`, `fold-policy-${key}`)
+          }
+          policyFireRef.current.set(key, isFired)
+        }
+      }
+      for (const key of policyFireRef.current.keys()) {
+        if (!activeIds.has(key)) policyFireRef.current.delete(key)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, rules])
 
   const categories = useMemo(() => {
     const set = new Set<string>()
@@ -244,6 +386,14 @@ export function HomePage() {
           <button className="icon-btn" onClick={toggleTheme} title="Toggle theme">
             {theme === 'light' ? '◐' : '◑'}
           </button>
+          <button
+            className="icon-btn noto-emoji"
+            onClick={() => setShowPolicyPanel(true)}
+            title="Notification policy"
+            aria-label="Notification policy"
+          >
+            🔔
+          </button>
           <button className="icon-btn" onClick={refresh} title="Refresh">
             ↻
           </button>
@@ -252,6 +402,7 @@ export function HomePage() {
 
       <main className="layout">
         {error && <p className="err small">Sync issue: {error}</p>}
+        {toast && <div className="home-toast">{toast}</div>}
 
         <div className="browser-controls">
           <TagBar categories={categories} active={tag} onSelect={(t) => updateUrl({ tag: t })} />
@@ -360,6 +511,17 @@ export function HomePage() {
             />
           </div>
         </div>
+      )}
+
+      {showPolicyPanel && (
+        <PolicyPanel
+          rules={rules}
+          onRulesChange={setRules}
+          onClose={() => setShowPolicyPanel(false)}
+          notifyStatus={notifyStatus}
+          onRequestNotifications={enableNotifications}
+          onShare={sharePolicy}
+        />
       )}
     </div>
   )

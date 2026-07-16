@@ -96,6 +96,9 @@ These values are always in scope:
 | `waiting_count` | `Num` | people currently waiting |
 | `spots_to_next` | `Num` | spots until the next group forms |
 | `is_ready` | `Bool` | whether the room is ready |
+| `ready_in` | `Option<Dur>` | time until the group is predicted to be ready (None if unknown) |
+| `title` | `Str` | the activity's title |
+| `code` | `Str` | the activity's room code |
 
 ## Standard library
 

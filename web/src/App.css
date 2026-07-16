@@ -1162,6 +1162,38 @@ label .opt {
   max-height: min(72vh, 760px);
   overflow: auto;
 }
+.policy-panel-card {
+  max-width: 560px;
+}
+.policy-home-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  background: color-mix(in srgb, var(--panel) 90%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text) 14%, transparent);
+  border-radius: 10px;
+  padding: 0.7rem 0.9rem;
+  font-size: 13px;
+  color: var(--muted);
+  box-shadow: 0 10px 30px var(--shadow);
+  max-height: min(80vh, 760px);
+  overflow: auto;
+}
+.home-toast {
+  position: fixed;
+  top: 22px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 130;
+  max-width: min(420px, calc(100vw - 32px));
+  background: color-mix(in srgb, var(--accent-solid, var(--accent)) 85%, var(--bg));
+  color: var(--on-accent);
+  border-radius: 999px;
+  padding: 0.55rem 1.4rem;
+  font-size: 0.9rem;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.25);
+  animation: room-alert-in 0.18s ease-out;
+}
 .policy-demo-hint {
   margin: 0;
   font-size: 12px;

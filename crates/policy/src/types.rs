@@ -246,6 +246,8 @@ pub fn global_types() -> Vec<(String, Ty)> {
             "ready_in".to_string(),
             Ty::Con("Option".to_string(), vec![Ty::dur()]),
         ),
+        ("title".to_string(), Ty::str()),
+        ("code".to_string(), Ty::str()),
     ]
 }
 
@@ -273,5 +275,7 @@ pub fn global_docs() -> Vec<(&'static str, &'static str)> {
             "ready_in",
             "time until the group is predicted to be ready (None if unknown)",
         ),
+        ("title", "the activity's title"),
+        ("code", "the activity's room code"),
     ]
 }
