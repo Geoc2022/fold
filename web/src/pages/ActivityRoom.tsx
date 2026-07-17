@@ -1,15 +1,19 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
 import { api, ensureSession } from '../api'
 import { ActivityInfo } from '../components/ActivityInfo'
 import { useTheme } from '../theme'
 import { useRoom } from '../useRoom'
-import type { Person } from '../types'
+import type { ActivityView, Person } from '../types'
 import { CreateRunForm } from '../components/CreateRunForm'
 import { RoomCanvas, type RoomAlertInput } from '../components/RoomCanvas'
 import { RoomPanel } from '../components/RoomPanel'
+import { PolicyPanel } from '../components/PolicyPanel'
 import { DEFAULT_VISUAL_CONFIG, type VisualConfig } from '../nodeVisual'
 import { readJson, writeJson } from '../storage'
+import { requestNotificationPermission } from '../notify-client'
+import { useActivityNotifications } from '../policy/notifier'
+import { loadHomeRules, loadRoomRules, roomRulesKey, type PolicyRule } from '../policy/rules'
 
 const VISUAL_KEY = 'fold.room_visual'
 const ALERT_COOLDOWN_MS = 1000
@@ -37,9 +41,13 @@ export function ActivityRoom() {
   const [proposingRun, setProposingRun] = useState(true)
   const [showInfo, setShowInfo] = useState(false)
   const [showVisual, setShowVisual] = useState(false)
+  const [showPolicyPanel, setShowPolicyPanel] = useState(false)
   const [namePrompt, setNamePrompt] = useState(false)
   const [handleInput, setHandleInput] = useState('')
   const [visual, setVisual] = useState<VisualConfig>(() => readJson(VISUAL_KEY, DEFAULT_VISUAL_CONFIG))
+  const [notifyStatus, setNotifyStatus] = useState('')
+  const [roomRules, setRoomRules] = useState<PolicyRule[] | null>(() => (code ? loadRoomRules(code) : null))
+  const [ruleEpoch, setRuleEpoch] = useState(0)
   const alertTimerRef = useRef<number | null>(null)
   const alertLastShownRef = useRef(new Map<string, number>())
   const alertQueueRef = useRef<RoomAlert[]>([])
@@ -63,6 +71,11 @@ export function ActivityRoom() {
   useEffect(() => {
     writeJson(VISUAL_KEY, visual)
   }, [visual])
+
+  useEffect(() => {
+    if (!code) return
+    setRoomRules(loadRoomRules(code))
+  }, [code])
 
   useEffect(() => {
     currentAlertRef.current = alert
@@ -97,23 +110,6 @@ export function ActivityRoom() {
       navigate(`/${code}`, { replace: true })
     }
   }, [code, data, notFound, rawParam, navigate])
-
-  if (code === null) {
-    return <RoomMessage title="Invalid link" message="Activity links are letters only." />
-  }
-
-  // A nonexistent code prompts creating a brand-new activity with that code
-  // pre-filled, rather than a dead end.
-  if (notFound) {
-    return <Navigate to={`/?code=${code}`} replace />
-  }
-
-  if (!me || loading || !data) {
-    return <RoomMessage title="fold" message={error ?? 'Loading activity...'} />
-  }
-
-  const person = me
-  const activity = data.activity
 
   const showNextAlert = () => {
     if (alertTimerRef.current != null) return
@@ -166,6 +162,51 @@ export function ActivityRoom() {
     ) {
       queue.push(normalized)
     }
+  }
+
+  const policyRules = roomRules ?? loadHomeRules()
+  const rulesRevision = useMemo(() => JSON.stringify(policyRules), [policyRules])
+
+  const saveRoomRules = useCallback((nextRules: PolicyRule[]) => {
+    if (!code) return
+    setRoomRules(nextRules)
+    writeJson(roomRulesKey(code), nextRules)
+    setRuleEpoch((n) => n + 1)
+  }, [code])
+
+  const resolveRoomRules = useCallback((_activity: ActivityView) => policyRules, [policyRules])
+  const onPolicyNotify = (_activity: ActivityView, message: string) => {
+    showAlert(message)
+  }
+
+  useActivityNotifications({
+    activities: data ? [data.activity] : [],
+    now: data?.server_time ?? Date.now(),
+    enabled: code != null && !notFound && !loading && me != null && data != null,
+    revision: `${code ?? 'none'}|${data?.activity.current_run?.id ?? 'idle'}|${ruleEpoch}|${rulesRevision}`,
+    resolveRules: resolveRoomRules,
+    onNotify: onPolicyNotify,
+  })
+
+  if (code === null) {
+    return <RoomMessage title="Invalid link" message="Activity links are letters only." />
+  }
+
+  // A nonexistent code prompts creating a brand-new activity with that code
+  // pre-filled, rather than a dead end.
+  if (notFound) {
+    return <Navigate to={`/?code=${code}`} replace />
+  }
+
+  if (!me || loading || !data) {
+    return <RoomMessage title="fold" message={error ?? 'Loading activity...'} />
+  }
+
+  const person = me
+  const activity = data.activity
+
+  async function enableNotifications() {
+    setNotifyStatus(await requestNotificationPermission())
   }
 
   async function copyRoomLink() {
@@ -270,8 +311,18 @@ export function ActivityRoom() {
         onThemeToggle={toggleTheme}
         onInfo={() => setShowInfo(true)}
         onProposeRun={() => setProposingRun(true)}
-        onAlert={showAlert}
+        onOpenPolicy={() => setShowPolicyPanel(true)}
       />
+      {showPolicyPanel && (
+        <PolicyPanel
+          rules={policyRules}
+          onRulesChange={saveRoomRules}
+          onClose={() => setShowPolicyPanel(false)}
+          hint="Rules run against this room while you're here."
+          notifyStatus={notifyStatus}
+          onRequestNotifications={enableNotifications}
+        />
+      )}
       {showInfo && (
         <div className="modal-backdrop" onClick={() => setShowInfo(false)}>
           <div className="modal-card" onClick={(e) => e.stopPropagation()}>

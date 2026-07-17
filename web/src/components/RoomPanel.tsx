@@ -1,4 +1,3 @@
-import { enablePushNotifications } from '../push-client'
 import type { ActivityView } from '../types'
 
 interface Props {
@@ -7,20 +6,12 @@ interface Props {
   onThemeToggle: () => void
   onInfo: () => void
   onProposeRun: () => void
-  onAlert: (message: string) => void
+  onOpenPolicy: () => void
 }
 
 const HELP_URL = 'https://github.com/CHANGE_ME/fold'
 
-export function RoomPanel({ activity, theme, onThemeToggle, onInfo, onProposeRun, onAlert }: Props) {
-
-  async function enablePush() {
-    try {
-      onAlert(await enablePushNotifications())
-    } catch (err) {
-      onAlert(err instanceof Error ? err.message : String(err))
-    }
-  }
+export function RoomPanel({ activity, theme, onThemeToggle, onInfo, onProposeRun, onOpenPolicy }: Props) {
 
   return (
     <div className="global-panel">
@@ -32,7 +23,7 @@ export function RoomPanel({ activity, theme, onThemeToggle, onInfo, onProposeRun
       )}
       <div className="panel-separator" />
       <button className="panel-button icon noto-emoji" onClick={() => { window.location.href = '/' }} title="Back home">🏠</button>
-      <button className="panel-button icon noto-emoji" onClick={enablePush} title="Notifications">🔔</button>
+      <button className="panel-button icon noto-emoji" onClick={onOpenPolicy} title="Notification policy">🔔</button>
       <button className="panel-button icon" onClick={onInfo} title="Room info">ℹ︎</button>
       <a className="panel-button icon" href={HELP_URL} target="_blank" rel="noopener noreferrer" title="Help">?</a>
     </div>

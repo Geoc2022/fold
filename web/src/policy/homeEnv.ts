@@ -10,7 +10,7 @@ const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
  * anonymous people sized to match those counts -- enough for policies that
  * count or check readiness, though per-person detail (name, exact ETA) isn't
  * available here. */
-export function buildHomePolicyEnv(activity: ActivityView, serverTime: number): JsonValue {
+export function buildActivityPolicyEnv(activity: ActivityView, serverTime: number): JsonValue {
   const run = activity.current_run
   const group = run?.group ?? null
   const interestedCount = run?.interested_count ?? 0
@@ -51,6 +51,8 @@ export function buildHomePolicyEnv(activity: ActivityView, serverTime: number): 
   }
   return envFromVars(vars)
 }
+
+export const buildHomePolicyEnv = buildActivityPolicyEnv
 
 function times<T>(n: number, fn: () => T): T[] {
   return Array.from({ length: Math.max(0, n) }, fn)

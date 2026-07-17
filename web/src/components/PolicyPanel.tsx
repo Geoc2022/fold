@@ -8,12 +8,21 @@ interface Props {
   rules: PolicyRule[]
   onRulesChange: (rules: PolicyRule[]) => void
   onClose: () => void
+  hint: string
   notifyStatus: string
   onRequestNotifications: () => void
-  onShare: () => void
+  onShare?: () => void
 }
 
-export function PolicyPanel({ rules, onRulesChange, onClose, notifyStatus, onRequestNotifications, onShare }: Props) {
+export function PolicyPanel({
+  rules,
+  onRulesChange,
+  onClose,
+  hint,
+  notifyStatus,
+  onRequestNotifications,
+  onShare,
+}: Props) {
   const [selectedId, setSelectedId] = useState<string>(() => rules[0]?.id ?? '')
   const selected = useMemo(() => rules.find((r) => r.id === selectedId) ?? rules[0] ?? null, [rules, selectedId])
   const [draft, setDraft] = useState(selected?.source ?? '')
@@ -86,7 +95,7 @@ export function PolicyPanel({ rules, onRulesChange, onClose, notifyStatus, onReq
           </div>
 
           <p className="policy-demo-hint">
-            Rules run against activities you've joined. {notifyStatus}
+            {hint} {notifyStatus}
           </p>
 
           <div className="policy-actions-row">
@@ -103,15 +112,17 @@ export function PolicyPanel({ rules, onRulesChange, onClose, notifyStatus, onReq
               <span className="noto-emoji" aria-hidden="true">💾</span>
               {dirty && <span className="policy-dirty-star" aria-hidden="true">*</span>}
             </button>
-            <button
-              type="button"
-              className="panel-button policy-emoji-button policy-icon-only"
-              onClick={onShare}
-              title="Share"
-              aria-label="Share"
-            >
-              <span className="noto-emoji" aria-hidden="true">🔗</span>
-            </button>
+            {onShare && (
+              <button
+                type="button"
+                className="panel-button policy-emoji-button policy-icon-only"
+                onClick={onShare}
+                title="Share"
+                aria-label="Share"
+              >
+                <span className="noto-emoji" aria-hidden="true">🔗</span>
+              </button>
+            )}
             <button
               type="button"
               className="panel-button policy-emoji-button policy-icon-only"

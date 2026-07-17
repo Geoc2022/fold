@@ -1,5 +1,5 @@
 import { AnimatePresence } from 'framer-motion'
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { api, clearPersonId, ensureSession } from '../api'
 import { useTheme } from '../theme'
@@ -14,10 +14,9 @@ import { ProposeForm } from '../components/ProposeForm'
 import { SortSelect, type SortKey } from '../components/SortSelect'
 import { TagBar } from '../components/TagBar'
 import { ViewToggle, type HomeView } from '../components/ViewToggle'
-import { requestNotificationPermission, showLocalNotification } from '../notify-client'
-import { compileAndEvaluate, type Effect } from '../policy/engine'
-import { buildHomePolicyEnv } from '../policy/homeEnv'
-import { newPolicyRule, type PolicyRule } from '../policy/rules'
+import { requestNotificationPermission } from '../notify-client'
+import { useActivityNotifications } from '../policy/notifier'
+import { DEFAULT_POLICY, effectiveRulesForCode, HOME_RULES_KEY, newPolicyRule, type PolicyRule } from '../policy/rules'
 import { readJson, writeJson } from '../storage'
 
 const CODE_PATTERN = /^[a-zA-Z]{4}$/
@@ -30,8 +29,6 @@ const CATEGORY_PRESETS = [
   { value: 'outside', label: 'Outside' },
 ]
 
-const POLICY_RULES_KEY = 'fold.policy.home.rules'
-const DEFAULT_POLICY = 'is_ready => notify "{title} is ready"'
 const TOAST_VISIBLE_MS = 4000
 
 function toBase64Url(text: string): string {
@@ -48,18 +45,6 @@ function fromBase64Url(b64: string): string {
   const bytes = new Uint8Array(binary.length)
   for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
   return new TextDecoder().decode(bytes)
-}
-
-function firstNotifyMessage(effect: Effect | null): string | null {
-  if (!effect) return null
-  if (effect.op === 'notify') return effect.message
-  if (effect.op === 'seq') {
-    for (const step of effect.steps) {
-      const msg = firstNotifyMessage(step)
-      if (msg) return msg
-    }
-  }
-  return null
 }
 
 function sortActivities(list: ActivityView[], key: SortKey): ActivityView[] {
@@ -167,11 +152,10 @@ export function HomePage() {
   const [notifyStatus, setNotifyStatus] = useState('')
   const [toast, setToast] = useState<string | null>(null)
   const toastTimerRef = useRef<number | null>(null)
-  const [rules, setRules] = useState<PolicyRule[]>(() => readJson(POLICY_RULES_KEY, [newPolicyRule(DEFAULT_POLICY)]))
-  const policyFireRef = useRef(new Map<string, boolean>())
+  const [rules, setRules] = useState<PolicyRule[]>(() => readJson(HOME_RULES_KEY, [newPolicyRule(DEFAULT_POLICY)]))
 
   useEffect(() => {
-    writeJson(POLICY_RULES_KEY, rules)
+    writeJson(HOME_RULES_KEY, rules)
   }, [rules])
 
   // A shared policy link (?policy=<base64 of source[]>) loads those rules
@@ -199,14 +183,14 @@ export function HomePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams])
 
-  function showToast(message: string) {
+  const showToast = useCallback((message: string) => {
     setToast(message)
     if (toastTimerRef.current != null) window.clearTimeout(toastTimerRef.current)
     toastTimerRef.current = window.setTimeout(() => {
       toastTimerRef.current = null
       setToast(null)
     }, TOAST_VISIBLE_MS)
-  }
+  }, [])
 
   useEffect(() => {
     return () => {
@@ -232,43 +216,19 @@ export function HomePage() {
 
   const activities = data?.activities ?? EMPTY_ACTIVITIES
   const now = data?.server_time ?? Date.now()
+  const joinedActivities = useMemo(() => activities.filter((a) => a.my_state != null), [activities])
+  const rulesRevision = useMemo(() => JSON.stringify(rules), [rules])
+  const resolveRules = useCallback((activity: ActivityView) => effectiveRulesForCode(activity.code, rules), [rules])
+  const handlePolicyNotify = useCallback((_activity: ActivityView, message: string) => showToast(message), [showToast])
 
-  // Run enabled policy rules against activities the user has joined
-  // (my_state != null) every time fresh sync data arrives, firing a
-  // notification + toast on the rising edge of a `notify` action.
-  useEffect(() => {
-    if (!data) return
-    let cancelled = false
-    const joined = activities.filter((a) => a.my_state != null)
-    const activeIds = new Set<string>()
-    ;(async () => {
-      for (const activity of joined) {
-        const env = buildHomePolicyEnv(activity, now)
-        for (const rule of rules) {
-          if (!rule.enabled || !rule.source.trim()) continue
-          const key = `${activity.id}:${rule.id}`
-          activeIds.add(key)
-          const out = await compileAndEvaluate(rule.source, env)
-          if (cancelled) return
-          const message = firstNotifyMessage(out.fired)
-          const isFired = out.fired != null && out.fired.op !== 'noop'
-          const wasFired = policyFireRef.current.get(key) ?? false
-          if (message && !wasFired) {
-            showToast(message)
-            void showLocalNotification(activity.title, message, `/${activity.code}`, `fold-policy-${key}`)
-          }
-          policyFireRef.current.set(key, isFired)
-        }
-      }
-      for (const key of policyFireRef.current.keys()) {
-        if (!activeIds.has(key)) policyFireRef.current.delete(key)
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, rules])
+  useActivityNotifications({
+    activities: joinedActivities,
+    now,
+    enabled: data != null,
+    revision: `${rulesRevision}|${joinedActivities.length}|${now}`,
+    resolveRules,
+    onNotify: handlePolicyNotify,
+  })
 
   const categories = useMemo(() => {
     const set = new Set<string>()
@@ -518,6 +478,7 @@ export function HomePage() {
           rules={rules}
           onRulesChange={setRules}
           onClose={() => setShowPolicyPanel(false)}
+          hint="Rules run against activities you've joined."
           notifyStatus={notifyStatus}
           onRequestNotifications={enableNotifications}
           onShare={sharePolicy}
