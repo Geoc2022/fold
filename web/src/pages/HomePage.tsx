@@ -9,6 +9,7 @@ import type { ActivityView, Person } from '../types'
 import { ActivityListItem } from '../components/ActivityListItem'
 import { ActivityTile } from '../components/ActivityTile'
 import { CreateTile } from '../components/CreateTile'
+import { FoldTitleFX } from '../components/FoldTitleFX'
 import { PolicyPanel } from '../components/PolicyPanel'
 import { ProposeForm } from '../components/ProposeForm'
 import { SortSelect, type SortKey } from '../components/SortSelect'
@@ -356,7 +357,7 @@ export function HomePage() {
     <div className="app">
       <header className="topbar">
         <div className="brand">
-          <h1>Fold</h1>
+          <FoldTitleFX />
         </div>
         <div className="me">
           {editingHandle ? (

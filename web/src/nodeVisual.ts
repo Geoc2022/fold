@@ -41,6 +41,8 @@ export function nodeColor(state: VisualNodeState): string {
   return '#969696'
 }
 
+export const INTRO_PALETTE = ['#FFB114', '#FA841E', '#0078D0', '#00A651', '#F0282D']
+
 /** Read a CSS custom property off `:root` (used by canvas renderers to track
  * the active theme). `fallback` is returned when the variable is unset. */
 export function getCssVar(name: string, fallback = ''): string {
