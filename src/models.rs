@@ -66,7 +66,6 @@ pub struct RunRow {
     pub reached_ready: i64,
     pub created_at: i64,
     pub updated_at: i64,
-    pub ended_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

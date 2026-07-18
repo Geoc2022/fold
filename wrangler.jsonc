@@ -27,9 +27,7 @@
     {
       "binding": "DB",
       "database_name": "fold-db",
-      // Placeholder: replace with the id from `wrangler d1 create fold-db`.
-      // Local dev (wrangler dev) uses a local SQLite file regardless of this id.
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "ed606dfd-903b-49f6-b959-81fc3a5c7cf5",
       "migrations_dir": "migrations"
     }
   ],
@@ -40,12 +38,13 @@
     "crons": ["*/15 * * * *"]
   },
 
-  // Web Push setup (optional): generate VAPID keys, then add:
-  //   "vars": { "VAPID_PUBLIC_KEY": "...", "VAPID_SUBJECT": "mailto:you@example.com" }
-  // and store the private key with:
+  // Web Push setup. The public key + subject are safe to commit; the private
+  // key is stored as a Worker secret (never in git):
   //   npx wrangler secret put VAPID_PRIVATE_KEY
-  // Without these bindings, push subscription UI reports "not configured" and
-  // in-app notifications/polling still work normally.
+  "vars": {
+    "VAPID_PUBLIC_KEY": "BI1vvIOYAapNIZFWyIIRo6BDC_jD9M82y-iaXYF3xa-LselmVLJG2AX9VSY-dIosrmEXH7veUWw5h5weQ-O-34k",
+    "VAPID_SUBJECT": "mailto:george_chemmala@brown.edu"
+  },
 
   "observability": {
     "enabled": true

@@ -7,9 +7,13 @@ node_modules
 web/node_modules
 web/dist
 
+# Policy
+web/public/policy-wasm/
+
 # Wrangler
 .wrangler
 .dev.vars
 
 # OS
 .DS_Store
+/.env

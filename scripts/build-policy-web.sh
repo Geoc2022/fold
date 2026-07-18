@@ -27,6 +27,7 @@ if command -v wasm-opt >/dev/null 2>&1; then
     --enable-reference-types \
     --enable-bulk-memory \
     --enable-nontrapping-float-to-int \
+    --enable-exception-handling \
     "$ASSET_DIR/policy_bg.wasm" -o "$ASSET_DIR/policy_bg.wasm"; then
     echo "wasm-opt failed for policy wasm; keeping unoptimized artifact"
   fi

@@ -1,0 +1,74 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      # Fast binary installs for the WASM build toolchain.
+      - name: Install build tools (worker-build, wasm-pack)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: worker-build@0.8.5,wasm-pack
+
+      - name: Install binaryen (wasm-opt)
+        run: sudo apt-get update && sudo apt-get install -y binaryen
+
+      - name: Install web dependencies
+        run: npm ci --prefix web
+
+      # --- Quality gate: any warning or failing test blocks the deploy. ---
+      - name: Rust build (warnings as errors)
+        run: cargo build --target wasm32-unknown-unknown
+        env:
+          RUSTFLAGS: "-D warnings"
+
+      - name: Rust tests
+        run: cargo test
+        env:
+          RUSTFLAGS: "-D warnings"
+
+      - name: Web lint
+        run: npm --prefix web run lint
+
+      - name: Web tests
+        run: npm --prefix web run test
+
+      # --- Database migrations (idempotent) then deploy. ---
+      - name: Apply D1 migrations (remote)
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: "4"
+          command: d1 migrations apply fold-db --remote
+
+      - name: Deploy
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: "4"

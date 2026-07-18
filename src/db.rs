@@ -47,7 +47,7 @@ const ACTIVITY_COLS: &str = "a.id, a.code, a.emoji, a.title, a.description, a.ca
     a.last_active_at, a.created_at, a.updated_at, p.handle AS proposer_handle";
 
 const RUN_COLS: &str = "id, activity_id, status, location, details, scheduled_for, expires_at, \
-    interested_count, committed_count, reached_ready, created_at, updated_at, ended_at";
+    interested_count, committed_count, reached_ready, created_at, updated_at";
 
 // ---- people ----------------------------------------------------------------
 
