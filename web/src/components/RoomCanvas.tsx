@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from 'react'
-import { forceMonochromePresentation } from './EmojiGlyph'
+import { forceMonochromePresentation } from '../emoji'
 import {
   DEFAULT_ETA_SEC,
   HOLD_MS,

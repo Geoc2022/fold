@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
+import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { api, ensureSession } from '../api'
 import { ActivityInfo } from '../components/ActivityInfo'
 import { useTheme } from '../theme'
@@ -14,6 +14,7 @@ import { readJson, writeJson } from '../storage'
 import { requestNotificationPermission } from '../notify-client'
 import { useActivityNotifications } from '../policy/notifier'
 import { loadHomeRules, loadRoomRules, roomRulesKey, type PolicyRule } from '../policy/rules'
+import { appendPolicySources, decodePolicySources, encodePolicySources } from '../policy/share'
 
 const VISUAL_KEY = 'fold.room_visual'
 const ALERT_COOLDOWN_MS = 1000
@@ -28,6 +29,7 @@ interface RoomAlert {
 export function ActivityRoom() {
   const params = useParams()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const rawParam = params.code ?? ''
   // Any letters-only link of 4+ characters resolves against its first four
   // letters (e.g. /boardgames -> BOAR), so an existing code's link can be
@@ -174,6 +176,24 @@ export function ActivityRoom() {
     setRuleEpoch((n) => n + 1)
   }, [code])
 
+  useEffect(() => {
+    const policyParam = searchParams.get('policy')
+    if (!policyParam || !code) return
+    try {
+      const sources = decodePolicySources(policyParam)
+      if (sources.length > 0) {
+        saveRoomRules(appendPolicySources(roomRules ?? loadHomeRules(), sources))
+        setShowPolicyPanel(true)
+      }
+    } catch {
+      // Ignore malformed shared policy links.
+    }
+    setSearchParams((current) => {
+      current.delete('policy')
+      return current
+    }, { replace: true })
+  }, [code, roomRules, saveRoomRules, searchParams, setSearchParams])
+
   const resolveRoomRules = useCallback((_activity: ActivityView) => policyRules, [policyRules])
   const onPolicyNotify = (_activity: ActivityView, message: string) => {
     showAlert(message)
@@ -207,6 +227,14 @@ export function ActivityRoom() {
 
   async function enableNotifications() {
     setNotifyStatus(await requestNotificationPermission())
+  }
+
+  function sharePolicy() {
+    const url = `${window.location.origin}/${activity.code}?policy=${encodeURIComponent(encodePolicySources(policyRules))}`
+    navigator.clipboard.writeText(url).then(
+      () => showAlert('Policy link copied'),
+      () => showAlert('Could not copy policy link'),
+    )
   }
 
   async function copyRoomLink() {
@@ -321,6 +349,7 @@ export function ActivityRoom() {
           hint="Rules run against this room while you're here."
           notifyStatus={notifyStatus}
           onRequestNotifications={enableNotifications}
+          onShare={sharePolicy}
         />
       )}
       {showInfo && (

@@ -17,6 +17,7 @@ import type { HomeView } from '../components/ViewToggle'
 import { requestNotificationPermission } from '../notify-client'
 import { useActivityNotifications } from '../policy/notifier'
 import { DEFAULT_POLICY, effectiveRulesForCode, HOME_RULES_KEY, newPolicyRule, type PolicyRule } from '../policy/rules'
+import { appendPolicySources, decodePolicySources, encodePolicySources } from '../policy/share'
 import { readJson, writeJson } from '../storage'
 
 const CODE_PATTERN = /^[a-zA-Z]{4}$/
@@ -30,22 +31,6 @@ const CATEGORY_PRESETS = [
 ]
 
 const TOAST_VISIBLE_MS = 4000
-
-function toBase64Url(text: string): string {
-  const bytes = new TextEncoder().encode(text)
-  let binary = ''
-  bytes.forEach((b) => {
-    binary += String.fromCharCode(b)
-  })
-  return btoa(binary)
-}
-
-function fromBase64Url(b64: string): string {
-  const binary = atob(b64)
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
-  return new TextDecoder().decode(bytes)
-}
 
 function sortActivities(list: ActivityView[], key: SortKey): ActivityView[] {
   const arr = [...list]
@@ -158,15 +143,15 @@ export function HomePage() {
     writeJson(HOME_RULES_KEY, rules)
   }, [rules])
 
-  // A shared policy link (?policy=<base64 of source[]>) loads those rules
+  // A shared policy link (?policy=<base64 of source[]>) appends those rules
   // and opens the panel, mirroring the ?code= propose-form flow above.
   useEffect(() => {
     const policyParam = searchParams.get('policy')
     if (policyParam) {
       try {
-        const sources = JSON.parse(fromBase64Url(policyParam)) as unknown
-        if (Array.isArray(sources) && sources.length > 0) {
-          setRules(sources.filter((s) => typeof s === 'string').map((s) => newPolicyRule(s)))
+        const sources = decodePolicySources(policyParam)
+        if (sources.length > 0) {
+          setRules((current) => appendPolicySources(current, sources))
           setShowPolicyPanel(true)
         }
       } catch {
@@ -203,8 +188,7 @@ export function HomePage() {
   }
 
   function sharePolicy() {
-    const sources = rules.map((r) => r.source)
-    const encoded = toBase64Url(JSON.stringify(sources))
+    const encoded = encodePolicySources(rules)
     const params = new URLSearchParams(searchParams)
     params.set('policy', encoded)
     const url = `${window.location.origin}${location.pathname}?${params.toString()}`

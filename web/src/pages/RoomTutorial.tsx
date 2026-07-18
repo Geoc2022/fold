@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { RoomCanvas } from '../components/RoomCanvas'
 import { RoomPanel } from '../components/RoomPanel'
+import { PolicyPanel } from '../components/PolicyPanel'
+import { requestNotificationPermission } from '../notify-client'
+import { loadHomeRules, loadRoomRules, roomRulesKey, type PolicyRule } from '../policy/rules'
+import { appendPolicySources, decodePolicySources, encodePolicySources } from '../policy/share'
+import { writeJson } from '../storage'
 import { useTheme } from '../theme'
 import type { ParticipantView } from '../types'
 import { Coachmark } from '../tutorial/Coachmark'
@@ -15,6 +20,7 @@ type SelfState = { state: 'lurker' | 'interested' | 'committed'; arrivalAt: numb
 const SCRIPT = ['intro', 'move', 'commit', 'ready'] as const
 
 export function RoomTutorial() {
+  const [searchParams, setSearchParams] = useSearchParams()
   const me = useMemo(() => tutorialMe(), [])
   const { theme, toggleTheme } = useTheme()
   const [self, setSelf] = useState<SelfState>({ state: 'lurker', arrivalAt: null })
@@ -22,7 +28,33 @@ export function RoomTutorial() {
   const [partyActive, setPartyActive] = useState(false)
   const crowdRef = useRef(buildFakeCrowd(4))
   const [crowdTick, setCrowdTick] = useState(0)
+  const [showPolicyPanel, setShowPolicyPanel] = useState(false)
+  const [notifyStatus, setNotifyStatus] = useState('')
+  const [rules, setRules] = useState<PolicyRule[]>(() => loadRoomRules('FOLD') ?? loadHomeRules())
   const script = useScript([...SCRIPT])
+
+  const saveRules = (nextRules: PolicyRule[]) => {
+    setRules(nextRules)
+    writeJson(roomRulesKey('FOLD'), nextRules)
+  }
+
+  useEffect(() => {
+    const policyParam = searchParams.get('policy')
+    if (!policyParam) return
+    try {
+      const sources = decodePolicySources(policyParam)
+      if (sources.length > 0) {
+        saveRules(appendPolicySources(rules, sources))
+        setShowPolicyPanel(true)
+      }
+    } catch {
+      // Ignore malformed shared policy links in the tutorial too.
+    }
+    setSearchParams((current) => {
+      current.delete('policy')
+      return current
+    }, { replace: true })
+  }, [rules, searchParams, setSearchParams])
 
   useEffect(() => {
     if (!crowdStarted) return
@@ -154,8 +186,24 @@ export function RoomTutorial() {
         onThemeToggle={toggleTheme}
         onInfo={() => {}}
         onProposeRun={() => {}}
-        onOpenPolicy={() => {}}
+        onOpenPolicy={() => setShowPolicyPanel(true)}
       />
+      {showPolicyPanel && (
+        <PolicyPanel
+          rules={rules}
+          onRulesChange={saveRules}
+          onClose={() => setShowPolicyPanel(false)}
+          hint="Rules in this tutorial are saved locally as a demo."
+          notifyStatus={notifyStatus}
+          onRequestNotifications={() => {
+            void requestNotificationPermission().then(setNotifyStatus)
+          }}
+          onShare={() => {
+            const url = `${window.location.origin}/FOLD?policy=${encodeURIComponent(encodePolicySources(rules))}`
+            void navigator.clipboard.writeText(url)
+          }}
+        />
+      )}
       <PartyBurst active={partyActive} />
     </main>
   )
