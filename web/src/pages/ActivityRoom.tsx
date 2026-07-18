@@ -15,6 +15,7 @@ import { requestNotificationPermission } from '../notify-client'
 import { useActivityNotifications } from '../policy/notifier'
 import { loadHomeRules, loadRoomRules, roomRulesKey, type PolicyRule } from '../policy/rules'
 import { appendPolicySources, decodePolicySources, encodePolicySources } from '../policy/share'
+import { buildActivityShareText } from '../activityShare'
 
 const VISUAL_KEY = 'fold.room_visual'
 const ALERT_COOLDOWN_MS = 1000
@@ -224,6 +225,8 @@ export function ActivityRoom() {
 
   const person = me
   const activity = data.activity
+  const participants = data.participants
+  const serverTime = data.server_time
 
   async function enableNotifications() {
     setNotifyStatus(await requestNotificationPermission())
@@ -241,6 +244,16 @@ export function ActivityRoom() {
     try {
       await navigator.clipboard.writeText(`${window.location.origin}/${activity.code}`)
       showAlert('Link copied')
+    } catch (err) {
+      showAlert(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  async function shareActivity() {
+    const url = `${window.location.origin}/${activity.code}`
+    try {
+      await navigator.clipboard.writeText(buildActivityShareText(activity, participants, serverTime, url))
+      showAlert('Activity copied')
     } catch (err) {
       showAlert(err instanceof Error ? err.message : String(err))
     }
@@ -340,6 +353,7 @@ export function ActivityRoom() {
         onInfo={() => setShowInfo(true)}
         onProposeRun={() => setProposingRun(true)}
         onOpenPolicy={() => setShowPolicyPanel(true)}
+        onShare={shareActivity}
       />
       {showPolicyPanel && (
         <PolicyPanel

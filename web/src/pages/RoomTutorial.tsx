@@ -7,6 +7,7 @@ import { requestNotificationPermission } from '../notify-client'
 import { loadHomeRules, loadRoomRules, roomRulesKey, type PolicyRule } from '../policy/rules'
 import { appendPolicySources, decodePolicySources, encodePolicySources } from '../policy/share'
 import { writeJson } from '../storage'
+import { buildActivityShareText } from '../activityShare'
 import { useTheme } from '../theme'
 import type { ParticipantView } from '../types'
 import { Coachmark } from '../tutorial/Coachmark'
@@ -187,6 +188,10 @@ export function RoomTutorial() {
         onInfo={() => {}}
         onProposeRun={() => {}}
         onOpenPolicy={() => setShowPolicyPanel(true)}
+        onShare={() => {
+          const url = `${window.location.origin}/FOLD`
+          void navigator.clipboard.writeText(buildActivityShareText(activity, participants, Date.now(), url))
+        }}
       />
       {showPolicyPanel && (
         <PolicyPanel

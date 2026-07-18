@@ -8,9 +8,10 @@ interface Props {
   onInfo: () => void
   onProposeRun: () => void
   onOpenPolicy: () => void
+  onShare: () => void
 }
 
-export function RoomPanel({ activity, theme, onThemeToggle, onInfo, onProposeRun, onOpenPolicy }: Props) {
+export function RoomPanel({ activity, theme, onThemeToggle, onInfo, onProposeRun, onOpenPolicy, onShare }: Props) {
 
   return (
     <div className="global-panel">
@@ -22,6 +23,7 @@ export function RoomPanel({ activity, theme, onThemeToggle, onInfo, onProposeRun
       )}
       <div className="panel-separator" />
       <button className="panel-button icon noto-emoji" onClick={() => { window.location.href = '/' }} title="Back home">🏠</button>
+      <button className="panel-button icon noto-emoji" onClick={onShare} title="Share activity">🔗</button>
       <button className="panel-button icon noto-emoji" onClick={onOpenPolicy} title="Notification policy">🔔</button>
       <button className="panel-button icon" onClick={onInfo} title="Room info">ℹ︎</button>
       <Link className="panel-button icon" to="/FOLD" title="Help">?</Link>
