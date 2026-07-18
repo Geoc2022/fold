@@ -263,6 +263,34 @@ label .opt {
 .brand h1 {
   font-size: 1.5rem;
 }
+.fold-fx {
+  position: relative;
+  display: inline-block;
+  user-select: none;
+}
+.fold-fx-text {
+  position: relative;
+  z-index: 2;
+  display: inline-block;
+}
+.fold-fx:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: 6px;
+}
+.fold-fx-canvas {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.1s linear;
+}
+.fold-fx.is-active .fold-fx-canvas {
+  opacity: 1;
+}
 .me {
   display: flex;
   align-items: center;

@@ -10,6 +10,7 @@ import { ActivityListItem } from '../components/ActivityListItem'
 import { ActivityTile } from '../components/ActivityTile'
 import { CreateTile } from '../components/CreateTile'
 import { HomeShell } from '../components/HomeShell'
+import { FoldTitleFX } from '../components/FoldTitleFX'
 import { PolicyPanel } from '../components/PolicyPanel'
 import { ProposeForm } from '../components/ProposeForm'
 import type { SortKey } from '../components/SortSelect'
@@ -299,6 +300,7 @@ export function HomePage() {
   return (
     <>
       <HomeShell
+      brandSlot={<FoldTitleFX />}
       handleSlot={editingHandle ? (
         <>
           <span ref={handleMeasureRef} className="handle-measure" aria-hidden="true">

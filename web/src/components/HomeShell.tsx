@@ -4,6 +4,7 @@ import { TagBar } from './TagBar'
 import { ViewToggle, type HomeView } from './ViewToggle'
 
 interface Props {
+  brandSlot?: ReactNode
   handleSlot: ReactNode
   theme: 'light' | 'dark'
   onThemeToggle: () => void
@@ -23,6 +24,7 @@ interface Props {
 }
 
 export function HomeShell({
+  brandSlot,
   handleSlot,
   theme,
   onThemeToggle,
@@ -44,7 +46,7 @@ export function HomeShell({
     <div className="app">
       <header className="topbar">
         <div className="brand">
-          <h1>Fold</h1>
+          {brandSlot ?? <h1>Fold</h1>}
         </div>
         <div className="me">
           {handleSlot}
