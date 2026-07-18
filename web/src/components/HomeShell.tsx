@@ -59,11 +59,11 @@ export function HomeShell({
           >
             🔔
           </button>
-          <button className="icon-btn" onClick={onRefresh} title="Refresh">
-            ↻
-          </button>
           <button className="icon-btn" onClick={onHelp} title="Help" aria-label="Help">
             ?
+          </button>
+          <button className="icon-btn" onClick={onRefresh} title="Refresh">
+            ↻
           </button>
         </div>
       </header>

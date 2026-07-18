@@ -38,12 +38,12 @@ export function HomeTour() {
     if (script.step === 'browser') {
       return {
         title: 'Browse Activities',
-        body: 'Filter by category, then switch between the grid and list views.',
+        body: 'You can filter by categories, and also switch between the grid and list views.',
       }
     }
     return {
       title: 'Fold Tile',
-      body: 'Open this tile and join /FOLD to practice node movement, ETA changes, and committing into a ready group.',
+      body: 'You can expand tiles to get their stats by clicking them. Click "Join activity" /FOLD to practice joining a room',
     }
   })()
   const spotlightTarget = script.step === 'welcome'

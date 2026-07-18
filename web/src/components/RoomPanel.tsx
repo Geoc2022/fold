@@ -22,9 +22,10 @@ export function RoomPanel({ activity, theme, onThemeToggle, onInfo, onProposeRun
         <button className="panel-button" onClick={onProposeRun}>Propose a run</button>
       )}
       <div className="panel-separator" />
-      <button className="panel-button icon noto-emoji" onClick={() => { window.location.href = '/' }} title="Back home">🏠</button>
       <button className="panel-button icon noto-emoji" onClick={onShare} title="Share activity">🔗</button>
+      <button className="panel-button icon noto-emoji" onClick={() => { window.location.href = '/' }} title="Back home">🏠</button>
       <button className="panel-button icon noto-emoji" onClick={onOpenPolicy} title="Notification policy">🔔</button>
+      <div className="panel-separator" />
       <button className="panel-button icon" onClick={onInfo} title="Room info">ℹ︎</button>
       <Link className="panel-button icon" to="/FOLD" title="Help">?</Link>
     </div>

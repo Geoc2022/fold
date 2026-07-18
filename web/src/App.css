@@ -572,6 +572,12 @@ label .opt {
   text-align: left;
   width: 100%;
 }
+
+html[data-theme="dark"] .tile,
+html[data-theme="dark"] .list-item {
+  border-color: var(--bg);
+}
+
 .list-emoji {
   font-size: 1.9rem;
   flex: 0 0 auto;
@@ -2032,7 +2038,6 @@ label .opt {
   height: 0.62rem;
   border-radius: 999px;
   border: 2px solid #fff;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.08);
 }
 .activity-state-dot.state-lurker {
   background: #969696;
