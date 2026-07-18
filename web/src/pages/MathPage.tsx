@@ -135,9 +135,12 @@ export function MathPage() {
           0,
           effectTimersRef.current,
           (message) => pushLog(`notify: ${message}`, 'warn'),
-          (state) => {
+          (state, etaDeltaSeconds) => {
             setSelfState(state as NodeState)
-            pushLog(`self -> ${state}`, 'warn')
+            const adjustment = etaDeltaSeconds == null
+              ? ''
+              : ` (${etaDeltaSeconds >= 0 ? '+' : ''}${etaDeltaSeconds}s)`
+            pushLog(`self -> ${state}${adjustment}`, 'warn')
           },
         )
       } else if (!currentlyFired && prevPolicyFireRef.current) {
@@ -505,14 +508,14 @@ function scheduleEffect(
   offsetMs: number,
   timers: number[],
   onNotify: (message: string) => void,
-  onState: (state: string) => void,
+  onState: (state: string, etaDeltaSeconds: number | null) => void,
 ): number {
   switch (effect.op) {
     case 'notify':
       timers.push(window.setTimeout(() => onNotify(effect.message), offsetMs))
       return offsetMs
     case 'state':
-      timers.push(window.setTimeout(() => onState(effect.state), offsetMs))
+      timers.push(window.setTimeout(() => onState(effect.state, effect.eta_delta_secs ?? null), offsetMs))
       return offsetMs
     case 'sleep':
       return offsetMs + Math.max(0, effect.secs) * 1000
@@ -526,5 +529,4 @@ function scheduleEffect(
       return offsetMs
   }
 }
-
 

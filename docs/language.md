@@ -135,6 +135,7 @@ happen: when a policy decides to do nothing, its action is the empty action `{}`
 
 - `notify "message"` — send a notification (supports `{interpolation}`).
 - `commit` / `interest` / `lurk` — change your own state.
+- `commit +3m` / `commit -3m` — move your commit ETA later or sooner.
 - `sleep 30s` — wait.
 - `delay action 5m` — run an action after a delay.
 - `action before target by lead` — schedule `action` to happen `lead` before an optional duration `target`.
@@ -146,6 +147,8 @@ be the whole policy:
 
 ```
 commit                              (* always commit *)
+
+commit -3m                          (* commit three minutes sooner *)
 
 #committed >= min_people => commit  (* commit only when enough people are in *)
 

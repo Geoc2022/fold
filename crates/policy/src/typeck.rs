@@ -686,6 +686,13 @@ impl<'a> Infer<'a> {
         right: &Expr,
         env: &HashMap<String, Scheme>,
     ) -> Ty {
+        if matches!(op, BinaryOp::Add | BinaryOp::Sub)
+            && matches!(left, Expr::Var(name) if name == "commit")
+        {
+            let rt = self.infer(right, env);
+            self.unify_at(&rt, &Ty::dur(), "commit ETA adjustment");
+            return Ty::action();
+        }
         let lt = self.infer(left, env);
         let rt = self.infer(right, env);
         match op {

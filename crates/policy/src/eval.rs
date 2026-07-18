@@ -83,7 +83,11 @@ pub enum Effect {
     #[serde(rename = "notify")]
     Notify { message: String },
     #[serde(rename = "state")]
-    SetState { state: String },
+    SetState {
+        state: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        eta_delta_secs: Option<i64>,
+    },
     #[serde(rename = "sleep")]
     Sleep { secs: i64 },
     #[serde(rename = "seq")]
@@ -327,7 +331,9 @@ impl Evaluator {
                 let i = self.eval(index, env)?;
                 let idx = as_num(&i)?;
                 if idx.fract() != 0.0 || idx < 0.0 {
-                    return Err(EvalError("list index must be a non-negative integer".to_string()));
+                    return Err(EvalError(
+                        "list index must be a non-negative integer".to_string(),
+                    ));
                 }
                 let idx = idx as usize;
                 match b {
@@ -374,6 +380,24 @@ impl Evaluator {
                 }
             }
             Expr::Binary { op, left, right } => {
+                if matches!(op, BinaryOp::Add | BinaryOp::Sub)
+                    && matches!(left.as_ref(), Expr::Var(name) if name == "commit")
+                {
+                    let delta = match self.eval(right, env)? {
+                        Value::Dur(secs) => secs,
+                        _ => {
+                            return Err(EvalError("commit ETA adjustment must be Dur".to_string()))
+                        }
+                    };
+                    return Ok(Value::Action(Effect::SetState {
+                        state: "committed".to_string(),
+                        eta_delta_secs: Some(if matches!(op, BinaryOp::Sub) {
+                            -delta
+                        } else {
+                            delta
+                        }),
+                    }));
+                }
                 if matches!(op, BinaryOp::And | BinaryOp::Or) {
                     // Short-circuit.
                     let l = self.eval(left, env)?;
@@ -989,18 +1013,21 @@ fn base_runtime(eval: &mut Evaluator) -> HashMap<String, Value> {
         "commit".to_string(),
         Value::Action(Effect::SetState {
             state: "committed".to_string(),
+            eta_delta_secs: None,
         }),
     );
     env.insert(
         "interest".to_string(),
         Value::Action(Effect::SetState {
             state: "interested".to_string(),
+            eta_delta_secs: None,
         }),
     );
     env.insert(
         "lurk".to_string(),
         Value::Action(Effect::SetState {
             state: "lurker".to_string(),
+            eta_delta_secs: None,
         }),
     );
     // Trait methods (built-in traits) as dispatchable method values.

@@ -29,7 +29,7 @@ export type PolicyValue =
 /** The structured effect program produced by evaluating a policy action. */
 export type Effect =
   | { op: 'notify'; message: string }
-  | { op: 'state'; state: string }
+  | { op: 'state'; state: string; eta_delta_secs?: number }
   | { op: 'sleep'; secs: number }
   | { op: 'seq'; steps: Effect[] }
   | { op: 'noop' }

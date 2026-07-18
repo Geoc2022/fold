@@ -81,6 +81,7 @@ Plus `List<T>`, tuples `(A, B)`, functions `A -> B`, and `Action`.\n\n",
         "An action is what a policy does when its condition holds:\n\n\
 - `notify \"message\"` — send a notification (supports `{interpolation}`).\n\
 - `commit` / `interest` / `lurk` — change your own state.\n\
+- `commit +3m` / `commit -3m` — move your commit ETA later or sooner.\n\
 - `sleep 30s` — wait.\n\
 - `delay action 5m` — run an action after a delay.\n\
 - `{ a1, a2 }` — do several actions in order.\n\

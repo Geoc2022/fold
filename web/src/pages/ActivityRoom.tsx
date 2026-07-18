@@ -16,6 +16,7 @@ import { useActivityNotifications } from '../policy/notifier'
 import { loadHomeRules, loadRoomRules, roomRulesKey, type PolicyRule } from '../policy/rules'
 import { appendPolicySources, decodePolicySources, encodePolicySources } from '../policy/share'
 import { buildActivityShareText } from '../activityShare'
+import { policyCommitEta } from '../policy/commit'
 
 const VISUAL_KEY = 'fold.room_visual'
 const ALERT_COOLDOWN_MS = 1000
@@ -199,6 +200,17 @@ export function ActivityRoom() {
   const onPolicyNotify = (_activity: ActivityView, message: string) => {
     showAlert(message)
   }
+  const onPolicyCommit = async (policyActivity: ActivityView, etaDeltaSeconds: number | null) => {
+    const run = policyActivity.current_run
+    if (!run) return
+    const eta = policyCommitEta(policyActivity, etaDeltaSeconds, Date.now())
+    try {
+      await api.commit(run.id, eta)
+      refresh()
+    } catch (err) {
+      showAlert(err instanceof Error ? err.message : String(err))
+    }
+  }
 
   useActivityNotifications({
     activities: data ? [data.activity] : [],
@@ -207,6 +219,7 @@ export function ActivityRoom() {
     revision: `${code ?? 'none'}|${data?.activity.current_run?.id ?? 'idle'}|${ruleEpoch}|${rulesRevision}`,
     resolveRules: resolveRoomRules,
     onNotify: onPolicyNotify,
+    onCommit: onPolicyCommit,
   })
 
   if (code === null) {

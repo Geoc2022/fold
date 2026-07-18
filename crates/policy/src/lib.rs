@@ -327,6 +327,8 @@ mod smoke {
         ok("any is_committed interested => { notify \"someone committed\", commit }");
         // A policy can be a bare action (no `=>` rule).
         ok("commit");
+        ok("commit +3m");
+        ok("commit -3m");
         // A `match` must be exhaustive; a `_` arm covers the rest.
         ok("match #committed with | 2 -> commit | 3 -> lurk | _ -> {}");
         // Notify a duration before the group is ready, via `ready_in`.
@@ -442,7 +444,8 @@ mod smoke {
                         message: "long wait".to_string()
                     },
                     Effect::SetState {
-                        state: "committed".to_string()
+                        state: "committed".to_string(),
+                        eta_delta_secs: None,
                     }
                 ]
             })
@@ -507,7 +510,9 @@ mod smoke {
         bad("match today with | Mon -> true => lurk"); // non-exhaustive
         bad("nope > 3 => lurk"); // unknown name
         bad("notify 3 => lurk"); // notify needs Str
-                                 // impl method body checked against the trait signature (Str, not a list).
+        bad("commit + 3");
+        bad("commit - true");
+        // impl method body checked against the trait signature (Str, not a list).
         bad("trait W<a> {\n  w: a -> Num\n}\nimpl W<Str> {\n  w s = #s\n}\ntrue => lurk");
     }
 
@@ -533,6 +538,15 @@ mod smoke {
         let res = evaluate_policy_safe(&policy, &env);
         assert_eq!(res.error, None);
         assert!(matches!(res.fired, Some(Effect::Notify { message }) if message == "hi A"));
+
+        let adjusted = compile_policy_with_diagnostics("commit -3m")
+            .policy
+            .unwrap();
+        let adjusted = evaluate_policy_safe(&adjusted, &EvalEnv::default());
+        assert_eq!(
+            serde_json::to_string(&adjusted.fired.unwrap()).unwrap(),
+            r#"{"op":"state","state":"committed","eta_delta_secs":-180}"#
+        );
     }
 
     #[test]
@@ -614,9 +628,26 @@ true => delay (notify \"go\") 5s";
         assert_eq!(
             fired,
             Some(Effect::SetState {
-                state: "lurker".to_string()
+                state: "lurker".to_string(),
+                eta_delta_secs: None,
+            })
+        );
+
+        let plus = eval_program(&compile("commit +3m"), &EvalEnv::default()).expect("eval");
+        assert_eq!(
+            plus,
+            Some(Effect::SetState {
+                state: "committed".to_string(),
+                eta_delta_secs: Some(180),
+            })
+        );
+        let minus = eval_program(&compile("commit -3m"), &EvalEnv::default()).expect("eval");
+        assert_eq!(
+            minus,
+            Some(Effect::SetState {
+                state: "committed".to_string(),
+                eta_delta_secs: Some(-180),
             })
         );
     }
 }
-
