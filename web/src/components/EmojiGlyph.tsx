@@ -3,7 +3,7 @@ interface Props {
   className?: string
 }
 
-function forceMonochromePresentation(emoji: string): string {
+export function forceMonochromePresentation(emoji: string): string {
   if (!emoji) return emoji
   const VS15 = '\uFE0E'
   const VS16 = '\uFE0F'

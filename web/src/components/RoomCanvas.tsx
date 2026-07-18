@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef } from 'react'
+import { forceMonochromePresentation } from './EmojiGlyph'
 import {
   DEFAULT_ETA_SEC,
   HOLD_MS,
@@ -867,6 +868,19 @@ function draw(
       ? scaleHoldEta(etaFromHold(Math.min(HOLD_MS, performance.now() - pointer!.downAt)), maxEta)
       : etaRemainingSeconds(labelNode.arrivalAt, now)
     lctx.fillText(formatEta(eta), labelNode.x, labelNode.y)
+  }
+
+  const activityGlyph = forceMonochromePresentation(activity.emoji)
+  if (activityGlyph) {
+    const fs = Math.max(12, Math.round(vis.nodeRadius * 0.9))
+    lctx.font = `700 ${fs}px "Noto Emoji", sans-serif`
+    lctx.textAlign = 'center'
+    lctx.textBaseline = 'middle'
+    for (const n of nodes) {
+      if (n.isMe && n.state !== 'arrived' && n !== labelNode) {
+        lctx.fillText(activityGlyph, n.x, n.y)
+      }
+    }
   }
 
   ctx.save()
