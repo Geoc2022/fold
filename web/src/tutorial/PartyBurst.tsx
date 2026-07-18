@@ -15,9 +15,11 @@ interface Particle {
   spin: number
 }
 
-const PARTY_WEBP = 'https://fonts.gstatic.com/s/e/notoemoji/latest/1f973/512.webp'
+// const PARTY_WEBP = 'https://fonts.gstatic.com/s/e/notoemoji/latest/1f973/512.webp'
+// const PARTY_WEBP = "https://fonts.gstatic.com/s/e/notoemoji/latest/1f386/512.webp"
+const PARTY_WEBP = "https://fonts.gstatic.com/s/e/notoemoji/latest/1f389/512.webp"
 
-export function PartyBurst({ active, count = 22 }: Props) {
+export function PartyBurst({ active, count = 20 }: Props) {
   const [particles, setParticles] = useState<Particle[]>([])
   const [loaded, setLoaded] = useState(false)
   const nextIdRef = useRef(1)
@@ -48,7 +50,7 @@ export function PartyBurst({ active, count = 22 }: Props) {
   useEffect(() => {
     if (particles.length === 0) return
     let raf = 0
-    const gravity = 0.36
+    const gravity = 0.05
     const tick = () => {
       setParticles((prev) =>
         prev
@@ -77,7 +79,7 @@ export function PartyBurst({ active, count = 22 }: Props) {
           className="party-particle"
           style={{ transform: `translate(${p.x}px, ${p.y}px) rotate(${p.rot}deg)` }}
         >
-          {loaded ? <img src={PARTY_WEBP} alt="" /> : <span className="noto-emoji">🥳</span>}
+          {loaded ? <img src={PARTY_WEBP} alt="" /> : <span className="noto-emoji">🎉</span>}
         </span>
       ))}
     </div>

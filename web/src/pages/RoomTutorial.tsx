@@ -126,30 +126,30 @@ export function RoomTutorial() {
     if (script.step === 'intro') {
       return {
         title: 'Welcome to /FOLD',
-        body: 'A lurker is watching, an interested person is considering joining, and a committed person has chosen an ETA.',
+        body: 'There are 3 types of people: lurkers, interested, and committed. And, as you move closer to the center, you progress borough these stages to join the group.',
       }
     }
     if (script.step === 'lurker') {
       return {
         title: 'Lurker',
-        body: 'Your node starts outside the rings. Tap it or drag it inward once to become interested.',
+        body: 'Your node starts on the edge. Tap it or drag it closer to the center once to become interested.',
       }
     }
     if (script.step === 'interested') {
       return {
         title: 'Interested',
-        body: 'Interest starts the faux crowd. Hold your node or pull it toward the center to commit with an ETA.',
+        body: 'Looks like there are some other people who are interested too. To commit and complete the group, hold your node or pull it toward the center.',
       }
     }
     if (script.step === 'committed') {
       return {
         title: 'Committed',
-        body: 'Your ETA controls your distance from the center. Keep the commitment while the other four people arrive.',
+        body: 'The group arrives when everyone makes it to the center, so ETA controls your distance from the center. Keep the commitment while the other four people arrive.',
       }
     }
     return {
-      title: 'Group Ready',
-      body: 'You formed a full group (min 5). Celebration mode is live.',
+      title: 'Group Ready!',
+      body: 'The group is ready after all 5 people have committed (the min group size is 5). Go to the "Live homepage" to try out fold out for real',
     }
   })()
 

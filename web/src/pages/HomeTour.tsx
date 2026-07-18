@@ -25,14 +25,14 @@ export function HomeTour() {
   const coach = (() => {
     if (script.step === 'welcome') {
       return {
-        title: 'Welcome',
-        body: 'This page teaches the homepage controls. You can rename yourself, toggle theme, set policy, refresh, and open help.',
+        title: 'Welcome to Fold!',
+        body: 'This page teaches the homepage controls. You can can always come back to this page by clicking the question mark at the top right or going to this page (/fold)',
       }
     }
     if (script.step === 'controls') {
       return {
         title: 'Homepage Buttons',
-        body: <>Use ? for help, <span className="noto-emoji">🔔</span> for policy rules, and ↻ to refresh activity state.</>,
+        body: <>Rename your user by clicking the username, click ◑ to change the theme, <span className="noto-emoji">🔔</span> for policy rules, ? for help, and ↻ to refresh the page.</>,
       }
     }
     if (script.step === 'browser') {
