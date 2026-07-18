@@ -902,9 +902,11 @@ function draw(
     lctx.font = `700 ${fs}px "Noto Emoji", sans-serif`
     lctx.textAlign = 'center'
     lctx.textBaseline = 'middle'
+    const metrics = lctx.measureText(activityGlyph)
+    const glyphCenterOffset = ((metrics.actualBoundingBoxAscent || 0) - (metrics.actualBoundingBoxDescent || 0)) / 2
     for (const n of nodes) {
       if (n.isMe && n.state !== 'arrived' && n !== labelNode) {
-        lctx.fillText(activityGlyph, n.x, n.y)
+        lctx.fillText(activityGlyph, n.x, n.y + glyphCenterOffset)
       }
     }
   }
