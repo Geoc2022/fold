@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   HOLD_MS,
-  MAX_ETA_MIN,
-  MIN_ETA_MIN,
+  MAX_ETA_SEC,
+  MIN_ETA_SEC,
   REACHABLE_MS,
   etaFromHold,
   etaRemaining,
@@ -40,13 +40,13 @@ describe('nodeColor', () => {
 })
 
 describe('etaFromHold', () => {
-  it('clamps to MIN_ETA_MIN at zero hold', () => {
-    expect(etaFromHold(0)).toBe(MAX_ETA_MIN)
+  it('clamps to MIN_ETA_SEC at zero hold', () => {
+    expect(etaFromHold(0)).toBe(MAX_ETA_SEC)
   })
 
-  it('clamps to MIN_ETA_MIN at or beyond HOLD_MS', () => {
-    expect(etaFromHold(HOLD_MS)).toBe(MIN_ETA_MIN)
-    expect(etaFromHold(HOLD_MS * 2)).toBe(MIN_ETA_MIN)
+  it('clamps to MIN_ETA_SEC at or beyond HOLD_MS', () => {
+    expect(etaFromHold(HOLD_MS)).toBe(MIN_ETA_SEC)
+    expect(etaFromHold(HOLD_MS * 2)).toBe(MIN_ETA_SEC)
   })
 
   it('is monotonically non-increasing as hold time grows', () => {
@@ -61,8 +61,8 @@ describe('etaRemaining', () => {
     expect(etaRemaining(null, 1000)).toBe(0)
   })
 
-  it('rounds up remaining minutes and never goes negative', () => {
-    expect(etaRemaining(60_000, 0)).toBe(1)
+  it('rounds up remaining seconds and never goes negative', () => {
+    expect(etaRemaining(1_000, 0)).toBe(1)
     expect(etaRemaining(1000, 5000)).toBe(0) // already in the past
   })
 })

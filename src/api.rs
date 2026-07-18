@@ -12,7 +12,7 @@ const ACTIVITY_LIST_LIMIT: i64 = 100;
 const NOTIFICATION_LIMIT: i64 = 50;
 const DEFAULT_EMOJI: &str = "🎲";
 const DEFAULT_CATEGORY: &str = "general";
-const DEFAULT_COMMIT_MINUTES: i64 = 30;
+const DEFAULT_COMMIT_SECONDS: i64 = 30 * 60;
 /// Activities disappear from the homepage after this long without a run;
 /// running the activity again resets the clock.
 const ACTIVITY_VISIBLE_WINDOW_MS: i64 = 7 * 24 * 60 * 60 * 1000;
@@ -360,8 +360,8 @@ pub async fn activity_create(mut req: Request, ctx: RouteContext<()>) -> Result<
 
     let emoji = clean_emoji(body.emoji.as_deref());
     let category = clean_category(body.category.as_deref());
-    let duration_minutes = body.duration_minutes.unwrap_or(30).clamp(0, 24 * 60);
-    let max_commit_minutes = body.max_commit_minutes.unwrap_or(30).clamp(0, 24 * 60);
+    let duration_seconds = body.duration_seconds.unwrap_or(30 * 60).clamp(0, 24 * 60 * 60);
+    let max_commit_seconds = body.max_commit_seconds.unwrap_or(30 * 60).clamp(0, 24 * 60 * 60);
 
     let now = now_ms();
     let id = new_id();
@@ -374,7 +374,7 @@ pub async fn activity_create(mut req: Request, ctx: RouteContext<()>) -> Result<
     db.prepare(
         "INSERT INTO activities \
           (id, code, emoji, title, description, category, proposer_id, min_people, max_people, group_multiple, \
-            grouping_mode, allow_guests, private_by_link, duration_minutes, max_commit_minutes, current_run_id, times_run, \
+            grouping_mode, allow_guests, private_by_link, duration_seconds, max_commit_seconds, current_run_id, times_run, \
             players_served, interest_total, commit_total, last_active_at, created_at, updated_at) \
           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, 0, 0, 0, 0, ?17, ?17, ?17)",
     )
@@ -396,8 +396,8 @@ pub async fn activity_create(mut req: Request, ctx: RouteContext<()>) -> Result<
         } else {
             0
         }),
-        db::i(duration_minutes as i64),
-        db::i(max_commit_minutes as i64),
+        db::i(duration_seconds as i64),
+        db::i(max_commit_seconds as i64),
         db::s(&run_id),
         db::i(now),
     ])?
@@ -508,16 +508,16 @@ pub async fn activity_update(mut req: Request, ctx: RouteContext<()>) -> Result<
 
     let emoji = clean_emoji(body.emoji.as_deref());
     let category = clean_category(body.category.as_deref());
-    let duration_minutes = body.duration_minutes.unwrap_or(30).clamp(0, 24 * 60);
-    let max_commit_minutes = body.max_commit_minutes.unwrap_or(30).clamp(0, 24 * 60);
+    let duration_seconds = body.duration_seconds.unwrap_or(30 * 60).clamp(0, 24 * 60 * 60);
+    let max_commit_seconds = body.max_commit_seconds.unwrap_or(30 * 60).clamp(0, 24 * 60 * 60);
     let now = now_ms();
 
     db.prepare(
         "UPDATE activities SET \
             emoji = ?1, title = ?2, description = ?3, category = ?4, \
             min_people = ?5, max_people = ?6, group_multiple = ?7, grouping_mode = ?8, \
-            allow_guests = ?9, private_by_link = ?10, duration_minutes = ?11, \
-            max_commit_minutes = ?12, updated_at = ?13 \
+            allow_guests = ?9, private_by_link = ?10, duration_seconds = ?11, \
+            max_commit_seconds = ?12, updated_at = ?13 \
          WHERE id = ?14",
     )
     .bind(&[
@@ -539,8 +539,8 @@ pub async fn activity_update(mut req: Request, ctx: RouteContext<()>) -> Result<
         } else {
             0
         }),
-        db::i(duration_minutes as i64),
-        db::i(max_commit_minutes as i64),
+        db::i(duration_seconds as i64),
+        db::i(max_commit_seconds as i64),
         db::i(now),
         db::s(&existing.id),
     ])?
@@ -784,7 +784,7 @@ pub async fn run_commit(mut req: Request, ctx: RouteContext<()>) -> Result<Respo
 
     let body_text = req.text().await.unwrap_or_default();
     let body: CommitRun = if body_text.trim().is_empty() {
-        CommitRun { eta_minutes: None }
+        CommitRun { eta_seconds: None }
     } else {
         match serde_json::from_str(&body_text) {
             Ok(b) => b,
@@ -795,11 +795,11 @@ pub async fn run_commit(mut req: Request, ctx: RouteContext<()>) -> Result<Respo
     // Re-stamp `now` after the body read (an await point) rather than
     // reusing the pre-reap timestamp, matching prior behavior.
     let now = now_ms();
-    let max_commit = activity.max_commit_minutes.max(0);
-    let default_eta = max_commit.min(DEFAULT_COMMIT_MINUTES);
-    let requested_eta = body.eta_minutes.map(|v| v as i64).unwrap_or(default_eta);
+    let max_commit = activity.max_commit_seconds.max(0);
+    let default_eta = max_commit.min(DEFAULT_COMMIT_SECONDS);
+    let requested_eta = body.eta_seconds.map(|v| v as i64).unwrap_or(default_eta);
     let eta = requested_eta.clamp(0, max_commit);
-    let arrival_at = now + eta * 60 * 1000;
+    let arrival_at = now + eta * 1000;
     db::upsert_participation(&db, &run.id, &person.id, "committed", Some(arrival_at), now).await?;
     db::touch_person(&db, &person.id, now).await?;
     db::touch_activity_last_active(&db, &activity.id, now).await?;

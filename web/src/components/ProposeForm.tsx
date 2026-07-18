@@ -37,8 +37,8 @@ interface LastProposal {
   allow_guests?: boolean
   private_by_link?: boolean
   location?: string
-  duration_minutes?: number
-  max_commit_minutes?: number
+  duration_seconds?: number
+  max_commit_seconds?: number
   category?: string
 }
 
@@ -93,10 +93,10 @@ export function ProposeForm({ initialCode, activity, categoryOptions, onCreated,
   const [allowGuests, setAllowGuests] = useState(activity?.allow_guests ?? last.allow_guests ?? true)
   const [privateByLink, setPrivateByLink] = useState(activity?.private_by_link ?? last.private_by_link ?? false)
   const [category, setCategory] = useState(activity?.category ?? last.category ?? categoryOptions[0]?.value ?? 'board game')
-  const [durationMinutes, setDurationMinutes] = useState(activity?.duration_minutes ?? last.duration_minutes ?? 30)
-  const [maxCommitMinutes, setMaxCommitMinutes] = useState(activity?.max_commit_minutes ?? last.max_commit_minutes ?? 30)
-  const [durationInput, setDurationInput] = useState(() => minutesToHuman(activity?.duration_minutes ?? last.duration_minutes ?? 30))
-  const [maxCommitInput, setMaxCommitInput] = useState(() => minutesToHuman(activity?.max_commit_minutes ?? last.max_commit_minutes ?? 30))
+  const [durationSeconds, setDurationSeconds] = useState(activity?.duration_seconds ?? last.duration_seconds ?? 30 * 60)
+  const [maxCommitSeconds, setMaxCommitSeconds] = useState(activity?.max_commit_seconds ?? last.max_commit_seconds ?? 30 * 60)
+  const [durationInput, setDurationInput] = useState(() => secondsToHuman(activity?.duration_seconds ?? last.duration_seconds ?? 30 * 60))
+  const [maxCommitInput, setMaxCommitInput] = useState(() => secondsToHuman(activity?.max_commit_seconds ?? last.max_commit_seconds ?? 30 * 60))
   const [code, setCode] = useState(initialCode ?? '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -121,10 +121,10 @@ export function ProposeForm({ initialCode, activity, categoryOptions, onCreated,
     setAllowGuests(activity.allow_guests)
     setPrivateByLink(activity.private_by_link)
     setCategory(activity.category)
-    setDurationMinutes(activity.duration_minutes)
-    setMaxCommitMinutes(activity.max_commit_minutes)
-    setDurationInput(minutesToHuman(activity.duration_minutes))
-    setMaxCommitInput(minutesToHuman(activity.max_commit_minutes))
+    setDurationSeconds(activity.duration_seconds)
+    setMaxCommitSeconds(activity.max_commit_seconds)
+    setDurationInput(secondsToHuman(activity.duration_seconds))
+    setMaxCommitInput(secondsToHuman(activity.max_commit_seconds))
   }, [activity])
 
   // Esc closes the form, same as clicking Cancel.
@@ -148,13 +148,13 @@ export function ProposeForm({ initialCode, activity, categoryOptions, onCreated,
   function handleDurationChange(value: string) {
     setDurationInput(value)
     const parsed = parseDuration(value)
-    if (parsed !== null) setDurationMinutes(clampMinutes(parsed, 0, 24 * 60))
+    if (parsed !== null) setDurationSeconds(clampSeconds(parsed, 0, 24 * 60 * 60))
   }
 
   function handleMaxEtaChange(value: string) {
     setMaxCommitInput(value)
     const parsed = parseDuration(value)
-    if (parsed !== null) setMaxCommitMinutes(clampMinutes(parsed, 0, 24 * 60))
+    if (parsed !== null) setMaxCommitSeconds(clampSeconds(parsed, 0, 24 * 60 * 60))
   }
 
   async function submit(e: React.FormEvent) {
@@ -175,8 +175,8 @@ export function ProposeForm({ initialCode, activity, categoryOptions, onCreated,
       allow_guests: allowGuests,
       private_by_link: privateByLink,
       category,
-      duration_minutes: durationMinutes,
-      max_commit_minutes: maxCommitMinutes,
+      duration_seconds: durationSeconds,
+      max_commit_seconds: maxCommitSeconds,
       location: location.trim() || null,
       expires_at: null,
     }
@@ -196,8 +196,8 @@ export function ProposeForm({ initialCode, activity, categoryOptions, onCreated,
           allow_guests: allowGuests,
           private_by_link: privateByLink,
           category,
-          duration_minutes: durationMinutes,
-          max_commit_minutes: maxCommitMinutes,
+          duration_seconds: durationSeconds,
+          max_commit_seconds: maxCommitSeconds,
         })
       } else if (explicitCode) {
         saved = await api.createActivity({ ...basePayload, code: explicitCode })
@@ -213,8 +213,8 @@ export function ProposeForm({ initialCode, activity, categoryOptions, onCreated,
         allow_guests: allowGuests,
         private_by_link: privateByLink,
         location: location.trim() || undefined,
-        duration_minutes: durationMinutes,
-        max_commit_minutes: maxCommitMinutes,
+        duration_seconds: durationSeconds,
+        max_commit_seconds: maxCommitSeconds,
         category,
       })
       onCreated(saved)
@@ -321,7 +321,7 @@ export function ProposeForm({ initialCode, activity, categoryOptions, onCreated,
                 placeholder="10m 30s"
                 value={durationInput}
                 onChange={(e) => handleDurationChange(e.target.value)}
-                onBlur={() => setDurationInput(minutesToHuman(durationMinutes))}
+                onBlur={() => setDurationInput(secondsToHuman(durationSeconds))}
               />
               <span className="hint">How long someone stays in the arrived state</span>
             </label>
@@ -332,7 +332,7 @@ export function ProposeForm({ initialCode, activity, categoryOptions, onCreated,
                 placeholder="30m"
                 value={maxCommitInput}
                 onChange={(e) => handleMaxEtaChange(e.target.value)}
-                onBlur={() => setMaxCommitInput(minutesToHuman(maxCommitMinutes))}
+                onBlur={() => setMaxCommitInput(secondsToHuman(maxCommitSeconds))}
               />
               <span className="hint">Largest ETA someone can choose when committing</span>
             </label>
@@ -422,12 +422,14 @@ export function ProposeForm({ initialCode, activity, categoryOptions, onCreated,
   )
 }
 
-function minutesToHuman(total: number) {
+function secondsToHuman(total: number) {
   const clamped = Math.max(0, total)
-  const hours = Math.floor(clamped / 60)
-  const minutes = clamped % 60
-  if (hours > 0) return `${hours}h ${minutes}m`.trim()
-  return `${minutes}m`
+  const hours = Math.floor(clamped / 3600)
+  const minutes = Math.floor((clamped % 3600) / 60)
+  const seconds = clamped % 60
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`.trim()
+  if (minutes > 0) return `${minutes}m ${seconds}s`.trim()
+  return `${seconds}s`
 }
 
 function parseDuration(text: string): number | null {
@@ -471,10 +473,10 @@ function parseDuration(text: string): number | null {
     }
   }
   if (!matched) return null
-  return Math.max(0, Math.round(seconds / 60))
+  return Math.max(0, seconds)
 }
 
-function clampMinutes(value: number, min: number, max: number) {
+function clampSeconds(value: number, min: number, max: number) {
   if (Number.isNaN(value)) return min
   return Math.max(min, Math.min(max, value))
 }

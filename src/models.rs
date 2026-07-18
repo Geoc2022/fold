@@ -37,8 +37,8 @@ pub struct ActivityRow {
     pub grouping_mode: String,
     pub allow_guests: i64,
     pub private_by_link: i64,
-    pub duration_minutes: i64,
-    pub max_commit_minutes: i64,
+    pub duration_seconds: i64,
+    pub max_commit_seconds: i64,
     pub current_run_id: Option<String>,
     pub times_run: i64,
     pub players_served: i64,
@@ -117,8 +117,8 @@ pub struct CreateActivity {
     pub grouping_mode: Option<String>,
     pub allow_guests: Option<bool>,
     pub private_by_link: Option<bool>,
-    pub duration_minutes: Option<u32>,
-    pub max_commit_minutes: Option<u32>,
+    pub duration_seconds: Option<u32>,
+    pub max_commit_seconds: Option<u32>,
     // First-run fields.
     pub location: Option<String>,
     pub details: Option<String>,
@@ -149,8 +149,8 @@ pub struct UpdateActivity {
     pub grouping_mode: Option<String>,
     pub allow_guests: Option<bool>,
     pub private_by_link: Option<bool>,
-    pub duration_minutes: Option<u32>,
-    pub max_commit_minutes: Option<u32>,
+    pub duration_seconds: Option<u32>,
+    pub max_commit_seconds: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -161,9 +161,9 @@ pub struct ScheduleRun {
 
 #[derive(Debug, Deserialize)]
 pub struct CommitRun {
-    /// Minutes from now until the participant can make it. Clamped to
-    /// 0..=activity.max_commit_minutes.
-    pub eta_minutes: Option<u32>,
+    /// Seconds from now until the participant can make it. Clamped to
+    /// 0..=activity.max_commit_seconds.
+    pub eta_seconds: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -247,8 +247,8 @@ pub struct ActivityView {
     pub grouping_mode: String,
     pub allow_guests: bool,
     pub private_by_link: bool,
-    pub duration_minutes: i64,
-    pub max_commit_minutes: i64,
+    pub duration_seconds: i64,
+    pub max_commit_seconds: i64,
     pub times_run: i64,
     pub players_served: i64,
     pub interest_total: i64,
@@ -298,8 +298,8 @@ impl ActivityView {
             grouping_mode: row.grouping_mode,
             allow_guests: row.allow_guests != 0,
             private_by_link: row.private_by_link != 0,
-            duration_minutes: row.duration_minutes,
-            max_commit_minutes: row.max_commit_minutes,
+            duration_seconds: row.duration_seconds,
+            max_commit_seconds: row.max_commit_seconds,
             times_run: row.times_run,
             players_served: row.players_served,
             interest_total: row.interest_total,

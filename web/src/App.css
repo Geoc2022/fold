@@ -2046,3 +2046,77 @@ label .opt {
 .activity-state-dot.state-arrived {
   background: #f0282d;
 }
+
+.tutorial-home-hud,
+.tutorial-room-hud {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 70;
+  display: grid;
+  gap: 10px;
+  max-width: min(420px, calc(100vw - 32px));
+}
+
+.tutorial-coachmark {
+  background: color-mix(in oklab, var(--bg-elev, #fff) 94%, var(--accent, #06b6d4));
+  border: 1px solid var(--line, #d1d5db);
+  border-radius: 14px;
+  padding: 12px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.12);
+}
+
+.tutorial-coachmark h3 {
+  margin: 0 0 6px;
+  font-size: 14px;
+}
+
+.tutorial-coachmark p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.tutorial-actions {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.tutorial-links {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.tutorial-links a {
+  font-size: 12px;
+}
+
+.party-burst {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 75;
+}
+
+.party-particle {
+  position: absolute;
+  width: 42px;
+  height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  will-change: transform;
+}
+
+.party-particle img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.party-particle .noto-emoji {
+  font-size: 32px;
+}

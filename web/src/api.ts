@@ -166,10 +166,10 @@ export const api = {
     })
   },
 
-  commit(runId: string, eta_minutes?: number): Promise<ActivityView> {
+  commit(runId: string, eta_seconds?: number): Promise<ActivityView> {
     return request<ActivityView>(`/api/runs/${runId}/commit`, {
       method: 'POST',
-      body: eta_minutes == null ? undefined : { eta_minutes },
+      body: eta_seconds == null ? undefined : { eta_seconds },
     })
   },
 

@@ -9,11 +9,11 @@ import type { ActivityView, Person } from '../types'
 import { ActivityListItem } from '../components/ActivityListItem'
 import { ActivityTile } from '../components/ActivityTile'
 import { CreateTile } from '../components/CreateTile'
+import { HomeShell } from '../components/HomeShell'
 import { PolicyPanel } from '../components/PolicyPanel'
 import { ProposeForm } from '../components/ProposeForm'
-import { SortSelect, type SortKey } from '../components/SortSelect'
-import { TagBar } from '../components/TagBar'
-import { ViewToggle, type HomeView } from '../components/ViewToggle'
+import type { SortKey } from '../components/SortSelect'
+import type { HomeView } from '../components/ViewToggle'
 import { requestNotificationPermission } from '../notify-client'
 import { useActivityNotifications } from '../policy/notifier'
 import { DEFAULT_POLICY, effectiveRulesForCode, HOME_RULES_KEY, newPolicyRule, type PolicyRule } from '../policy/rules'
@@ -313,65 +313,47 @@ export function HomePage() {
   }
 
   return (
-    <div className="app">
-      <header className="topbar">
-        <div className="brand">
-          <h1>Fold</h1>
-        </div>
-        <div className="me">
-          {editingHandle ? (
-            <>
-              <span ref={handleMeasureRef} className="handle-measure" aria-hidden="true">
-                {handleInput || ' '}
-              </span>
-              <input
-                className="handle-edit"
-                autoFocus
-                maxLength={40}
-                style={{ width: handleWidth }}
-                value={handleInput}
-                onChange={(e) => setHandleInput(e.target.value)}
-                onBlur={commitHandle}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') commitHandle()
-                  if (e.key === 'Escape') setEditingHandle(false)
-                }}
-              />
-            </>
-          ) : (
-            <button type="button" className="me-handle" onClick={startEditHandle} title="Click to rename">
-              {me.handle}
-            </button>
-          )}
-          <button className="icon-btn" onClick={toggleTheme} title="Toggle theme">
-            {theme === 'light' ? '◐' : '◑'}
-          </button>
-          <button
-            className="icon-btn noto-emoji"
-            onClick={() => setShowPolicyPanel(true)}
-            title="Notification policy"
-            aria-label="Notification policy"
-          >
-            🔔
-          </button>
-          <button className="icon-btn" onClick={refresh} title="Refresh">
-            ↻
-          </button>
-        </div>
-      </header>
-
-      <main className="layout">
-        {error && <p className="err small">Sync issue: {error}</p>}
-        {toast && <div className="home-toast">{toast}</div>}
-
-        <div className="browser-controls">
-          <TagBar categories={categories} active={tag} onSelect={(t) => updateUrl({ tag: t })} />
-          <div className="browser-controls-right">
-            {view === 'list' && <SortSelect value={sort} onChange={(s) => updateUrl({ sort: s })} />}
-            <ViewToggle view={view} onChange={(v) => updateUrl({ view: v })} />
-          </div>
-        </div>
-
+    <>
+      <HomeShell
+      handleSlot={editingHandle ? (
+        <>
+          <span ref={handleMeasureRef} className="handle-measure" aria-hidden="true">
+            {handleInput || ' '}
+          </span>
+          <input
+            className="handle-edit"
+            autoFocus
+            maxLength={40}
+            style={{ width: handleWidth }}
+            value={handleInput}
+            onChange={(e) => setHandleInput(e.target.value)}
+            onBlur={commitHandle}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') commitHandle()
+              if (e.key === 'Escape') setEditingHandle(false)
+            }}
+          />
+        </>
+      ) : (
+        <button type="button" className="me-handle" onClick={startEditHandle} title="Click to rename">
+          {me.handle}
+        </button>
+      )}
+      theme={theme}
+      onThemeToggle={toggleTheme}
+      onOpenPolicy={() => setShowPolicyPanel(true)}
+      onRefresh={refresh}
+      onHelp={() => navigate('/fold')}
+      error={error}
+      toast={toast}
+      categories={categories}
+      activeTag={tag}
+      onTagSelect={(t) => updateUrl({ tag: t })}
+      view={view}
+      sort={sort}
+      onSortChange={(s) => updateUrl({ sort: s })}
+      onViewChange={(v) => updateUrl({ view: v })}
+    >
         {loading && activities.length === 0 && <p className="pending">Loading activities...</p>}
 
         {view === 'grid' ? (
@@ -430,7 +412,7 @@ export function HomePage() {
         {!loading && activities.length > 0 && filtered.length === 0 && (
           <p className="empty">No activities in this category yet.</p>
         )}
-      </main>
+      </HomeShell>
 
       {creating && (
         <div className="modal-backdrop modal-backdrop-lower" onClick={() => setCreating(false)}>
@@ -484,6 +466,6 @@ export function HomePage() {
           onShare={sharePolicy}
         />
       )}
-    </div>
+    </>
   )
 }

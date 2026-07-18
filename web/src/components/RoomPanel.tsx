@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom'
 import type { ActivityView } from '../types'
 
 interface Props {
@@ -8,8 +9,6 @@ interface Props {
   onProposeRun: () => void
   onOpenPolicy: () => void
 }
-
-const HELP_URL = 'https://github.com/CHANGE_ME/fold'
 
 export function RoomPanel({ activity, theme, onThemeToggle, onInfo, onProposeRun, onOpenPolicy }: Props) {
 
@@ -25,7 +24,7 @@ export function RoomPanel({ activity, theme, onThemeToggle, onInfo, onProposeRun
       <button className="panel-button icon noto-emoji" onClick={() => { window.location.href = '/' }} title="Back home">🏠</button>
       <button className="panel-button icon noto-emoji" onClick={onOpenPolicy} title="Notification policy">🔔</button>
       <button className="panel-button icon" onClick={onInfo} title="Room info">ℹ︎</button>
-      <a className="panel-button icon" href={HELP_URL} target="_blank" rel="noopener noreferrer" title="Help">?</a>
+      <Link className="panel-button icon" to="/FOLD" title="Help">?</Link>
     </div>
   )
 }

@@ -15,18 +15,18 @@ export const DEFAULT_VISUAL_CONFIG: VisualConfig = {
 }
 
 export const HOLD_MS = 5_000
-export const MIN_ETA_MIN = 0
-export const MAX_ETA_MIN = 30
-export const DEFAULT_ETA_MIN = 30
+export const MIN_ETA_SEC = 0
+export const MAX_ETA_SEC = 30 * 60
+export const DEFAULT_ETA_SEC = 30 * 60
 
 export function etaFromHold(holdMs: number): number {
   const t = Math.min(1, Math.max(0, holdMs / HOLD_MS))
-  return Math.max(MIN_ETA_MIN, Math.min(MAX_ETA_MIN, Math.round(MAX_ETA_MIN * (1 - t * t))))
+  return Math.max(MIN_ETA_SEC, Math.min(MAX_ETA_SEC, Math.round(MAX_ETA_SEC * (1 - t * t))))
 }
 
 export function etaRemaining(arrivalAt: number | null, now: number): number {
   if (arrivalAt == null) return 0
-  return Math.max(0, Math.ceil((arrivalAt - now) / 60000))
+  return Math.max(0, Math.ceil((arrivalAt - now) / 1000))
 }
 
 export function visualState(p: Pick<ParticipantView, 'state' | 'arrival_at'>, now: number): VisualNodeState {

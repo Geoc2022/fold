@@ -247,9 +247,9 @@ export function ActivityRoom() {
     refresh()
   }
 
-  async function commit(etaMinutes: number) {
+  async function commit(etaSeconds: number) {
     if (!activity.current_run) return
-    await api.commit(activity.current_run.id, etaMinutes)
+    await api.commit(activity.current_run.id, etaSeconds)
     refresh()
   }
 

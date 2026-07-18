@@ -42,7 +42,7 @@ pub fn oi(v: Option<i64>) -> JsValue {
 
 const ACTIVITY_COLS: &str = "a.id, a.code, a.emoji, a.title, a.description, a.category, \
     a.proposer_id, a.min_people, a.max_people, a.group_multiple, a.grouping_mode, \
-    a.allow_guests, a.private_by_link, a.duration_minutes, a.max_commit_minutes, \
+    a.allow_guests, a.private_by_link, a.duration_seconds, a.max_commit_seconds, \
     a.current_run_id, a.times_run, a.players_served, a.interest_total, a.commit_total, \
     a.last_active_at, a.created_at, a.updated_at, p.handle AS proposer_handle";
 
@@ -555,13 +555,13 @@ pub async fn delete_participation(db: &D1Database, run_id: &str, person_id: &str
 //   - the person hasn't been seen in `despondent_cutoff` (unreachable too
 //     long -- keeps rooms mostly live), or
 //   - it's `committed` and the event is over (`arrival_at` + the activity's
-//     `duration_minutes` has passed), regardless of reachability -- the
+//     `duration_seconds` has passed), regardless of reachability -- the
 //     commitment itself is done even if the person is still watching, so
 //     they simply revert to lurker (see `run_withdraw`/`build_activity_view`:
 //     deleting the row is exactly what a withdraw does).
 const STALE_PARTICIPATION_PREDICATE: &str = "( pe.last_seen_at < ?despondent \
      OR (part.state = 'committed' AND part.arrival_at IS NOT NULL \
-         AND part.arrival_at + a.duration_minutes * 60000 <= ?now) )";
+         AND part.arrival_at + a.duration_seconds * 1000 <= ?now) )";
 
 /// Bump `last_seen_at` for a person, but only if (a) it's already stale by
 /// `coalesce_window_ms` and (b) they currently hold at least one

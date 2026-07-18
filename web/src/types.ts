@@ -58,8 +58,8 @@ export interface ActivityView {
   grouping_mode: GroupingMode
   allow_guests: boolean
   private_by_link: boolean
-  duration_minutes: number
-  max_commit_minutes: number
+  duration_seconds: number
+  max_commit_seconds: number
   times_run: number
   players_served: number
   interest_total: number
@@ -142,8 +142,8 @@ export interface CreateActivityInput {
   grouping_mode?: GroupingMode
   allow_guests?: boolean
   private_by_link?: boolean
-  duration_minutes?: number | null
-  max_commit_minutes?: number | null
+  duration_seconds?: number | null
+  max_commit_seconds?: number | null
   // First-run fields.
   location?: string | null
   details?: string | null
@@ -162,8 +162,8 @@ export interface UpdateActivityInput {
   grouping_mode?: GroupingMode
   allow_guests?: boolean
   private_by_link?: boolean
-  duration_minutes?: number | null
-  max_commit_minutes?: number | null
+  duration_seconds?: number | null
+  max_commit_seconds?: number | null
 }
 
 /** Creates a new run on an existing activity whose room is currently empty. */

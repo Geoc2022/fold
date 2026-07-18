@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef } from 'react'
 import {
-  DEFAULT_ETA_MIN,
+  DEFAULT_ETA_SEC,
   HOLD_MS,
-  MAX_ETA_MIN,
-  MIN_ETA_MIN,
+  MAX_ETA_SEC,
+  MIN_ETA_SEC,
   etaFromHold,
   getCssVar,
   nodeColor,
@@ -27,7 +27,7 @@ interface Props {
   me: Person
   visual: VisualConfig
   onInterested: () => Promise<void>
-  onCommit: (etaMinutes: number) => Promise<void>
+  onCommit: (etaSeconds: number) => Promise<void>
   onWithdraw: () => Promise<void>
   onAlert: (message: string | RoomAlertInput) => void
   alreadyCommittedElsewhere: boolean
@@ -77,8 +77,8 @@ interface PointerState {
 interface Camera { x: number; y: number; scale: number }
 
 const WORLD_R = 280
-const ABS_MAX_ETA_MIN = 240
-const ABS_MAX_DURATION_MIN = 240
+const ABS_MAX_ETA_SEC = 24 * 60 * 60
+const ABS_MAX_DURATION_SEC = 24 * 60 * 60
 const TUG = createTugModel(WORLD_R)
 
 // Resting radii for the two "outer" states, so every state has an explicit
@@ -386,7 +386,7 @@ export function RoomCanvas({
           ps.node.vx = 0
           ps.node.vy = 0
           resetTug()
-          const newArrivalAt = now + etaFromDistance(ps.worldX, ps.worldY, maxEta) * 60_000
+          const newArrivalAt = now + etaFromDistance(ps.worldX, ps.worldY, maxEta) * 1_000
           ps.node.arrivalAt = newArrivalAt
           if (ps.node.state === 'arrived' && newArrivalAt > now) ps.node.state = 'committed'
           return
@@ -399,7 +399,7 @@ export function RoomCanvas({
         springToward(ps.node, Math.cos(angle) * targetR, Math.sin(angle) * targetR)
         if (rawR <= TUG.commitMaxR) return // easing back in from a just-won transition
         ps.node.state = 'committed'
-        ps.node.arrivalAt = now + maxEta * 60_000
+        ps.node.arrivalAt = now + maxEta * 1_000
         if (advanceTugWork(rawR - TUG.commitMaxR)) {
           ps.node.state = 'interested'
           resetTug()
@@ -432,7 +432,7 @@ export function RoomCanvas({
              }
              const eta = etaFromDistance(ps.worldX, ps.worldY, maxEta)
              ps.node.state = 'committed'
-             ps.node.arrivalAt = now + eta * 60_000
+             ps.node.arrivalAt = now + eta * 1_000
              resetTug()
              winEaseUntilRef.current = performance.now() + WIN_EASE_MS
              void call(() => onCommit(eta))
@@ -577,7 +577,7 @@ export function RoomCanvas({
         }
         const eta = scaleHoldEta(etaFromHold(held), activityMaxEta(activityRef.current))
         ps.node.state = 'committed'
-        ps.node.arrivalAt = Date.now() + eta * 60_000
+        ps.node.arrivalAt = Date.now() + eta * 1_000
         void call(() => onCommit(eta))
       }
     }
@@ -605,7 +605,7 @@ export function RoomCanvas({
         if (n.state === 'committed' && n.arrivalAt != null && n.arrivalAt <= now) n.state = 'arrived'
       }
       processHeldNode(now)
-      const durationMs = activityDuration(activityRef.current) * 60_000
+      const durationMs = activityDuration(activityRef.current) * 1_000
       for (const n of nodesRef.current) {
         if (pointerRef.current?.node === n) continue
         if (n.state === 'arrived' && n.arrivalAt != null && now - n.arrivalAt >= durationMs) {
@@ -719,8 +719,8 @@ function computeTargets(nodes: SimNode[], activity: ActivityView, vis: VisualCon
   const groupSizes = activity.current_run?.group.group_sizes ?? []
   const orbitR = vis.nodeRadius * vis.clusterTightness
   const maxEta = activityMaxEta(activity)
-  const etaSpanMs = Math.max(1, maxEta * 60_000)
-  const defaultEtaMs = Math.min(maxEta, DEFAULT_ETA_MIN) * 60_000
+  const etaSpanMs = Math.max(1, maxEta * 1_000)
+  const defaultEtaMs = Math.min(maxEta, DEFAULT_ETA_SEC) * 1_000
 
   if (activity.grouping_mode === 'single') {
     placeGroup(targets, arrived, { x: 0, y: 0 }, orbitR)
@@ -865,8 +865,8 @@ function draw(
     const maxEta = activityMaxEta(activity)
     const eta = labelNode.state === 'interested'
       ? scaleHoldEta(etaFromHold(Math.min(HOLD_MS, performance.now() - pointer!.downAt)), maxEta)
-      : etaRemainingMinutes(labelNode.arrivalAt, now)
-    lctx.fillText(`${eta}m`, labelNode.x, labelNode.y)
+      : etaRemainingSeconds(labelNode.arrivalAt, now)
+    lctx.fillText(formatEta(eta), labelNode.x, labelNode.y)
   }
 
   ctx.save()
@@ -876,23 +876,23 @@ function draw(
 }
 
 function etaFromDistance(x: number, y: number, maxEta: number) {
-  const span = Math.max(MIN_ETA_MIN, maxEta)
+  const span = Math.max(MIN_ETA_SEC, maxEta)
   if (span === 0) return 0
   const t = Math.min(1, Math.max(0, Math.hypot(x, y) / WORLD_R))
-  return Math.max(MIN_ETA_MIN, Math.min(span, Math.round(t * span)))
+  return Math.max(MIN_ETA_SEC, Math.min(span, Math.round(t * span)))
 }
 
 function scaleHoldEta(raw: number, maxEta: number) {
   if (maxEta <= 0) return 0
-  return Math.round((raw / MAX_ETA_MIN) * maxEta)
+  return Math.round((raw / MAX_ETA_SEC) * maxEta)
 }
 
 function activityMaxEta(activity: ActivityView) {
-  return clampNumber(activity.max_commit_minutes ?? MAX_ETA_MIN, 0, ABS_MAX_ETA_MIN)
+  return clampNumber(activity.max_commit_seconds ?? MAX_ETA_SEC, 0, ABS_MAX_ETA_SEC)
 }
 
 function activityDuration(activity: ActivityView) {
-  return clampNumber(activity.duration_minutes ?? DEFAULT_ETA_MIN, 0, ABS_MAX_DURATION_MIN)
+  return clampNumber(activity.duration_seconds ?? DEFAULT_ETA_SEC, 0, ABS_MAX_DURATION_SEC)
 }
 
 function clampNumber(value: number, min: number, max: number) {
@@ -901,8 +901,12 @@ function clampNumber(value: number, min: number, max: number) {
   return value
 }
 
-function etaRemainingMinutes(arrivalAt: number | null, now: number) {
-  if (arrivalAt == null) return DEFAULT_ETA_MIN
-  return Math.max(0, Math.ceil((arrivalAt - now) / 60000))
+function etaRemainingSeconds(arrivalAt: number | null, now: number) {
+  if (arrivalAt == null) return DEFAULT_ETA_SEC
+  return Math.max(0, Math.ceil((arrivalAt - now) / 1000))
 }
 
+function formatEta(etaSeconds: number) {
+  if (etaSeconds >= 60) return `${Math.ceil(etaSeconds / 60)}m`
+  return `${etaSeconds}s`
+}
