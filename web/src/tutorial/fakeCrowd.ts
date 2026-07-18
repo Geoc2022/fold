@@ -10,12 +10,14 @@ export interface FakeCrowdConfig {
   interestRate: number
   commitRate: number
   avgEtaSec: number
+  maxEtaSec: number
 }
 
 const DEFAULT_CONFIG: FakeCrowdConfig = {
   interestRate: 0.55,
   commitRate: 0.45,
   avgEtaSec: 14,
+  maxEtaSec: 30,
 }
 
 export function buildFakeCrowd(count: number): FakeCrowdNode[] {
@@ -40,7 +42,11 @@ export function advanceFakeCrowd(
     }
     if (n.state === 'interested' && Math.random() < c.commitRate * dtSec) {
       n.state = 'committed'
-      const etaSec = Math.max(3, Math.round(-c.avgEtaSec * Math.log(Math.max(0.001, Math.random()))))
+      const maxEtaSec = Math.max(3, c.maxEtaSec)
+      const etaSec = Math.min(
+        maxEtaSec,
+        Math.max(3, Math.round(-c.avgEtaSec * Math.log(Math.max(0.001, Math.random())))),
+      )
       n.arrivalAt = now + etaSec * 1000
     }
   }

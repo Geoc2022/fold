@@ -133,6 +133,7 @@ export function BiologyRoom({
   const vogelCounterRef = useRef(VOGEL_N_MIN)
   const pointerRef = useRef<PointerState | null>(null)
   const cameraRef = useRef<Camera>({ x: 0, y: 0, scale: 1 })
+  const cameraTargetScaleRef = useRef(1)
   const lastSimRef = useRef(performance.now())
   const spawnAccRef = useRef(0)
   const pinchRef = useRef<{ dist: number } | null>(null)
@@ -172,6 +173,7 @@ export function BiologyRoom({
         cameraRef.current.x = 0
         cameraRef.current.y = 0
         cameraRef.current.scale = 1
+        cameraTargetScaleRef.current = 1
         didCenter = true
       }
     }
@@ -219,7 +221,9 @@ export function BiologyRoom({
       if (activePointers.size === 2 && pinchRef.current) {
         const pts = [...activePointers.values()]
         const newDist = Math.hypot(pts[1].clientX - pts[0].clientX, pts[1].clientY - pts[0].clientY)
-        cameraRef.current.scale = Math.min(4, Math.max(0.2, cameraRef.current.scale * (newDist / Math.max(1, pinchRef.current.dist))))
+        const nextScale = Math.min(4, Math.max(0.2, cameraRef.current.scale * (newDist / Math.max(1, pinchRef.current.dist))))
+        cameraRef.current.scale = nextScale
+        cameraTargetScaleRef.current = nextScale
         pinchRef.current.dist = newDist
         return
       }
@@ -313,7 +317,9 @@ export function BiologyRoom({
 
     const onWheel = (e: WheelEvent) => {
       e.preventDefault()
-      cameraRef.current.scale = Math.min(4, Math.max(0.2, cameraRef.current.scale * (e.deltaY < 0 ? 1.08 : 0.92)))
+      const wheelFactor = Math.exp(-e.deltaY * 0.001)
+      const nextTarget = cameraTargetScaleRef.current * wheelFactor
+      cameraTargetScaleRef.current = Math.min(4, Math.max(0.2, nextTarget))
     }
 
     canvas.addEventListener('pointerdown', onPointerDown)
@@ -378,6 +384,7 @@ export function BiologyRoom({
       const now = Date.now()
       const perf = performance.now()
       const dt = Math.min(0.2, (perf - lastSimRef.current) / 1000)
+      cameraRef.current.scale += (cameraTargetScaleRef.current - cameraRef.current.scale) * 0.18
       lastSimRef.current = perf
       const c = simRef.current
       ensureSelf(now)
@@ -754,5 +761,4 @@ function nodesToParticipants(nodes: Node[], now: number): BioParticipant[] {
     isSelf: n.isSelf === true,
   }))
 }
-
 

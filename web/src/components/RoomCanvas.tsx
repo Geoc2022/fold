@@ -155,6 +155,7 @@ export function RoomCanvas({
   const nodesRef = useRef<SimNode[]>([])
   const pointerRef = useRef<PointerState | null>(null)
   const cameraRef = useRef<Camera>({ x: 0, y: 0, scale: 1 })
+  const cameraTargetScaleRef = useRef(1)
   const pinchRef = useRef<{ dist: number } | null>(null)
   const visualRef = useRef(visual)
   const activityRef = useRef(activity)
@@ -532,7 +533,9 @@ export function RoomCanvas({
       if (activePointers.size === 2 && pinchRef.current) {
         const pts = [...activePointers.values()]
         const newDist = Math.hypot(pts[1].clientX - pts[0].clientX, pts[1].clientY - pts[0].clientY)
-        cameraRef.current.scale = Math.min(4, Math.max(0.2, cameraRef.current.scale * (newDist / Math.max(1, pinchRef.current.dist))))
+        const nextScale = Math.min(4, Math.max(0.2, cameraRef.current.scale * (newDist / Math.max(1, pinchRef.current.dist))))
+        cameraRef.current.scale = nextScale
+        cameraTargetScaleRef.current = nextScale
         pinchRef.current.dist = newDist
         return
       }
@@ -611,7 +614,9 @@ export function RoomCanvas({
 
     const onWheel = (e: WheelEvent) => {
       e.preventDefault()
-      cameraRef.current.scale = Math.min(4, Math.max(0.2, cameraRef.current.scale * (e.deltaY < 0 ? 1.08 : 0.92)))
+      const wheelFactor = Math.exp(-e.deltaY * 0.001)
+      const nextTarget = cameraTargetScaleRef.current * wheelFactor
+      cameraTargetScaleRef.current = Math.min(4, Math.max(0.2, nextTarget))
     }
 
     const onPointerLeave = () => {
@@ -628,6 +633,7 @@ export function RoomCanvas({
     let raf = 0
     const frame = () => {
       const now = Date.now()
+      cameraRef.current.scale += (cameraTargetScaleRef.current - cameraRef.current.scale) * 0.18
       for (const n of nodesRef.current) {
         if (n.state === 'committed' && n.arrivalAt != null && n.arrivalAt <= now) n.state = 'arrived'
       }
