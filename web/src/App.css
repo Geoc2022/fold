@@ -2059,8 +2059,9 @@ label .opt {
 }
 
 .tutorial-coachmark {
-  background: color-mix(in oklab, var(--bg-elev, #fff) 94%, var(--accent, #06b6d4));
-  border: 1px solid var(--line, #d1d5db);
+  color: var(--text);
+  background: color-mix(in oklab, var(--panel) 94%, var(--accent));
+  border: 1px solid var(--border);
   border-radius: 14px;
   padding: 12px;
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.12);
@@ -2075,6 +2076,7 @@ label .opt {
   margin: 0;
   font-size: 13px;
   line-height: 1.4;
+  color: var(--muted);
 }
 
 .tutorial-actions {

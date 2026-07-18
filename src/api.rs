@@ -13,6 +13,7 @@ const NOTIFICATION_LIMIT: i64 = 50;
 const DEFAULT_EMOJI: &str = "🎲";
 const DEFAULT_CATEGORY: &str = "general";
 const DEFAULT_COMMIT_SECONDS: i64 = 30 * 60;
+const RESERVED_ACTIVITY_CODES: &[&str] = &["FOLD"];
 /// Activities disappear from the homepage after this long without a run;
 /// running the activity again resets the clock.
 const ACTIVITY_VISIBLE_WINDOW_MS: i64 = 7 * 24 * 60 * 60 * 1000;
@@ -57,7 +58,9 @@ async fn push_people(env: &Env, db: &D1Database, people: Vec<String>) -> Result<
 async fn unique_activity_code(db: &D1Database) -> Result<String> {
     for _ in 0..12 {
         let code = new_code();
-        if db::get_activity_by_code(db, &code).await?.is_none() {
+        if !RESERVED_ACTIVITY_CODES.contains(&code.as_str())
+            && db::get_activity_by_code(db, &code).await?.is_none()
+        {
             return Ok(code);
         }
     }
@@ -79,6 +82,10 @@ async fn validate_or_generate_activity_code(
     }
     if code.len() != 4 || !code.chars().all(|c| c.is_ascii_alphabetic()) {
         return Ok(Err(err_json("code must be exactly 4 letters", 400)?));
+    }
+    if RESERVED_ACTIVITY_CODES.contains(&code.as_str()) {
+        let body = serde_json::json!({ "error": "that code is reserved", "conflict": "code" });
+        return Ok(Err(json_status(&body, 409)?));
     }
     if db::get_activity_by_code(db, &code).await?.is_some() {
         let body = serde_json::json!({ "error": "that code is already taken", "conflict": "code" });

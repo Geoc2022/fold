@@ -34,7 +34,7 @@ export function foldTutorialActivity(now: number, participants: ParticipantView[
     code: 'FOLD',
     emoji: 'ツ',
     title: 'Fold',
-    description: 'Tutorial room',
+    description: 'Bringing people into the fold',
     category: 'board game',
     proposer_id: 'tutorial-proposer',
     proposer_handle: 'fold',

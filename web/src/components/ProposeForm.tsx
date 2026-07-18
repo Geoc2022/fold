@@ -27,6 +27,7 @@ interface Props {
 type FormMode = 'simple' | 'expanded'
 
 const LAST_PROPOSAL_KEY = 'fold.last_proposal'
+const RESERVED_CODES = new Set(['FOLD'])
 
 interface LastProposal {
   emoji?: string
@@ -51,8 +52,11 @@ function saveLastProposal(v: LastProposal) {
 }
 
 function randomCode(): string {
-  let out = ''
-  for (let i = 0; i < 4; i += 1) out += String.fromCharCode(65 + Math.floor(Math.random() * 26))
+  let out: string
+  do {
+    out = ''
+    for (let i = 0; i < 4; i += 1) out += String.fromCharCode(65 + Math.floor(Math.random() * 26))
+  } while (RESERVED_CODES.has(out))
   return out
 }
 
@@ -62,7 +66,7 @@ function randomCode(): string {
 function deriveCodeCandidates(title: string): string[] {
   const letters = title.toUpperCase().replace(/[^A-Z]/g, '')
   const candidates: string[] = []
-  if (letters.length >= 4) candidates.push(letters.slice(0, 4))
+  if (letters.length >= 4 && !RESERVED_CODES.has(letters.slice(0, 4))) candidates.push(letters.slice(0, 4))
 
   const pool = letters.length > 0 ? letters : 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
   let attempts = 0
@@ -70,7 +74,7 @@ function deriveCodeCandidates(title: string): string[] {
     attempts += 1
     let pick = ''
     for (let i = 0; i < 4; i += 1) pick += pool[Math.floor(Math.random() * pool.length)]
-    if (!candidates.includes(pick)) candidates.push(pick)
+    if (!RESERVED_CODES.has(pick) && !candidates.includes(pick)) candidates.push(pick)
   }
   while (candidates.length < 5) candidates.push(randomCode())
   return candidates
@@ -161,6 +165,10 @@ export function ProposeForm({ initialCode, activity, categoryOptions, onCreated,
     e.preventDefault()
     const t = title.trim()
     if (!t || !feasible) return
+    if (!isEdit && RESERVED_CODES.has(code.trim().toUpperCase())) {
+      setError('that code is reserved')
+      return
+    }
     setBusy(true)
     setError(null)
 

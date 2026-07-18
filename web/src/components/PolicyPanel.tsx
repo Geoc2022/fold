@@ -104,13 +104,12 @@ export function PolicyPanel({
             </button>
             <button
               type="button"
-              className={`panel-button policy-emoji-button policy-icon-only ${dirty ? 'dirty' : ''}`}
-              onClick={save}
-              title="Save"
-              aria-label="Save"
+              className="panel-button policy-emoji-button policy-icon-only"
+              onClick={() => setShowHelp(true)}
+              title="Help"
+              aria-label="Help"
             >
-              <span className="noto-emoji" aria-hidden="true">💾</span>
-              {dirty && <span className="policy-dirty-star" aria-hidden="true">*</span>}
+              <span className="noto-emoji" aria-hidden="true">❓</span>
             </button>
             {onShare && (
               <button
@@ -125,12 +124,13 @@ export function PolicyPanel({
             )}
             <button
               type="button"
-              className="panel-button policy-emoji-button policy-icon-only"
-              onClick={() => setShowHelp(true)}
-              title="Help"
-              aria-label="Help"
+              className={`panel-button policy-emoji-button policy-icon-only ${dirty ? 'dirty' : ''}`}
+              onClick={save}
+              title="Save"
+              aria-label="Save"
             >
-              <span className="noto-emoji" aria-hidden="true">❓</span>
+              <span className="noto-emoji" aria-hidden="true">💾</span>
+              {dirty && <span className="policy-dirty-star" aria-hidden="true">*</span>}
             </button>
           </div>
 
