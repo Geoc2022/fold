@@ -8,8 +8,9 @@ import { useTheme } from '../theme'
 import { Coachmark } from '../tutorial/Coachmark'
 import { foldTutorialActivity, tutorialMe } from '../tutorial/fakeRoom'
 import { useScript } from '../tutorial/useScript'
+import { Spotlight } from '../tutorial/Spotlight'
 
-const STEPS = ['welcome', 'controls', 'tile'] as const
+const STEPS = ['welcome', 'controls', 'browser', 'tile'] as const
 
 export function HomeTour() {
   const navigate = useNavigate()
@@ -31,7 +32,13 @@ export function HomeTour() {
     if (script.step === 'controls') {
       return {
         title: 'Homepage Buttons',
-        body: 'Use ? for help, 🔔 for policy rules, and ↻ to refresh activity state.',
+        body: <>Use ? for help, <span className="noto-emoji">🔔</span> for policy rules, and ↻ to refresh activity state.</>,
+      }
+    }
+    if (script.step === 'browser') {
+      return {
+        title: 'Browse Activities',
+        body: 'Filter by category, then switch between the grid and list views.',
       }
     }
     return {
@@ -39,6 +46,13 @@ export function HomeTour() {
       body: 'Open this tile and join /FOLD to practice node movement, ETA changes, and committing into a ready group.',
     }
   })()
+  const spotlightTarget = script.step === 'welcome'
+    ? '.topbar .brand'
+    : script.step === 'controls'
+      ? '.topbar .me'
+      : script.step === 'browser'
+        ? '.browser-controls'
+        : '.tile.expanded'
 
   return (
     <>
@@ -82,6 +96,7 @@ export function HomeTour() {
           </AnimatePresence>
         </div>
       </HomeShell>
+      <Spotlight target={spotlightTarget} />
       <div className="tutorial-home-hud">
         <Coachmark
           title={coach.title}

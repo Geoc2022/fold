@@ -33,6 +33,11 @@ interface Props {
   onAlert: (message: string | RoomAlertInput) => void
   alreadyCommittedElsewhere: boolean
   otherCommittedRoomCode?: string | null
+  interactionPermissions?: {
+    interest: boolean
+    commit: boolean
+    withdraw: boolean
+  }
 }
 
 interface SimNode {
@@ -144,6 +149,7 @@ export function RoomCanvas({
   onAlert,
   alreadyCommittedElsewhere,
   otherCommittedRoomCode,
+  interactionPermissions,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const nodesRef = useRef<SimNode[]>([])
@@ -166,11 +172,13 @@ export function RoomCanvas({
   const winEaseUntilRef = useRef(0)
   const commitLockRef = useRef(alreadyCommittedElsewhere)
   const otherCommittedRoomCodeRef = useRef<string | null | undefined>(otherCommittedRoomCode)
+  const interactionPermissionsRef = useRef(interactionPermissions)
   const guardAlertRef = useRef(0)
   const expireNoticeArrivalRef = useRef<number | null>(null)
   const myStableNodeIdRef = useRef(`me-${me.id}`)
   visualRef.current = visual
   activityRef.current = activity
+  interactionPermissionsRef.current = interactionPermissions
 
   const source = useMemo(() => {
     const now = Date.now()
@@ -402,6 +410,10 @@ export function RoomCanvas({
         ps.node.state = 'committed'
         ps.node.arrivalAt = now + maxEta * 1_000
         if (advanceTugWork(rawR - TUG.commitMaxR)) {
+          if (interactionPermissionsRef.current?.withdraw === false) {
+            resetTug()
+            return
+          }
           ps.node.state = 'interested'
           resetTug()
           winEaseUntilRef.current = performance.now() + WIN_EASE_MS
@@ -427,7 +439,11 @@ export function RoomCanvas({
           springToward(ps.node, Math.cos(angle) * targetR, Math.sin(angle) * targetR)
           if (rawR >= TUG.commitMaxR) return
            if (advanceTugWork(TUG.commitMaxR - rawR)) {
-             if (commitLockRef.current) {
+              if (interactionPermissionsRef.current?.commit === false) {
+                resetTug()
+                return
+              }
+              if (commitLockRef.current) {
                guardCommit()
                return
              }
@@ -446,6 +462,10 @@ export function RoomCanvas({
         springToward(ps.node, Math.cos(angle) * targetR, Math.sin(angle) * targetR)
         if (rawR <= TUG.interestedMaxR) return
         if (advanceTugWork(rawR - TUG.interestedMaxR)) {
+          if (interactionPermissionsRef.current?.withdraw === false) {
+            resetTug()
+            return
+          }
           ps.node.state = 'lurker'
           resetTug()
           winEaseUntilRef.current = performance.now() + WIN_EASE_MS
@@ -469,6 +489,10 @@ export function RoomCanvas({
       springToward(ps.node, Math.cos(angle) * targetR, Math.sin(angle) * targetR)
       if (rawR >= TUG.interestedMaxR) return
       if (advanceTugWork(TUG.interestedMaxR - rawR)) {
+        if (interactionPermissionsRef.current?.interest === false) {
+          resetTug()
+          return
+        }
         ps.node.state = 'interested'
         resetTug()
         winEaseUntilRef.current = performance.now() + WIN_EASE_MS
@@ -568,9 +592,11 @@ export function RoomCanvas({
         return
       }
       if (ps.node.state === 'lurker') {
+        if (interactionPermissionsRef.current?.interest === false) return
         ps.node.state = 'interested'
         void call(onInterested)
       } else if (ps.node.state === 'interested' && held > 200) {
+        if (interactionPermissionsRef.current?.commit === false) return
         if (commitLockRef.current) {
           guardCommit()
           ps.node.state = 'interested'

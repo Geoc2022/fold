@@ -8,6 +8,7 @@ import { loadHomeRules, loadRoomRules, roomRulesKey, type PolicyRule } from '../
 import { appendPolicySources, decodePolicySources, encodePolicySources } from '../policy/share'
 import { writeJson } from '../storage'
 import { buildActivityShareText } from '../activityShare'
+import { Spotlight } from '../tutorial/Spotlight'
 import { useTheme } from '../theme'
 import type { ParticipantView } from '../types'
 import { Coachmark } from '../tutorial/Coachmark'
@@ -18,7 +19,7 @@ import { useScript } from '../tutorial/useScript'
 
 type SelfState = { state: 'lurker' | 'interested' | 'committed'; arrivalAt: number | null }
 
-const SCRIPT = ['intro', 'move', 'commit', 'ready'] as const
+const SCRIPT = ['intro', 'lurker', 'interested', 'committed', 'ready'] as const
 
 export function RoomTutorial() {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -76,6 +77,7 @@ export function RoomTutorial() {
   }, [crowdStarted])
 
   const participants = useMemo<ParticipantView[]>(() => {
+    void crowdTick
     const now = Date.now()
     const out = crowdAsParticipants(crowdRef.current, now)
     if (self.state !== 'lurker') {
@@ -97,44 +99,52 @@ export function RoomTutorial() {
   useEffect(() => {
     if (groupReady) {
       setPartyActive(true)
-      script.set(3)
+      script.set(4)
     }
   }, [groupReady, script])
 
   async function onInterested() {
+    if (script.step !== 'lurker') return
     setSelf({ state: 'interested', arrivalAt: null })
     if (!crowdStarted) {
       setCrowdStarted(true)
-      script.set(2)
     }
-  }
-
-  async function onCommit(etaSeconds: number) {
-    setSelf({ state: 'committed', arrivalAt: Date.now() + etaSeconds * 1000 })
     script.set(2)
   }
 
+  async function onCommit(etaSeconds: number) {
+    if (script.step !== 'interested' && script.step !== 'committed') return
+    setSelf({ state: 'committed', arrivalAt: Date.now() + etaSeconds * 1000 })
+    script.set(3)
+  }
+
   async function onWithdraw() {
-    setSelf({ state: 'lurker', arrivalAt: null })
+    if (script.step === 'ready') setSelf({ state: 'lurker', arrivalAt: null })
   }
 
   const coach = (() => {
     if (script.step === 'intro') {
       return {
         title: 'Welcome to /FOLD',
-        body: 'Drag your node inward to become interested. As soon as you do, four faux users start moving toward arrival.',
+        body: 'A lurker is watching, an interested person is considering joining, and a committed person has chosen an ETA.',
       }
     }
-    if (script.step === 'move') {
+    if (script.step === 'lurker') {
       return {
-        title: 'Move Your Node',
-        body: 'Tap your node for interest, then hold to commit. Drag while committed to change ETA (max 30s).',
+        title: 'Lurker',
+        body: 'Your node starts outside the rings. Tap it or drag it inward once to become interested.',
       }
     }
-    if (script.step === 'commit') {
+    if (script.step === 'interested') {
       return {
-        title: 'Crowd Is Forming',
-        body: 'The faux users follow Biology-style state changes and ETAs. Keep your commitment and watch the group lock in.',
+        title: 'Interested',
+        body: 'Interest starts the faux crowd. Hold your node or pull it toward the center to commit with an ETA.',
+      }
+    }
+    if (script.step === 'committed') {
+      return {
+        title: 'Committed',
+        body: 'Your ETA controls your distance from the center. Keep the commitment while the other four people arrive.',
       }
     }
     return {
@@ -156,14 +166,20 @@ export function RoomTutorial() {
         onAlert={() => {}}
         alreadyCommittedElsewhere={false}
         otherCommittedRoomCode={null}
+        interactionPermissions={{
+          interest: script.step === 'lurker' || script.step === 'ready',
+          commit: script.step === 'interested' || script.step === 'committed' || script.step === 'ready',
+          withdraw: script.step === 'ready',
+        }}
       />
       <button type="button" className="room-code">/FOLD</button>
       <div className="tutorial-room-hud">
         <Coachmark
           title={coach.title}
           body={coach.body}
-          onNext={
-            script.isLast
+          onNext={script.step === 'intro'
+            ? script.next
+            : script.isLast
               ? () => {
                   crowdRef.current = buildFakeCrowd(4)
                   setSelf({ state: 'lurker', arrivalAt: null })
@@ -172,9 +188,9 @@ export function RoomTutorial() {
                   setCrowdTick((n) => n + 1)
                   script.reset()
                 }
-              : script.next
+              : undefined
           }
-          nextLabel={script.isLast ? 'Replay' : 'Next'}
+          nextLabel={script.isLast ? 'Replay' : 'Start'}
         />
         <div className="tutorial-links">
           <Link to="/fold">Homepage tutorial</Link>
@@ -193,6 +209,7 @@ export function RoomTutorial() {
           void navigator.clipboard.writeText(buildActivityShareText(activity, participants, Date.now(), url))
         }}
       />
+      <Spotlight target={script.step === 'intro' ? '.room-code' : '.room-canvas'} />
       {showPolicyPanel && (
         <PolicyPanel
           rules={rules}
