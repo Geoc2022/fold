@@ -11,7 +11,6 @@ import { HomeTour } from './pages/HomeTour'
 import { RoomTutorial } from './pages/RoomTutorial'
 
 export default function App() {
-  // add the picture frame 404 page
   return (
     <Routes>
       <Route path="/" element={<HomePage />} />

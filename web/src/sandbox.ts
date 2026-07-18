@@ -1,6 +1,7 @@
-// Shared helpers for the /physics and /chemistry canvas sandboxes. These
-// demos model ETA in milliseconds against a per-page "world radius" timing
-// ring, distinct from the minute-based room math in `nodeVisual.ts`.
+// Shared helpers for the demo room engine (BiologyRoom), which powers the
+// /physics, /chemistry, /biology and /math sandboxes. These demos model ETA in
+// milliseconds against a "world radius" timing ring, distinct from the
+// minute-based room math used by the real activity room in `nodeVisual.ts`.
 
 export const SANDBOX_HOLD_MS = 5_000
 export const SANDBOX_MIN_ETA_MS = 0
@@ -47,22 +48,3 @@ export function spawnOutsideRing(
   return { x: c * (minR + extra), y: s * (minR + extra) }
 }
 
-/** Angle of a click relative to the center; a dead-center click has no
- * direction, so default to straight up rather than producing NaN. */
-export function angleFromCenter(x: number, y: number): number {
-  return Math.hypot(x, y) < 0.001 ? -Math.PI / 2 : Math.atan2(y, x)
-}
-
-interface LoggableNode {
-  id: number
-  x: number
-  y: number
-  arrivalAt: number | null
-  state: string
-}
-
-export function logNode(n: LoggableNode): void {
-  const distance = Math.round(Math.hypot(n.x, n.y))
-  const eta = n.arrivalAt == null ? null : Math.max(0, Math.ceil((n.arrivalAt - Date.now()) / 1000))
-  console.log(`node ${n.id}: distance=${distance}px eta=${eta ?? 'n/a'}s state=${n.state}`)
-}

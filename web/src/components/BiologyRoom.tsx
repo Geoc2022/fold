@@ -65,6 +65,17 @@ export interface BiologySnapshot {
   maxPeople: number
 }
 
+/** Which slider/button groups appear in the control panel. Pages compose the
+ * same engine and only differ in the controls they surface. */
+export interface RoomControls {
+  sim?: boolean
+  visual?: boolean
+  grouping?: boolean
+}
+
+const FULL_CONTROLS: Required<RoomControls> = { sim: true, visual: true, grouping: true }
+const NO_CONTROLS: Required<RoomControls> = { sim: false, visual: false, grouping: false }
+
 interface BiologyRoomProps {
   embedded?: boolean
   onSnapshot?: (snapshot: BiologySnapshot) => void
@@ -72,6 +83,14 @@ interface BiologyRoomProps {
   selfState?: NodeState
   showLabels?: boolean
   includeSelfNode?: boolean
+  /** Run the population auto-simulation (spawn + random state transitions).
+   * When false the room is a purely manual sandbox. Defaults to true. */
+  autoSimulate?: boolean
+  /** Allow single/parallel grouping of arrived nodes. When false, arrived
+   * nodes always fuse into one cluster. Defaults to true. */
+  grouping?: boolean
+  /** Which control groups to render. Defaults to all. */
+  controls?: RoomControls
 }
 
 const WORLD_R = 280
@@ -91,7 +110,13 @@ export function BiologyRoom({
   selfState,
   showLabels = false,
   includeSelfNode = false,
+  autoSimulate = true,
+  grouping = true,
+  controls = FULL_CONTROLS,
 }: BiologyRoomProps) {
+  // Omitting `controls` shows everything; passing a partial object shows only
+  // the named groups (missing keys default to hidden).
+  const show = { ...NO_CONTROLS, ...controls }
   const [mode, setMode] = useState<GroupingMode>('single')
   const [perGroup, setPerGroup] = useState(3)
   const [sim, setSim] = useState<SimConfig>({
@@ -118,13 +143,16 @@ export function BiologyRoom({
   const selfStateRef = useRef<NodeState | undefined>(selfState)
   const showLabelsRef = useRef(showLabels)
   const includeSelfNodeRef = useRef(includeSelfNode)
-  modeRef.current = mode
+  const autoSimulateRef = useRef(autoSimulate)
+  // Grouping behaviour is forced to "single" when the page disables grouping.
+  modeRef.current = grouping ? mode : 'single'
   perGroupRef.current = perGroup
   simRef.current = sim
   visRef.current = vis
   snapshotRef.current = onSnapshot
   showLabelsRef.current = showLabels
   includeSelfNodeRef.current = includeSelfNode
+  autoSimulateRef.current = autoSimulate
   selfStateRef.current = selfState
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -390,27 +418,30 @@ export function BiologyRoom({
       ensureSelf(now)
       const nodes = nodesRef.current
 
-      if (nodes.length >= Math.min(c.maxNodes, MAX_NODES)) {
-        nodesRef.current = includeSelfNodeRef.current ? nodes.filter((n) => n.isSelf) : []
-        vogelCounterRef.current = VOGEL_N_MIN
-        spawnAccRef.current = 0
-      }
+      if (autoSimulateRef.current) {
+        if (nodes.length >= Math.min(c.maxNodes, MAX_NODES)) {
+          nodesRef.current = includeSelfNodeRef.current ? nodes.filter((n) => n.isSelf) : []
+          vogelCounterRef.current = VOGEL_N_MIN
+          spawnAccRef.current = 0
+        }
 
-      spawnAccRef.current += c.spawnPerSec * dt
-      while (spawnAccRef.current >= 1) {
-        vogelSpawn()
-        spawnAccRef.current -= 1
-      }
+        spawnAccRef.current += c.spawnPerSec * dt
+        while (spawnAccRef.current >= 1) {
+          vogelSpawn()
+          spawnAccRef.current -= 1
+        }
 
-      for (const n of nodes) {
-        if (!n.simulated) continue
-        if (n.state === 'committed' && n.arrivalAt != null && n.arrivalAt <= now) n.state = 'arrived'
-        if (n.state === 'lurker' && n.targetX == null && Math.random() < c.interestRate * dt) n.state = 'interested'
-        else if (n.state === 'interested' && Math.random() < c.commitRate * dt) {
-          n.state = 'committed'
-          n.arrivalAt = now + Math.min(SANDBOX_MAX_ETA_MS, Math.max(SANDBOX_MIN_ETA_MS, -c.avgEtaSec * Math.log(Math.max(0.001, Math.random())) * 1000))
+        for (const n of nodes) {
+          if (!n.simulated) continue
+          if (n.state === 'committed' && n.arrivalAt != null && n.arrivalAt <= now) n.state = 'arrived'
+          if (n.state === 'lurker' && n.targetX == null && Math.random() < c.interestRate * dt) n.state = 'interested'
+          else if (n.state === 'interested' && Math.random() < c.commitRate * dt) {
+            n.state = 'committed'
+            n.arrivalAt = now + Math.min(SANDBOX_MAX_ETA_MS, Math.max(SANDBOX_MIN_ETA_MS, -c.avgEtaSec * Math.log(Math.max(0.001, Math.random())) * 1000))
+          }
         }
       }
+      // Promote committed -> arrived once ETA elapses (manual nodes included).
       for (const n of nodes) {
         if (n.state === 'committed' && n.arrivalAt != null && n.arrivalAt <= now) n.state = 'arrived'
       }
@@ -451,49 +482,62 @@ export function BiologyRoom({
     <main className={rootClass}>
       <canvas ref={canvasRef} className="biology-canvas" />
       <div className={helpClass}>
-        <div className="bio-section-title">Simulation</div>
-        <div className="bio-sliders">
-          <SR label="spawn/s" min={0} max={5} step={0.1} value={sim.spawnPerSec} fmt={(v) => v.toFixed(1)} onChange={(v) => patchSim({ spawnPerSec: v })} />
-          <SR label="→ interested" min={0} max={1} step={0.05} value={sim.interestRate} fmt={(v) => `${Math.round(v * 100)}%/s`} onChange={(v) => patchSim({ interestRate: v })} />
-          <SR label="→ committed" min={0} max={1} step={0.05} value={sim.commitRate} fmt={(v) => `${Math.round(v * 100)}%/s`} onChange={(v) => patchSim({ commitRate: v })} />
-          <SR label="avg ETA" min={5} max={60} step={1} value={sim.avgEtaSec} fmt={(v) => `${v}s`} onChange={(v) => patchSim({ avgEtaSec: v })} />
-          <SR label="max nodes" min={5} max={MAX_NODES} step={1} value={sim.maxNodes} fmt={(v) => String(v)} onChange={(v) => patchSim({ maxNodes: Math.min(MAX_NODES, v) })} />
-          <SR
-            label="min people"
-            min={MIN_PEOPLE_MIN}
-            max={MIN_PEOPLE_MAX}
-            step={1}
-            value={sim.minPeople}
-            fmt={(v) => String(v)}
-            onChange={(v) => patchSim({ minPeople: v, maxPeople: Math.max(v, sim.maxPeople) })}
-          />
-          <SR
-            label="max people"
-            min={sim.minPeople}
-            max={MAX_PEOPLE_MAX}
-            step={1}
-            value={Math.max(sim.minPeople, sim.maxPeople)}
-            fmt={(v) => String(v)}
-            onChange={(v) => patchSim({ maxPeople: Math.max(sim.minPeople, v) })}
-          />
-          <div className="bio-slider-row">
-            <span className="bio-slider-label">grouping</span>
-            <div className="bio-mode-btns">
-              <button className={`chem-mode-btn ${mode === 'single' ? 'active' : ''}`} onClick={() => setMode('single')}>Single</button>
-              <button className={`chem-mode-btn ${mode === 'parallel' ? 'active' : ''}`} onClick={() => setMode('parallel')}>Parallel</button>
+        {show.sim && (
+          <>
+            <div className="bio-section-title">Simulation</div>
+            <div className="bio-sliders">
+              <SR label="spawn/s" min={0} max={5} step={0.1} value={sim.spawnPerSec} fmt={(v) => v.toFixed(1)} onChange={(v) => patchSim({ spawnPerSec: v })} />
+              <SR label="→ interested" min={0} max={1} step={0.05} value={sim.interestRate} fmt={(v) => `${Math.round(v * 100)}%/s`} onChange={(v) => patchSim({ interestRate: v })} />
+              <SR label="→ committed" min={0} max={1} step={0.05} value={sim.commitRate} fmt={(v) => `${Math.round(v * 100)}%/s`} onChange={(v) => patchSim({ commitRate: v })} />
+              <SR label="avg ETA" min={5} max={60} step={1} value={sim.avgEtaSec} fmt={(v) => `${v}s`} onChange={(v) => patchSim({ avgEtaSec: v })} />
+              <SR label="max nodes" min={5} max={MAX_NODES} step={1} value={sim.maxNodes} fmt={(v) => String(v)} onChange={(v) => patchSim({ maxNodes: Math.min(MAX_NODES, v) })} />
+              <SR
+                label="min people"
+                min={MIN_PEOPLE_MIN}
+                max={MIN_PEOPLE_MAX}
+                step={1}
+                value={sim.minPeople}
+                fmt={(v) => String(v)}
+                onChange={(v) => patchSim({ minPeople: v, maxPeople: Math.max(v, sim.maxPeople) })}
+              />
+              <SR
+                label="max people"
+                min={sim.minPeople}
+                max={MAX_PEOPLE_MAX}
+                step={1}
+                value={Math.max(sim.minPeople, sim.maxPeople)}
+                fmt={(v) => String(v)}
+                onChange={(v) => patchSim({ maxPeople: Math.max(sim.minPeople, v) })}
+              />
             </div>
-          </div>
-          {mode === 'parallel' && (
-            <SR label="per group" min={2} max={8} step={1} value={perGroup} fmt={(v) => String(v)} onChange={(v) => setPerGroup(v)} />
-          )}
-        </div>
+          </>
+        )}
 
-        <div className="bio-section-title">Visual</div>
-        <div className="bio-sliders">
-          <SR label="node size" min={6} max={50} step={1} value={vis.nodeRadius} fmt={(v) => `${v}px`} onChange={(v) => patchVis({ nodeRadius: v })} />
-          <SR label="outline" min={0} max={12} step={0.5} value={vis.outlineWidth} fmt={(v) => `${v}px`} onChange={(v) => patchVis({ outlineWidth: v })} />
-          <SR label="tightness" min={0} max={3} step={0.1} value={vis.clusterTightness} fmt={(v) => v.toFixed(1)} onChange={(v) => patchVis({ clusterTightness: v })} />
-        </div>
+        {show.grouping && (
+          <div className="bio-sliders">
+            <div className="bio-slider-row">
+              <span className="bio-slider-label">grouping</span>
+              <div className="bio-mode-btns">
+                <button className={`chem-mode-btn ${mode === 'single' ? 'active' : ''}`} onClick={() => setMode('single')}>Single</button>
+                <button className={`chem-mode-btn ${mode === 'parallel' ? 'active' : ''}`} onClick={() => setMode('parallel')}>Parallel</button>
+              </div>
+            </div>
+            {mode === 'parallel' && (
+              <SR label="per group" min={2} max={8} step={1} value={perGroup} fmt={(v) => String(v)} onChange={(v) => setPerGroup(v)} />
+            )}
+          </div>
+        )}
+
+        {show.visual && (
+          <>
+            <div className="bio-section-title">Visual</div>
+            <div className="bio-sliders">
+              <SR label="node size" min={6} max={50} step={1} value={vis.nodeRadius} fmt={(v) => `${v}px`} onChange={(v) => patchVis({ nodeRadius: v })} />
+              <SR label="outline" min={0} max={12} step={0.5} value={vis.outlineWidth} fmt={(v) => `${v}px`} onChange={(v) => patchVis({ outlineWidth: v })} />
+              <SR label="tightness" min={0} max={3} step={0.1} value={vis.clusterTightness} fmt={(v) => v.toFixed(1)} onChange={(v) => patchVis({ clusterTightness: v })} />
+            </div>
+          </>
+        )}
 
         <span className="bio-hint">Click: create · Click gray: interest · Hold green: commit · Drag gold: ETA · Wheel/pinch: zoom</span>
       </div>

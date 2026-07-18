@@ -1455,21 +1455,7 @@ html[data-theme="dark"] .list-item {
   }
 }
 
-/* ---- standalone physics/chemistry playgrounds (/physics, /chemistry) ---- */
-.physics-page {
-  position: fixed;
-  inset: 0;
-  background: var(--bg);
-  overflow: hidden;
-  color: var(--text);
-}
-.physics-canvas {
-  display: block;
-  width: 100vw;
-  height: 100vh;
-  touch-action: none;
-  cursor: crosshair;
-}
+/* ---- demo room panel (shared by /physics, /chemistry, /biology, /math) ---- */
 .physics-help {
   position: fixed;
   left: 14px;
@@ -1487,12 +1473,6 @@ html[data-theme="dark"] .list-item {
   flex-direction: column;
   gap: 0.45rem;
 }
-.chem-controls {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  flex-wrap: wrap;
-}
 .chem-mode-btn {
   font: 600 12px system-ui, sans-serif;
   padding: 3px 10px;
@@ -1506,18 +1486,6 @@ html[data-theme="dark"] .list-item {
   background: var(--accent-solid);
   color: var(--on-accent);
   border-color: var(--accent-solid);
-}
-.chem-slider-label {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  font-size: 12px;
-  color: var(--muted);
-  margin-left: 0.35rem;
-}
-.chem-slider-label input[type="range"] {
-  width: 80px;
-  accent-color: var(--accent-solid);
 }
 
 /* ---- biology page (/biology) ---- */

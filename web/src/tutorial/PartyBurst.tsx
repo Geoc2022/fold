@@ -15,8 +15,6 @@ interface Particle {
   spin: number
 }
 
-// const PARTY_WEBP = 'https://fonts.gstatic.com/s/e/notoemoji/latest/1f973/512.webp'
-// const PARTY_WEBP = "https://fonts.gstatic.com/s/e/notoemoji/latest/1f386/512.webp"
 const PARTY_WEBP = "https://fonts.gstatic.com/s/e/notoemoji/latest/1f389/512.webp"
 
 export function PartyBurst({ active, count = 20 }: Props) {
