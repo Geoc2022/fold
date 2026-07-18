@@ -25,7 +25,7 @@ export function buildActivityShareText(
     ? Math.max(1, activity.group_multiple)
     : Math.max(activity.min_people, glyphs.length)
   const slotCount = activity.grouping_mode === 'tiling'
-    ? Math.max(rowSize, Math.ceil(glyphs.length / rowSize) * rowSize)
+    ? Math.max(rowSize, Math.ceil(activity.min_people / rowSize) * rowSize, Math.ceil(glyphs.length / rowSize) * rowSize)
     : rowSize
   while (glyphs.length < slotCount) glyphs.push(STATE_GLYPHS.empty)
 

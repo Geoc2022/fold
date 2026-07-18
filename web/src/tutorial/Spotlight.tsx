@@ -11,8 +11,15 @@ export function Spotlight({ target }: { target: string }) {
   const [rect, setRect] = useState<Rect | null>(null)
 
   useLayoutEffect(() => {
-    const element = document.querySelector(target)
+    let observed: Element | null = null
+    const resizeObserver = new ResizeObserver(() => update())
     const update = () => {
+      const element = document.querySelector(target)
+      if (element !== observed) {
+        if (observed) resizeObserver.unobserve(observed)
+        observed = element
+        if (observed) resizeObserver.observe(observed)
+      }
       if (!element) {
         setRect(null)
         return
@@ -27,14 +34,15 @@ export function Spotlight({ target }: { target: string }) {
       })
     }
     update()
-    const observer = element ? new ResizeObserver(update) : null
-    if (element) observer?.observe(element)
+    const mutationObserver = new MutationObserver(update)
+    mutationObserver.observe(document.documentElement, { subtree: true, childList: true, attributes: true })
     window.addEventListener('resize', update)
     window.addEventListener('scroll', update, true)
     return () => {
       window.removeEventListener('resize', update)
       window.removeEventListener('scroll', update, true)
-      observer?.disconnect()
+      resizeObserver.disconnect()
+      mutationObserver.disconnect()
     }
   }, [target])
 

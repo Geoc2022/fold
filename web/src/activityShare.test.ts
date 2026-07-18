@@ -32,4 +32,11 @@ describe('tiling activity shares', () => {
       '🎲 Game Night — /GAME', '🟢🟢', '🟢⚪', 'url',
     ])
   })
+
+  it('shows enough rows to reach the minimum group size', () => {
+    const tiling = { ...activity, grouping_mode: 'tiling', group_multiple: 2 } as ActivityView
+    expect(buildActivityShareText(tiling, [], 0, 'url').split('\n')).toEqual([
+      '🎲 Game Night — /GAME', '⚪⚪', '⚪⚪', 'url',
+    ])
+  })
 })

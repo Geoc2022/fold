@@ -104,18 +104,18 @@ export function RoomTutorial() {
   }, [groupReady, script])
 
   async function onInterested() {
-    if (script.step !== 'lurker') return
+    if (script.step !== 'lurker' && script.step !== 'ready') return
     setSelf({ state: 'interested', arrivalAt: null })
     if (!crowdStarted) {
       setCrowdStarted(true)
     }
-    script.set(2)
+    if (script.step === 'lurker') script.set(2)
   }
 
   async function onCommit(etaSeconds: number) {
-    if (script.step !== 'interested' && script.step !== 'committed') return
+    if (script.step !== 'interested' && script.step !== 'committed' && script.step !== 'ready') return
     setSelf({ state: 'committed', arrivalAt: Date.now() + etaSeconds * 1000 })
-    script.set(3)
+    if (script.step !== 'ready') script.set(3)
   }
 
   async function onWithdraw() {

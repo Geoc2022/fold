@@ -170,6 +170,10 @@ export function ActivityRoom() {
 
   const policyRules = roomRules ?? loadHomeRules()
   const rulesRevision = useMemo(() => JSON.stringify(policyRules), [policyRules])
+  const serverClockOffset = useMemo(
+    () => (data?.server_time ?? Date.now()) - Date.now(),
+    [data?.server_time],
+  )
 
   const saveRoomRules = useCallback((nextRules: PolicyRule[]) => {
     if (!code) return
@@ -184,7 +188,7 @@ export function ActivityRoom() {
     try {
       const sources = decodePolicySources(policyParam)
       if (sources.length > 0) {
-        saveRoomRules(appendPolicySources(roomRules ?? loadHomeRules(), sources))
+        saveRoomRules(appendPolicySources(loadRoomRules(code) ?? loadHomeRules(), sources))
         setShowPolicyPanel(true)
       }
     } catch {
@@ -194,7 +198,7 @@ export function ActivityRoom() {
       current.delete('policy')
       return current
     }, { replace: true })
-  }, [code, roomRules, saveRoomRules, searchParams, setSearchParams])
+  }, [code, saveRoomRules, searchParams, setSearchParams])
 
   const resolveRoomRules = useCallback((_activity: ActivityView) => policyRules, [policyRules])
   const onPolicyNotify = (_activity: ActivityView, message: string) => {
@@ -203,10 +207,11 @@ export function ActivityRoom() {
   const onPolicyCommit = async (policyActivity: ActivityView, etaDeltaSeconds: number | null) => {
     const run = policyActivity.current_run
     if (!run) return
-    const eta = policyCommitEta(policyActivity, etaDeltaSeconds, Date.now())
+    const eta = policyCommitEta(policyActivity, etaDeltaSeconds, Date.now() + serverClockOffset)
     try {
-      await api.commit(run.id, eta)
+      const updated = await api.commit(run.id, eta)
       refresh()
+      return updated
     } catch (err) {
       showAlert(err instanceof Error ? err.message : String(err))
     }
