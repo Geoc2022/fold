@@ -11,7 +11,7 @@ import {
 } from '../policy/engine'
 import { buildHighlightedSegments } from '../policy/highlight'
 import { bool, dur, envFromVars, list, num, record, str, variant } from '../policy/values'
-import { PolicyHelp } from '../components/PolicyHelp'
+import { LANGUAGE_DOCS_URL } from '../links'
 import { readString, writeString } from '../storage'
 import { useForceTheme } from '../useForceTheme'
 
@@ -50,7 +50,6 @@ export function MathPage() {
     maxPeople: 6,
   })
   const [selfState, setSelfState] = useState<NodeState>('lurker')
-  const [showHelp, setShowHelp] = useState(false)
   const [terminalInput, setTerminalInput] = useState('')
   const [terminalEntries, setTerminalEntries] = useState<TerminalEntry[]>([])
   const [terminalHistory, setTerminalHistory] = useState<string[]>([])
@@ -168,9 +167,8 @@ export function MathPage() {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === '?') {
         e.preventDefault()
-        setShowHelp((v) => !v)
+        window.open(LANGUAGE_DOCS_URL, '_blank', 'noopener,noreferrer')
       }
-      if (e.key === 'Escape') setShowHelp(false)
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
@@ -314,7 +312,12 @@ export function MathPage() {
           <button type="button" onClick={savePolicy} title="Save current policy" aria-label="Save current policy">
             <span className="noto-emoji" aria-hidden="true">💾</span>
           </button>
-          <button type="button" onClick={() => setShowHelp(true)} title="Help" aria-label="Help">
+          <button
+            type="button"
+            onClick={() => window.open(LANGUAGE_DOCS_URL, '_blank', 'noopener,noreferrer')}
+            title="Help"
+            aria-label="Help"
+          >
             <span className="noto-emoji" aria-hidden="true">❓</span>
           </button>
         </div>
@@ -412,7 +415,6 @@ export function MathPage() {
         </div>
       </section>
       </main>
-      {showHelp && <PolicyHelp title="Policy Language" onClose={() => setShowHelp(false)} />}
     </>
   )
 }
@@ -529,4 +531,3 @@ function scheduleEffect(
       return offsetMs
   }
 }
-

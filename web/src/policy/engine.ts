@@ -4,7 +4,6 @@ type PolicyWasmModule = {
   evaluate_policy_json: (policyJson: string, envJson: string) => string
   highlight_policy_json: (source: string) => string
   eval_expr_json: (source: string, envJson: string) => string
-  policy_docs: () => string
 }
 
 export type JsonValue =
@@ -130,19 +129,6 @@ export async function evaluateExpression(source: string, env: JsonValue): Promis
     return JSON.parse(raw) as EvalExprResult
   } catch (error) {
     return { output: null, ty: null, error: `expression eval failed: ${String(error)}` }
-  }
-}
-
-let cachedDocs: string | null = null
-
-export async function policyDocs(): Promise<string> {
-  if (cachedDocs != null) return cachedDocs
-  try {
-    const wasm = await loadPolicyWasm()
-    cachedDocs = wasm.policy_docs()
-    return cachedDocs
-  } catch (error) {
-    return `Failed to load documentation: ${String(error)}`
   }
 }
 

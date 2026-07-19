@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { highlightPolicy, type HighlightToken } from '../policy/engine'
 import { buildHighlightedSegments } from '../policy/highlight'
+import { LANGUAGE_DOCS_URL } from '../links'
 import { newPolicyRule, type PolicyRule } from '../policy/rules'
-import { PolicyHelp } from './PolicyHelp'
 
 interface Props {
   rules: PolicyRule[]
@@ -27,7 +27,6 @@ export function PolicyPanel({
   const selected = useMemo(() => rules.find((r) => r.id === selectedId) ?? rules[0] ?? null, [rules, selectedId])
   const [draft, setDraft] = useState(selected?.source ?? '')
   const [tokens, setTokens] = useState<HighlightToken[]>([])
-  const [showHelp, setShowHelp] = useState(false)
   const highlightRef = useRef<HTMLPreElement | null>(null)
 
   // Reset the draft whenever a different rule is selected, when the
@@ -102,13 +101,13 @@ export function PolicyPanel({
             <button type="button" className="panel-button" onClick={onRequestNotifications}>
               Enable notifications
             </button>
-            <button
-              type="button"
-              className="panel-button policy-emoji-button policy-icon-only"
-              onClick={() => setShowHelp(true)}
-              title="Help"
-              aria-label="Help"
-            >
+              <button
+                type="button"
+                className="panel-button policy-emoji-button policy-icon-only"
+                onClick={() => window.open(LANGUAGE_DOCS_URL, '_blank', 'noopener,noreferrer')}
+                title="Help"
+                aria-label="Help"
+              >
               <span className="noto-emoji" aria-hidden="true">❓</span>
             </button>
             {onShare && (
@@ -209,7 +208,6 @@ export function PolicyPanel({
           </label>
         </form>
       </div>
-      {showHelp && <PolicyHelp onClose={() => setShowHelp(false)} />}
     </div>
   )
 }
