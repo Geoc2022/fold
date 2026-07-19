@@ -1004,6 +1004,7 @@ html[data-theme="dark"] .list-item {
   display: block;
   width: 100vw;
   height: 100vh;
+  height: 100dvh;
   touch-action: none;
   /* CSS fallback for the first paint; JS then switches this dynamically
      between grab / grabbing / crosshair based on hover and drag state. */
@@ -1011,7 +1012,7 @@ html[data-theme="dark"] .list-item {
 }
 .room-code {
   position: fixed;
-  top: 18px;
+  top: calc(env(safe-area-inset-top) + 10px);
   left: 20px;
   z-index: 120;
   color: var(--text);
@@ -1030,7 +1031,7 @@ html[data-theme="dark"] .list-item {
 }
 .room-error {
   position: fixed;
-  top: 14px;
+  top: calc(env(safe-area-inset-top) + 10px);
   right: 16px;
   z-index: 100;
   color: var(--danger);
@@ -1038,7 +1039,7 @@ html[data-theme="dark"] .list-item {
 }
 .room-alert {
   position: fixed;
-  top: 22px;
+  top: calc(env(safe-area-inset-top) + 14px);
   left: 50%;
   transform: translateX(-50%);
   z-index: 130;
@@ -1073,6 +1074,7 @@ html[data-theme="dark"] .list-item {
 }
 .room-message {
   min-height: 100vh;
+  min-height: 100dvh;
   display: grid;
   place-content: center;
   gap: 0.65rem;
@@ -1094,7 +1096,7 @@ html[data-theme="dark"] .list-item {
   bottom: 0;
   transform: translateX(-50%);
   min-height: 46px;
-  padding: 4px 12px;
+  padding: 4px 12px calc(4px + env(safe-area-inset-bottom));
   z-index: 101;
   background: color-mix(in srgb, var(--panel) 92%, var(--bg) 8%);
   border: none;
@@ -1179,7 +1181,7 @@ html[data-theme="dark"] .list-item {
 }
 .room-policy-toggle {
   position: fixed;
-  top: 22px;
+  top: calc(env(safe-area-inset-top) + 14px);
   right: 16px;
   z-index: 121;
   background: color-mix(in srgb, var(--panel) 90%, transparent);
@@ -1435,6 +1437,11 @@ html[data-theme="dark"] .list-item {
   gap: 0.55rem;
 }
 @media (max-width: 660px) {
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
   .global-panel {
     width: calc(100vw - 18px);
     gap: 7px;
@@ -1445,13 +1452,25 @@ html[data-theme="dark"] .list-item {
     padding: 6px 10px;
   }
   .room-policy-toggle {
-    top: 62px;
+    top: calc(env(safe-area-inset-top) + 54px);
   }
   .policy-demo-panel {
     right: 10px;
     left: 10px;
     width: auto;
     top: 96px;
+  }
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .panel-button,
+  .room-action {
+    min-height: 44px;
+  }
+  .panel-button.icon {
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0;
   }
 }
 

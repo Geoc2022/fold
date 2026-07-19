@@ -83,6 +83,8 @@ interface PointerState {
 interface Camera { x: number; y: number; scale: number }
 
 const WORLD_R = 280
+const CAMERA_MIN_SCALE = 0.2
+const CAMERA_MAX_SCALE = 4
 const ABS_MAX_ETA_SEC = 24 * 60 * 60
 const ABS_MAX_DURATION_SEC = 24 * 60 * 60
 const TUG = createTugModel(WORLD_R)
@@ -98,6 +100,7 @@ const TUG = createTugModel(WORLD_R)
 //                        just outside interestedMaxR
 const INTERESTED_R = (TUG.commitMaxR + TUG.interestedMaxR) / 2
 const LURKER_R = TUG.interestedMaxR + 12
+const AUTO_FIT_WORLD_MARGIN = 28
 /** How long the fade+outward-travel plays before a removed node is actually
  * dropped from the sim -- see the reconciliation effect and frame loop. */
 const EXIT_MS = 900
@@ -157,6 +160,8 @@ export function RoomCanvas({
   const cameraRef = useRef<Camera>({ x: 0, y: 0, scale: 1 })
   const cameraTargetScaleRef = useRef(1)
   const pinchRef = useRef<{ dist: number } | null>(null)
+  const userAdjustedCameraRef = useRef(false)
+  const lastAutoFitViewportRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 })
   const visualRef = useRef(visual)
   const activityRef = useRef(activity)
   const busyRef = useRef(false)
@@ -290,9 +295,32 @@ export function RoomCanvas({
     const resize = () => {
       const dpr = window.devicePixelRatio || 1
       const rect = canvas.getBoundingClientRect()
-      canvas.width = Math.max(1, Math.floor(rect.width * dpr))
-      canvas.height = Math.max(1, Math.floor(rect.height * dpr))
+      const nextWidth = Math.max(1, Math.floor(rect.width * dpr))
+      const nextHeight = Math.max(1, Math.floor(rect.height * dpr))
+      if (canvas.width !== nextWidth) canvas.width = nextWidth
+      if (canvas.height !== nextHeight) canvas.height = nextHeight
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+
+      if (rect.width <= 0 || rect.height <= 0) return
+      if (userAdjustedCameraRef.current) return
+
+      const roundedW = Math.round(rect.width)
+      const roundedH = Math.round(rect.height)
+      const last = lastAutoFitViewportRef.current
+      const firstFit = last.w === 0 || last.h === 0
+      const meaningfulResize = Math.abs(roundedW - last.w) >= 12 || Math.abs(roundedH - last.h) >= 12
+      if (!firstFit && !meaningfulResize) return
+      lastAutoFitViewportRef.current = { w: roundedW, h: roundedH }
+
+      const outerExtent = LURKER_R + Math.max(AUTO_FIT_WORLD_MARGIN, visualRef.current.nodeRadius * 2.2)
+      const fitScale = Math.min(
+        1,
+        Math.max(CAMERA_MIN_SCALE, Math.min(CAMERA_MAX_SCALE, Math.min(rect.width, rect.height) / (outerExtent * 2))),
+      )
+      cameraRef.current.x = 0
+      cameraRef.current.y = 0
+      cameraTargetScaleRef.current = fitScale
+      if (firstFit) cameraRef.current.scale = fitScale
     }
     resize()
     window.addEventListener('resize', resize)
@@ -533,10 +561,11 @@ export function RoomCanvas({
       if (activePointers.size === 2 && pinchRef.current) {
         const pts = [...activePointers.values()]
         const newDist = Math.hypot(pts[1].clientX - pts[0].clientX, pts[1].clientY - pts[0].clientY)
-        const nextScale = Math.min(4, Math.max(0.2, cameraRef.current.scale * (newDist / Math.max(1, pinchRef.current.dist))))
+        const nextScale = Math.min(CAMERA_MAX_SCALE, Math.max(CAMERA_MIN_SCALE, cameraRef.current.scale * (newDist / Math.max(1, pinchRef.current.dist))))
         cameraRef.current.scale = nextScale
         cameraTargetScaleRef.current = nextScale
         pinchRef.current.dist = newDist
+        userAdjustedCameraRef.current = true
         return
       }
 
@@ -559,6 +588,7 @@ export function RoomCanvas({
         ps.clientX = e.clientX
         ps.clientY = e.clientY
         setCursor('grabbing')
+        userAdjustedCameraRef.current = true
         return
       }
 
@@ -616,7 +646,8 @@ export function RoomCanvas({
       e.preventDefault()
       const wheelFactor = Math.exp(-e.deltaY * 0.001)
       const nextTarget = cameraTargetScaleRef.current * wheelFactor
-      cameraTargetScaleRef.current = Math.min(4, Math.max(0.2, nextTarget))
+      cameraTargetScaleRef.current = Math.min(CAMERA_MAX_SCALE, Math.max(CAMERA_MIN_SCALE, nextTarget))
+      userAdjustedCameraRef.current = true
     }
 
     const onPointerLeave = () => {
