@@ -27,6 +27,8 @@ if [ -f "$WASM" ]; then
     if ! wasm-opt -Oz \
       --enable-reference-types \
       --enable-bulk-memory \
+      --enable-sign-ext \
+      --enable-mutable-globals \
       --enable-nontrapping-float-to-int \
       --enable-exception-handling \
       "$WASM" -o "$WASM"; then

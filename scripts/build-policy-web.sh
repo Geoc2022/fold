@@ -26,6 +26,8 @@ if command -v wasm-opt >/dev/null 2>&1; then
   if ! wasm-opt -Oz \
     --enable-reference-types \
     --enable-bulk-memory \
+    --enable-sign-ext \
+    --enable-mutable-globals \
     --enable-nontrapping-float-to-int \
     --enable-exception-handling \
     "$ASSET_DIR/policy_bg.wasm" -o "$ASSET_DIR/policy_bg.wasm"; then
