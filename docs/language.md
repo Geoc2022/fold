@@ -1,38 +1,55 @@
 # Policy language
 
-A small, strongly-typed language for writing room policies. It reads like simplified OCaml. Two rules keep it consistent:
+A small, strongly-typed language for writing room notification policies.
 
-- **Commas gather data** — lists `[a, b, c]`, tuples `(a, b)`, records `{ x = 1 }`.
-- **Spaces apply functions** — `map f xs`, `notify "hi"`. Never use commas in a call.
-
-Newlines separate statements; there are no semicolons. A policy is just an expression that produces an `Action` — the last line is what the policy does. `condition => action` is shorthand for `if condition then action else {}` (do nothing).
+It reads like a simplified OCaml. However, newlines separate statements and there are no semicolons.
+A policy is a program whose final expression is an `Action`.
 
 ## Syntax at a glance
 
 ```
-count = #interested            (* a binding; # means "how many" *)
-double x = x * 2               (* a function of one argument *)
-add = fun a b -> a + b         (* the same, written with fun *)
+count = #interested
+double x = x * 2
+add = fun a b -> a + b
 label = if count > 3 then "many" else "few"
-text = "we have {count} people"   (* string interpolation with { } *)
-first = match items with
+text = "we have {count} people"
+first = match interested with
   | [] -> None
   | x :: rest -> Some(x)
 count > min_people => notify "ready! ({count})"
 ```
 
+## Bindings and functions
+
+- `name = expr` binds a value.
+- `name a b = expr` is function sugar for nested lambdas.
+- `fun a b -> expr` is an explicit lambda.
+- Destructuring is allowed in bindings: `{x, y} = rec`, `(a, b) = pair`.
+
 ## Operators
 
 | Operator | Meaning |
 |---|---|
-| `+ - * / %` | arithmetic on `Num` (and `Dur`) |
-| `== !=` | equality (any comparable type) |
-| `< > <= >=` | ordering |
+| `+ - * / %` | arithmetic on `Num` (and `Dur` where supported) |
+| `== !=` | equality (for `Eq` types) |
+| `< > <= >=` | ordering (for `Ord` types) |
 | `and or not xor` | boolean logic |
 | `::` | prepend to a list |
-| `#xs` | length of a list |
+| `#xs` | length sugar (`len xs`) |
 | `xs[i]` | list indexing (0-based) |
 | `.field` / `.0` | record field / tuple element |
+
+## Strings
+
+- Interpolation uses `{expr}`: `"hi {self.name}"`.
+- Escape literal braces with `{{` and `}}`.
+- Standard escapes: `\n`, `\t`, `\"`, `\\`.
+
+## Control flow and patterns
+
+- `if cond then a else b`
+- `match expr with | pat -> expr ...` (must be exhaustive)
+- Patterns: literals, variants (`Some(x)`), tuples, lists (`[a, b]`), cons (`x :: xs`), records (`{field, _}`), wildcard (`_`).
 
 ## Built-in types
 
@@ -45,25 +62,33 @@ type Grouping = Single | Parallel
 type Time = { hour: Num, minute: Num }
 ```
 
-Primitive types: `Num`, `Bool`, `Dur` (durations like `1h30m`), `Str`, `Time`. Plus `List<T>`, tuples `(A, B)`, functions `A -> B`, and `Action`.
+Primitive types: `Num`, `Bool`, `Dur` (durations like `1h30m`), `Str`, `Time`.
+Plus collections/functions: `List<T>`, tuples `(A, B)`, and functions `A -> B`.
 
-## Traits
+## Type and trait declarations
 
-Traits are shared behaviours (type classes). Operators use the built-in ones; you can declare your own with `trait` and `impl`.
+- Define custom types with `type` (record, variant, or alias).
+- Define traits with `trait Name<a> { ... }` and instances with `impl Name<MyType> { ... }`.
+- Built-ins use traits too (for operators and interpolation).
+
+### Built-in traits
 
 ```
 trait Eq<a> {
   eq: a -> a -> Bool
 }
+
 trait Ord<a> {
   lt: a -> a -> Bool
   le: a -> a -> Bool
   gt: a -> a -> Bool
   ge: a -> a -> Bool
 }
+
 trait Display<a> {
   show: a -> Str
 }
+
 trait Arith<a> {
   add: a -> a -> a
   sub: a -> a -> a
@@ -71,6 +96,7 @@ trait Arith<a> {
   div: a -> a -> a
   rem: a -> a -> a
 }
+
 ```
 
 ## Globals
@@ -102,83 +128,77 @@ These values are always in scope:
 
 ## Standard library
 
-Ready-made functions (written in the language itself):
+Source: [`crates/policy/src/prelude.rs`](https://github.com/Geoc2022/fold/blob/main/crates/policy/src/prelude.rs)
 
-- `len : List<a> -> Num` — Number of elements in a list.
-- `sum : List<Num> -> Num` — Sum of a list of numbers.
-- `avg : List<Num> -> Num` — Average of a list of numbers.
-- `map : (a -> b) -> List<a> -> List<b>` — Apply a function to every element of a list.
-- `head : List<a> -> Option<a>` — First element of a list, if present.
-- `tail : List<a> -> List<a>` — All but the first element of a list (or [] for empty).
-- `take : Num -> List<a> -> List<a>` — First n elements of a list.
-- `drop : Num -> List<a> -> List<a>` — List without its first n elements.
-- `foldl : (a -> b -> a) -> a -> List<b> -> a` — Left-associative fold over a list.
-- `foldr : (a -> b -> b) -> b -> List<a> -> b` — Right-associative fold over a list.
-- `filter : (a -> Bool) -> List<a> -> List<a>` — Keep only the elements for which the test is true.
-- `sort : (a -> a -> Bool) -> List<a> -> List<a>` — Sort a list using a comparator (`sort compare xs`).
-- `any : (a -> Bool) -> List<a> -> Bool` — True if the test holds for any element.
-- `all : (a -> Bool) -> List<a> -> Bool` — True if the test holds for every element.
-- `is_some : Option<a> -> Bool` — True if the option holds a value.
-- `is_none : Option<a> -> Bool` — True if the option is empty.
-- `unwrap_or : a -> Option<a> -> a` — The value inside an option, or a default when empty.
-- `is_committed : Person -> Bool` — True if the person has committed.
-- `is_arrived : Person -> Bool` — True if the person has arrived.
-- `eta : Person -> Option<Dur>` — How long until the person is expected, if known.
-- `waited : Person -> Dur` — How long the person has been engaged.
-- `is_weekend : Day -> Bool` — True on Saturday or Sunday.
+| Function | Signature | Description |
+|---|---|---|
+| `len` | `List<a> -> Num` | Number of elements in a list. |
+| `sum` | `List<Num> -> Num` | Sum of a list of numbers. |
+| `avg` | `List<Num> -> Num` | Average of a list of numbers. |
+| `map` | `(a -> b) -> List<a> -> List<b>` | Apply a function to every element of a list. |
+| `head` | `List<a> -> Option<a>` | First element of a list, if present. |
+| `tail` | `List<a> -> List<a>` | All but the first element of a list (or [] for empty). |
+| `take` | `Num -> List<a> -> List<a>` | First n elements of a list. |
+| `drop` | `Num -> List<a> -> List<a>` | List without its first n elements. |
+| `foldl` | `(a -> b -> a) -> a -> List<b> -> a` | Left-associative fold over a list. |
+| `foldr` | `(a -> b -> b) -> b -> List<a> -> b` | Right-associative fold over a list. |
+| `filter` | `(a -> Bool) -> List<a> -> List<a>` | Keep only the elements for which the test is true. |
+| `insert_sorted` | `(a -> a -> Bool) -> a -> List<a> -> List<a>` | Insert one value into an already-sorted list using a comparator. |
+| `sort` | `(a -> a -> Bool) -> List<a> -> List<a>` | Sort a list using a comparator (like OCaml's sort compare xs). |
+| `any` | `(a -> Bool) -> List<a> -> Bool` | True if the test holds for any element. |
+| `all` | `(a -> Bool) -> List<a> -> Bool` | True if the test holds for every element. |
+| `is_some` | `Option<a> -> Bool` | True if the option holds a value. |
+| `is_none` | `Option<a> -> Bool` | True if the option is empty. |
+| `unwrap_or` | `a -> Option<a> -> a` | The value inside an option, or a default when empty. |
+| `is_committed` | `Person -> Bool` | True if the person has committed. |
+| `is_arrived` | `Person -> Bool` | True if the person has arrived. |
+| `eta` | `Person -> Option<Dur>` | How long until the person is expected, if known. |
+| `waited` | `Person -> Dur` | How long the person has been engaged. |
+| `is_weekend` | `Day -> Bool` | True on Saturday or Sunday. |
 
 ## Actions
 
-An action is what a policy does. Think of it as something that may or may not
-happen: when a policy decides to do nothing, its action is the empty action `{}`
-(it "returns nothing").
+An action is what a policy does when it fires.
 
 - `notify "message"` — send a notification (supports `{interpolation}`).
 - `commit` / `interest` / `lurk` — change your own state.
-- `commit +3m` / `commit -3m` — move your commit ETA later or sooner.
+- `commit +3m` / `commit -3m` — adjust commit ETA.
 - `sleep 30s` — wait.
 - `delay action 5m` — run an action after a delay.
 - `action before target by lead` — schedule `action` to happen `lead` before an optional duration `target`.
-- `{ a1, a2 }` — do several actions in order. `{}` does nothing.
-- `if cond then action else action` — choose an action.
+- `{ a1, a2 }` — run actions in order. `{}` is no-op.
 
-A policy is just an expression whose type is `Action`, so any of these forms can
-be the whole policy:
+## Desugaring
 
-```
-commit                              (* always commit *)
+Language sugar is expanded before typechecking/evaluation:
 
-commit -3m                          (* commit three minutes sooner *)
-
-#committed >= min_people => commit  (* commit only when enough people are in *)
-
-match today with                    (* match must be exhaustive; `_` covers    *)
-  | Sat -> lurk                      (*   the remaining days                    *)
-  | Sun -> lurk
-  | _ -> {}
-```
-
-### Notifying before an event
-
-`ready_in : Option<Dur>` is the predicted time until the group is ready (or
-`None` if it can't be predicted). You can write this directly as sugar:
-
-```
-notify "starting in 3 min!" before ready_in by 3min
-```
-
-It desugars to:
+- `condition => action`
+  becomes `if condition then action else {}`.
+- `#xs`
+  becomes `len xs`.
+- `notify "starting" before ready_in by 3min`
+  becomes:
 
 ```
 match ready_in with
-  | Some(t) -> delay (notify "starting in 3 min!") (t - 3min)
+  | Some(t) -> delay (notify "starting") (t - 3min)
   | None -> {}
 ```
 
-`delay a d` waits `d` then runs `a`, so `delay (notify ...) (t - 3min)` fires the
-notification 3 minutes before the group is ready. If `t - 3min` is negative it
-fires immediately.
+- `f a b = expr`
+  becomes `f = fun a b -> expr`.
 
 ## Comments
 
-`(* ... *)` is a comment (they can nest). `(** ... *)` documents the next definition.
+- `(* ... *)` comments can nest.
+- `(** ... *)` documents the next definition (used by prelude docs).
+
+## Evaluation model
+
+Policies are re-evaluated as room state changes and polling ticks.
+`now`/`today` reflect current wall-clock context from the host app.
+Evaluation is step-bounded, so recursive helpers cannot run forever.
+
+## Examples
+
+For examples and ready-to-copy templates, see [`docs/policy-examples.md`](https://github.com/Geoc2022/fold/blob/main/docs/policy-examples.md).
