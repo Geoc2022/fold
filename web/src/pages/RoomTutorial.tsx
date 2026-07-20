@@ -132,13 +132,13 @@ export function RoomTutorial() {
     if (script.step === 'lurker') {
       return {
         title: 'Lurker',
-        body: 'Your node starts on the edge. Tap it or drag it closer to the center once to become interested.',
+        body: 'Your node starts on the edge. Press and hold on the background to become interested.',
       }
     }
     if (script.step === 'interested') {
       return {
         title: 'Interested',
-        body: 'Looks like there are some other people who are interested too. To commit and complete the group, hold your node or pull it toward the center.',
+        body: 'Looks like there are some other people who are interested too. To commit and complete the group, keep pressing and holding the background or pull it toward the center.',
       }
     }
     if (script.step === 'committed') {

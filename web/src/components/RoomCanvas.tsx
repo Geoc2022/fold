@@ -13,7 +13,7 @@ import {
   type VisualConfig,
   type VisualNodeState,
 } from '../nodeVisual'
-import { createTugModel, tugPositionInward, tugPositionOutward } from '../tugOfWar'
+import { TUG_WIDTH, TUG_WIDTH_HOLD_MS, createTugModel, tugPositionInward, tugPositionOutward } from '../tugOfWar'
 import type { ActivityView, ParticipantView, Person } from '../types'
 
 export interface RoomAlertInput {
@@ -78,6 +78,12 @@ interface PointerState {
   worldY: number
   downAt: number
   dragging: boolean
+  /** True once a press-and-hold on the background has engaged the "reel"
+   * gesture -- a steady inward pull on your own node (see maybeReel). */
+  reeling: boolean
+  /** performance.now() of the last reel frame, used to measure elapsed time
+   * while easing a committed node's ETA toward the minimum. */
+  reelLast: number
 }
 
 interface Camera { x: number; y: number; scale: number }
@@ -140,6 +146,31 @@ function springToward(n: SimNode, targetX: number, targetY: number) {
  * already reads as "in bounds" -- otherwise winning right at a zone
  * boundary could still jump. */
 const WIN_EASE_MS = 300
+
+// Press-and-hold on the background reels your own node toward center with a
+// steady, gravity-like inward pull -- an accessible alternative to grabbing
+// the (small) node directly, especially on mobile. It reuses the exact tug
+// of war in processHeldNode: a constant inward force is just the virtual
+// pointer held a constant distance *inside* the next boundary, so the node
+// clings at the ring (resisted) while work accumulates, then wins and
+// crosses -- identical in behavior to a manual inward drag.
+//
+// REEL_FORCE is that constant distance-past-boundary. Setting it to one
+// TUG_WIDTH means each ring takes ~TUG_WIDTH_HOLD_MS to win, matching the
+// tug model's own calibration point ("pulling at exactly one TUG_WIDTH past
+// the boundary").
+const REEL_FORCE = TUG_WIDTH
+// Committed/arrived has no ring inward (closer just means a sooner ETA), so
+// there's no tug to accumulate -- instead ease the radius inward at a fixed
+// pace. Matched to the ring-crossing pace (one TUG_WIDTH per
+// TUG_WIDTH_HOLD_MS) so the whole reel reads as one continuous pull.
+const REEL_SPEED = TUG_WIDTH / (TUG_WIDTH_HOLD_MS / 1000)
+/** How long the background must be held (roughly stationary) before the reel
+ * engages -- long enough not to fire on a quick tap or the start of a pan. */
+const BG_HOLD_MS = 140
+/** Pointer travel (screen px) beyond which a background press is treated as a
+ * camera pan instead of a hold-to-reel. */
+const PAN_THRESHOLD = 6
 
 export function RoomCanvas({
   activity,
@@ -529,6 +560,50 @@ export function RoomCanvas({
       }
     }
 
+    // Press-and-hold on the background pulls your own node toward center with
+    // a steady, gravity-like force. Runs every frame (like processHeldNode)
+    // so the pull keeps working while the finger holds perfectly still. It
+    // routes entirely through processHeldNode by pointing ps.node at your own
+    // node and placing the virtual pointer a constant REEL_FORCE *inside* the
+    // next inward boundary -- so the tug of war resists, accumulates work, and
+    // promotes lurker -> interested -> committed exactly as a manual inward
+    // drag would. Committed/arrived has no inward ring, so there the radius is
+    // eased toward center at REEL_SPEED to keep drawing the ETA down.
+    const maybeReel = () => {
+      const ps = pointerRef.current
+      // Only a background press (no node grabbed) that isn't a pan and has
+      // been held long enough is eligible to reel.
+      if (!ps || (ps.node && !ps.reeling) || (ps.dragging && !ps.reeling)) return
+      if (!ps.reeling && performance.now() - ps.downAt < BG_HOLD_MS) return
+      const me = nodesRef.current.find((n) => n.isMe)
+      if (!me) return
+
+      if (!ps.reeling) {
+        ps.reeling = true
+        // dragging so onPointerUp takes the drag branch (save committed ETA),
+        // node so processHeldNode drives the promotions/ETA/API calls. Tug
+        // work was already reset on pointer-down and now accumulates.
+        ps.dragging = true
+        ps.node = me
+        ps.reelLast = performance.now()
+        setCursor('none')
+      }
+
+      const angle = Math.atan2(me.y, me.x)
+      let targetR: number
+      if (me.state === 'committed' || me.state === 'arrived') {
+        const perf = performance.now()
+        const dt = Math.min(64, perf - ps.reelLast)
+        ps.reelLast = perf
+        targetR = Math.max(0, Math.hypot(me.x, me.y) - (REEL_SPEED * dt) / 1_000)
+      } else {
+        const boundary = me.state === 'lurker' ? TUG.interestedMaxR : TUG.commitMaxR
+        targetR = Math.max(0, boundary - REEL_FORCE)
+      }
+      ps.worldX = Math.cos(angle) * targetR
+      ps.worldY = Math.sin(angle) * targetR
+    }
+
     const onPointerDown = (e: PointerEvent) => {
       activePointers.set(e.pointerId, e)
       canvas.setPointerCapture(e.pointerId)
@@ -552,6 +627,8 @@ export function RoomCanvas({
         worldY: p.y,
         downAt: performance.now(),
         dragging: false,
+        reeling: false,
+        reelLast: 0,
       }
       setCursor(node ? 'none' : 'grabbing')
     }
@@ -579,10 +656,20 @@ export function RoomCanvas({
         }
         return
       }
+      // Once the reel has engaged it owns the node's position (maybeReel sets
+      // ps.node + drives worldX/worldY every frame) -- ignore any finger
+      // jitter so a stationary hold keeps pulling cleanly toward center.
+      if (ps.reeling) return
+
       if (!ps.node) {
+        // A background press only becomes a camera pan once it travels past
+        // PAN_THRESHOLD; below that it stays a candidate for hold-to-reel, so
+        // finger jitter doesn't steal the gesture. clientX/clientY stay at the
+        // press position until the pan engages, then track incrementally.
         const dx = e.clientX - ps.clientX
         const dy = e.clientY - ps.clientY
-        if (Math.hypot(e.clientX - ps.clientX, e.clientY - ps.clientY) > 0) ps.dragging = true
+        if (!ps.dragging && Math.hypot(dx, dy) <= PAN_THRESHOLD) return
+        ps.dragging = true
         cameraRef.current.x += dx
         cameraRef.current.y += dy
         ps.clientX = e.clientX
@@ -668,6 +755,7 @@ export function RoomCanvas({
       for (const n of nodesRef.current) {
         if (n.state === 'committed' && n.arrivalAt != null && n.arrivalAt <= now) n.state = 'arrived'
       }
+      maybeReel()
       processHeldNode(now)
       const durationMs = activityDuration(activityRef.current) * 1_000
       for (const n of nodesRef.current) {
