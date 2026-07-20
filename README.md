@@ -6,16 +6,6 @@ Try the tutorial at `/fold`
 
 ## Next Steps:
 
-### Auto Zoom and General Ease of Use
-
-This is an interesting website - moving a node is a lot more interesting than pressing a button, but this makes it less accessible and harder to learn.
-
-Having some sort of zoom that automatically positions the user in view of their node could make things easier to use, especially on mobile. There are probably a lot more features that can be added for more ease of use. Originally one of the options to move a node closer in was an "action" button in the bottom panel but it was removed because it was technically too hard - tough to sync the movement of the node to the button.
-
-Moreover, the tutorial can maybe add bounding boxes/animations (e.g., arrows) to make it a little more clear how to use the site.
-
-Lowkey, looking at games (like agar.io) could help research this. Maybe make it so the user can press and hold the background to move the node closer to the middle?
-
 ### Leaderboard
 
 It would be pretty fun to see the top people for a particular activity. At the moment, I think it's fine (and quite a bit easier) to have this be stored in people's local storage. Though, in the future maybe this requires some server signing data or using some computation on the server (there must be some cool algo like "A Linear Time Majority Vote Algorithm" that can get a good estimate). Also, this would need to be approved by the user to track this and store on local machines.
