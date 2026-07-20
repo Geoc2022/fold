@@ -89,7 +89,7 @@ interface PointerState {
 interface Camera { x: number; y: number; scale: number }
 
 const WORLD_R = 280
-const CAMERA_MIN_SCALE = 0.2
+const CAMERA_MIN_SCALE = 0.8
 const CAMERA_MAX_SCALE = 4
 const ABS_MAX_ETA_SEC = 24 * 60 * 60
 const ABS_MAX_DURATION_SEC = 24 * 60 * 60
@@ -107,6 +107,9 @@ const TUG = createTugModel(WORLD_R)
 const INTERESTED_R = (TUG.commitMaxR + TUG.interestedMaxR) / 2
 const LURKER_R = TUG.interestedMaxR + 12
 const AUTO_FIT_WORLD_MARGIN = 28
+/** How long auto-zoom stays paused after a manual pan/zoom/pinch before it
+ * eases back to framing your node. */
+const AUTO_ZOOM_OVERRIDE_MS = 2500
 /** How long the fade+outward-travel plays before a removed node is actually
  * dropped from the sim -- see the reconciliation effect and frame loop. */
 const EXIT_MS = 900
@@ -191,7 +194,10 @@ export function RoomCanvas({
   const cameraRef = useRef<Camera>({ x: 0, y: 0, scale: 1 })
   const cameraTargetScaleRef = useRef(1)
   const pinchRef = useRef<{ dist: number } | null>(null)
-  const userAdjustedCameraRef = useRef(false)
+  // performance.now() deadline: while now is before this, auto-zoom is paused
+  // so a manual pan/zoom/pinch sticks. It eases back to framing your node once
+  // the deadline lapses (see autoZoom + AUTO_ZOOM_OVERRIDE_MS).
+  const userCameraOverrideUntilRef = useRef(0)
   const lastAutoFitViewportRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 })
   const visualRef = useRef(visual)
   const activityRef = useRef(activity)
@@ -333,7 +339,7 @@ export function RoomCanvas({
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
 
       if (rect.width <= 0 || rect.height <= 0) return
-      if (userAdjustedCameraRef.current) return
+      if (performance.now() < userCameraOverrideUntilRef.current) return
 
       const roundedW = Math.round(rect.width)
       const roundedH = Math.round(rect.height)
@@ -642,7 +648,7 @@ export function RoomCanvas({
         cameraRef.current.scale = nextScale
         cameraTargetScaleRef.current = nextScale
         pinchRef.current.dist = newDist
-        userAdjustedCameraRef.current = true
+        userCameraOverrideUntilRef.current = performance.now() + AUTO_ZOOM_OVERRIDE_MS
         return
       }
 
@@ -675,7 +681,7 @@ export function RoomCanvas({
         ps.clientX = e.clientX
         ps.clientY = e.clientY
         setCursor('grabbing')
-        userAdjustedCameraRef.current = true
+        userCameraOverrideUntilRef.current = performance.now() + AUTO_ZOOM_OVERRIDE_MS
         return
       }
 
@@ -734,11 +740,32 @@ export function RoomCanvas({
       const wheelFactor = Math.exp(-e.deltaY * 0.001)
       const nextTarget = cameraTargetScaleRef.current * wheelFactor
       cameraTargetScaleRef.current = Math.min(CAMERA_MAX_SCALE, Math.max(CAMERA_MIN_SCALE, nextTarget))
-      userAdjustedCameraRef.current = true
+      userCameraOverrideUntilRef.current = performance.now() + AUTO_ZOOM_OVERRIDE_MS
     }
 
     const onPointerLeave = () => {
       if (!pointerRef.current) setCursor('grab')
+    }
+
+    // Continuously keep the destination center and your own node framed:
+    // recenter on the origin and pick the zoom that just fits your node (never
+    // tighter than the commit ring, so the destination stays legible). Scale
+    // eases via the frame loop toward cameraTargetScaleRef; x/y ease here.
+    // Paused while a manual pan/zoom override is active, then resumes.
+    const autoZoom = () => {
+      if (performance.now() < userCameraOverrideUntilRef.current) return
+      const w = canvas.clientWidth
+      const h = canvas.clientHeight
+      if (w <= 0 || h <= 0) return
+      const me = nodesRef.current.find((n) => n.isMe)
+      if (!me) return
+      const margin = Math.max(AUTO_FIT_WORLD_MARGIN, visualRef.current.nodeRadius * 2.2)
+      const minFramingR = Math.max(visualRef.current.nodeRadius * 1.6, TUG.commitMaxR * 0.5)
+      const reach = Math.max(minFramingR, Math.hypot(me.x, me.y)) + margin
+      const fit = Math.min(w, h) / (reach * 2)
+      cameraTargetScaleRef.current = Math.max(CAMERA_MIN_SCALE, Math.min(CAMERA_MAX_SCALE, fit))
+      cameraRef.current.x += (0 - cameraRef.current.x) * 0.12
+      cameraRef.current.y += (0 - cameraRef.current.y) * 0.12
     }
 
     canvas.addEventListener('pointerdown', onPointerDown)
@@ -798,6 +825,7 @@ export function RoomCanvas({
       }
 
       step(nodesRef.current, pointerRef.current, activityRef.current, visualRef.current, now)
+      autoZoom()
       draw(ctx, canvas, nodesRef.current, pointerRef.current, cameraRef.current, visualRef.current, activityRef.current, now)
       raf = requestAnimationFrame(frame)
     }
