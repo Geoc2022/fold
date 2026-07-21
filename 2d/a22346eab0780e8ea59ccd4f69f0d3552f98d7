@@ -1,0 +1,19 @@
+docs/language.md
+  s_dcaacc75f8dfec::t_ad2a6f5f23f85c 8,10
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "2da22346eab0780e8ea59ccd4f69f0d3552f98d7",
+  "prompts": {},
+  "sessions": {
+    "s_dcaacc75f8dfec": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_07d97ad6effeKe2izmbTskDoDe",
+        "model": "gpt-5.3-codex"
+      },
+      "human_author": "geo <gchemmala@cloudflare.com>"
+    }
+  }
+}
