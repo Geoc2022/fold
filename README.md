@@ -6,6 +6,14 @@ Try the tutorial at `/fold`
 
 ## Next Steps:
 
+### Add "badges"
+
+It would be cool to have the favicon update with the state of the room. In the process of this we should be able to programmatically draw the favicon, which is currently created in Figma.
+
+### Align the Fold title Animation
+
+The current title animation is a bit unrelated to the website. After setting up programmatically drawing the favicon, we should have this be part of the animation. For example, union the "Fold" text over the nodes moving across it.
+
 ### Leaderboard
 
 It would be pretty fun to see the top people for a particular activity. At the moment, I think it's fine (and quite a bit easier) to have this be stored in people's local storage. Though, in the future maybe this requires some server signing data or using some computation on the server (there must be some cool algo like "A Linear Time Majority Vote Algorithm" that can get a good estimate). Also, this would need to be approved by the user to track this and store on local machines.
