@@ -583,6 +583,7 @@ export function RoomCanvas({
       if (!ps.reeling && performance.now() - ps.downAt < BG_HOLD_MS) return
       const me = nodesRef.current.find((n) => n.isMe)
       if (!me) return
+      if (me.state === 'arrived') return
 
       if (!ps.reeling) {
         ps.reeling = true
@@ -597,7 +598,7 @@ export function RoomCanvas({
 
       const angle = Math.atan2(me.y, me.x)
       let targetR: number
-      if (me.state === 'committed' || me.state === 'arrived') {
+      if (me.state === 'committed') {
         const perf = performance.now()
         const dt = Math.min(64, perf - ps.reelLast)
         ps.reelLast = perf
