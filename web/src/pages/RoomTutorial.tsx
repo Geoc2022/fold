@@ -145,7 +145,7 @@ export function RoomTutorial() {
     if (script.step === 'controls') {
       return {
         title: 'Room Panel Buttons',
-        body: <>The bottom panel buttons are: ◐/◑ for theme, <span className="noto-emoji">🔗</span> to share, <span className="noto-emoji">🏠</span> to go home, <span className="noto-emoji">🔔</span> for notifications, ℹ︎ for room info, and ? for help.</>,
+        body: <>The bottom panel buttons are: ◐ for theme, <span className="noto-emoji">🔗</span> to share, <span className="noto-emoji">🏠</span> to go home, <span className="noto-emoji">🔔</span> for notifications, ℹ︎ for room info, and ? for help.</>,
       }
     }
     if (script.step === 'lurker') {
@@ -157,24 +157,24 @@ export function RoomTutorial() {
     if (script.step === 'interested') {
       return {
         title: 'Interested',
-        body: 'Now that you\'re interested, you can show that you\'re willing to commit to joining the activity and posting your ETA. Continue to press and hold on the background to show that you\'re committed to the activity',
+        body: 'Now that you\'re interested, you can show that you\'re willing to commit to the activity and post your ETA. Continue to press and hold on the background to show that you\'re committed to the activity',
       }
     }
     if (script.step === 'committed') {
       return {
         title: 'Committed',
-        body: 'Now you\'re committed you can just wait till you reach the center to show that you\'ve arrived. For this activity we need 4 other people to join to complete the group',
+        body: 'Now you\'re committed you can just wait till you reach the center to show that you\'ve arrived. You can drag your node to adjust your ETA, or continue pressing the background to decrease it. For this activity we need 4 other people to join to complete the group',
       }
     }
     if (script.step === 'ready') {
       return {
         title: 'Group Ready!',
-        body: <>The group is ready after everyone has committed. Go to the <Link to="/">fold homepage</Link> (i.e. the <span className="noto-emoji">🏠</span>) to try out fold for real</>,
+        body: <>The group is ready after everyone has committed. Go to the <Link to="/">fold homepage</Link> (click the <span className="noto-emoji">🏠</span>) to try out fold for real</>,
       }
     }
     return {
       title: 'Group Arrived!',
-      body: <>The group has arrived - have fun! Go to the <Link to="/">fold homepage</Link> (i.e. the <span className="noto-emoji">🏠</span>) to try out fold for real</>,    
+      body: <>The group has arrived - have fun! Go to the <Link to="/">fold homepage</Link> (i.e. the <span className="noto-emoji">🏠</span>) to try out fold for real</>,
     }
   })()
 

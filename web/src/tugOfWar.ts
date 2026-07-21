@@ -1,5 +1,5 @@
 export const TUG_WIDTH = 70
-export const TUG_WIDTH_HOLD_MS = 850
+export const TUG_WIDTH_HOLD_MS = 1000
 // Keep the lurker/interested bands closer to the committed ring so nodes do
 // not idle too far out from center.
 export const INTERESTED_GAP = 50

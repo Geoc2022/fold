@@ -14,8 +14,8 @@ export interface FakeCrowdConfig {
 }
 
 const DEFAULT_CONFIG: FakeCrowdConfig = {
-  interestRate: 0.55,
-  commitRate: 0.45,
+  interestRate: 0.3,
+  commitRate: 0.2,
   avgEtaSec: 14,
   maxEtaSec: 30,
 }
