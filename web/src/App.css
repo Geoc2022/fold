@@ -1121,6 +1121,10 @@ html[data-theme="dark"] .list-item {
   cursor: pointer;
   font-size: 14px;
 }
+a.panel-button,
+a.panel-button:visited {
+  color: var(--text);
+}
 .panel-button.icon {
   border: none;
   background: transparent;

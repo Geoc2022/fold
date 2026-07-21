@@ -19,7 +19,7 @@ import { useScript } from '../tutorial/useScript'
 
 type SelfState = { state: 'lurker' | 'interested' | 'committed'; arrivalAt: number | null }
 
-const SCRIPT = ['intro', 'lurker', 'interested', 'committed', 'ready'] as const
+const SCRIPT = ['intro', 'controls', 'lurker', 'interested', 'committed', 'ready', 'arrived'] as const
 
 export function RoomTutorial() {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -95,61 +95,86 @@ export function RoomTutorial() {
 
   const activity = useMemo(() => foldTutorialActivity(Date.now(), participants), [participants])
   const groupReady = Boolean(activity.current_run?.group.is_ready)
+  const groupArrived = useMemo(() => {
+    if (!groupReady) return false
+    const now = Date.now()
+    const committed = participants.filter((p) => p.state === 'committed')
+    if (committed.length === 0) return false
+    return committed.every((p) => p.arrival_at != null && p.arrival_at <= now)
+  }, [groupReady, participants])
 
   useEffect(() => {
-    if (groupReady) {
+    if (groupReady && script.step !== 'arrived') {
       setPartyActive(true)
-      script.set(4)
+      script.set(5)
     }
   }, [groupReady, script])
 
-  async function onInterested() {
-    if (script.step !== 'lurker' && script.step !== 'ready') return
-    setSelf({ state: 'interested', arrivalAt: null })
-    if (!crowdStarted) {
-      setCrowdStarted(true)
+  useEffect(() => {
+    if (groupArrived) {
+      script.set(6)
     }
-    if (script.step === 'lurker') script.set(2)
+  }, [groupArrived, script])
+
+  async function onInterested() {
+    if (script.step !== 'lurker' && script.step !== 'ready' && script.step !== 'arrived') return
+    setSelf({ state: 'interested', arrivalAt: null })
+    if (script.step === 'lurker') script.set(3)
   }
 
   async function onCommit(etaSeconds: number) {
-    if (script.step !== 'interested' && script.step !== 'committed' && script.step !== 'ready') return
+    if (script.step !== 'interested' && script.step !== 'committed' && script.step !== 'ready' && script.step !== 'arrived') return
     setSelf({ state: 'committed', arrivalAt: Date.now() + etaSeconds * 1000 })
-    if (script.step !== 'ready') script.set(3)
+    if (!crowdStarted) {
+      setCrowdStarted(true)
+    }
+    if (script.step !== 'ready' && script.step !== 'arrived') script.set(4)
   }
 
   async function onWithdraw() {
-    if (script.step === 'ready') setSelf({ state: 'lurker', arrivalAt: null })
+    if (script.step === 'ready' || script.step === 'arrived') setSelf({ state: 'lurker', arrivalAt: null })
   }
 
   const coach = (() => {
     if (script.step === 'intro') {
       return {
         title: 'Welcome to /FOLD',
-        body: 'There are 3 types of people: lurkers, interested, and committed. And, as you move closer to the center, you progress borough these stages to join the group.',
+        body: 'The general idea is that as you move closer to the center, you link up with the rest of the group for the activity. ',
+      }
+    }
+    if (script.step === 'controls') {
+      return {
+        title: 'Room Panel Buttons',
+        body: <>The bottom panel buttons are: ◐/◑ for theme, <span className="noto-emoji">🔗</span> to share, <span className="noto-emoji">🏠</span> to go home, <span className="noto-emoji">🔔</span> for notifications, ℹ︎ for room info, and ? for help.</>,
       }
     }
     if (script.step === 'lurker') {
       return {
         title: 'Lurker',
-        body: 'Your node starts on the edge. Press and hold on the background to become interested.',
+        body: 'You start off on the edge, letting others know that you\'re in the room. Press and hold on the background to show that you\'re interested in the activity.',
       }
     }
     if (script.step === 'interested') {
       return {
         title: 'Interested',
-        body: 'Looks like there are some other people who are interested too. To commit and complete the group, keep pressing and holding the background or pull it toward the center.',
+        body: 'Now that you\'re interested, you can show that you\'re willing to commit to joining the activity and posting your ETA. Continue to press and hold on the background to show that you\'re committed to the activity',
       }
     }
     if (script.step === 'committed') {
       return {
         title: 'Committed',
-        body: 'The group arrives when everyone makes it to the center, so ETA controls your distance from the center. Keep the commitment while the other four people arrive.',
+        body: 'Now you\'re committed you can just wait till you reach the center to show that you\'ve arrived. For this activity we need 4 other people to join to complete the group',
+      }
+    }
+    if (script.step === 'ready') {
+      return {
+        title: 'Group Ready!',
+        body: <>The group is ready after everyone has committed. Go to the <Link to="/">fold homepage</Link> (i.e. the <span className="noto-emoji">🏠</span>) to try out fold for real</>,
       }
     }
     return {
-      title: 'Group Ready!',
-      body: 'The group is ready after all 5 people have committed (the min group size is 5). Go to the "Live homepage" to try out fold out for real',
+      title: 'Group Arrived!',
+      body: <>The group has arrived - have fun! Go to the <Link to="/">fold homepage</Link> (i.e. the <span className="noto-emoji">🏠</span>) to try out fold for real</>,    
     }
   })()
 
@@ -166,10 +191,10 @@ export function RoomTutorial() {
         onAlert={() => {}}
         alreadyCommittedElsewhere={false}
         otherCommittedRoomCode={null}
-        interactionPermissions={{
-          interest: script.step === 'lurker' || script.step === 'ready',
-          commit: script.step === 'interested' || script.step === 'committed' || script.step === 'ready',
-          withdraw: script.step === 'ready',
+          interactionPermissions={{
+          interest: script.step === 'lurker' || script.step === 'ready' || script.step === 'arrived',
+          commit: script.step === 'interested' || script.step === 'committed' || script.step === 'ready' || script.step === 'arrived',
+          withdraw: script.step === 'ready' || script.step === 'arrived',
         }}
       />
       <button type="button" className="room-code">/FOLD</button>
@@ -177,7 +202,7 @@ export function RoomTutorial() {
         <Coachmark
           title={coach.title}
           body={coach.body}
-          onNext={script.step === 'intro'
+          onNext={script.step === 'intro' || script.step === 'controls'
             ? script.next
             : script.isLast
               ? () => {
@@ -190,7 +215,7 @@ export function RoomTutorial() {
                 }
               : undefined
           }
-          nextLabel={script.isLast ? 'Replay' : 'Start'}
+          nextLabel={script.isLast ? 'Replay' : (script.step === 'intro' ? 'Start' : 'Next')}
         />
         <div className="tutorial-links">
           <Link to="/fold">Homepage tutorial</Link>
@@ -209,7 +234,13 @@ export function RoomTutorial() {
           void navigator.clipboard.writeText(buildActivityShareText(activity, participants, Date.now(), url))
         }}
       />
-      <Spotlight target={script.step === 'intro' ? '.room-code' : '.room-canvas'} />
+      <Spotlight
+        target={script.step === 'intro'
+          ? '.room-code'
+          : script.step === 'controls'
+            ? '.global-panel'
+            : '.room-canvas'}
+      />
       {showPolicyPanel && (
         <PolicyPanel
           rules={rules}

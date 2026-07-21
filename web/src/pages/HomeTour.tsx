@@ -4,13 +4,30 @@ import { Link, useNavigate } from 'react-router-dom'
 import { ActivityTile } from '../components/ActivityTile'
 import { CreateTile } from '../components/CreateTile'
 import { HomeShell } from '../components/HomeShell'
+import { PolicyPanel } from '../components/PolicyPanel'
+import { ProposeForm } from '../components/ProposeForm'
+import { requestNotificationPermission } from '../notify-client'
+import { loadHomeRules, HOME_RULES_KEY, type PolicyRule } from '../policy/rules'
+import { encodePolicySources } from '../policy/share'
+import { writeJson } from '../storage'
 import { useTheme } from '../theme'
 import { Coachmark } from '../tutorial/Coachmark'
 import { foldTutorialActivity, tutorialMe } from '../tutorial/fakeRoom'
 import { useScript } from '../tutorial/useScript'
 import { Spotlight } from '../tutorial/Spotlight'
 
-const STEPS = ['welcome', 'controls', 'browser', 'tile'] as const
+const STEPS = [
+  'welcome',
+  'controls',
+  'browser',
+  'add-activity',
+  'tile',
+] as const
+
+const CATEGORY_OPTIONS = [
+  { value: 'board game', label: 'Board Game', count: 0 },
+  { value: 'video game', label: 'Video Game', count: 0 },
+] as const
 
 export function HomeTour() {
   const navigate = useNavigate()
@@ -18,9 +35,18 @@ export function HomeTour() {
   const { theme, toggleTheme } = useTheme()
   const [view, setView] = useState<'grid' | 'list'>('grid')
   const [expanded, setExpanded] = useState(true)
+  const [creating, setCreating] = useState(false)
+  const [showPolicyPanel, setShowPolicyPanel] = useState(false)
+  const [notifyStatus, setNotifyStatus] = useState('')
+  const [rules, setRules] = useState<PolicyRule[]>(() => loadHomeRules())
   const script = useScript([...STEPS])
   const now = Date.now()
   const activity = foldTutorialActivity(now, [])
+
+  const saveRules = (nextRules: PolicyRule[]) => {
+    setRules(nextRules)
+    writeJson(HOME_RULES_KEY, nextRules)
+  }
 
   const coach = (() => {
     if (script.step === 'welcome') {
@@ -32,13 +58,19 @@ export function HomeTour() {
     if (script.step === 'controls') {
       return {
         title: 'Homepage Buttons',
-        body: <>Rename your user by clicking the username, click ◑ to change the theme, <span className="noto-emoji">🔔</span> for policy rules, ? for help, and ↻ to refresh the page.</>,
+        body: <>Rename your user by clicking the username, click ◑ to change the theme, <span className="noto-emoji">🔔</span> for notifications, ? for help, and ↻ to refresh the page.</>,
       }
     }
     if (script.step === 'browser') {
       return {
         title: 'Browse Activities',
         body: 'You can filter by categories, and also switch between the grid and list views.',
+      }
+    }
+    if (script.step === 'add-activity') {
+      return {
+        title: 'Add an Activity',
+        body: 'Click the + tile to open the Add an Activity panel.',
       }
     }
     return {
@@ -52,6 +84,8 @@ export function HomeTour() {
       ? '.topbar .me'
       : script.step === 'browser'
         ? '.browser-controls'
+        : script.step === 'add-activity'
+          ? '.create-tile, .create-list-item'
         : '.tile.expanded'
 
   return (
@@ -64,8 +98,8 @@ export function HomeTour() {
         )}
         theme={theme}
         onThemeToggle={toggleTheme}
-        onOpenPolicy={() => {}}
-        onRefresh={() => {}}
+        onOpenPolicy={() => setShowPolicyPanel(true)}
+        onRefresh={() => window.location.reload()}
         onHelp={() => navigate('/fold')}
         categories={['board game', 'video game']}
         activeTag="all"
@@ -76,7 +110,7 @@ export function HomeTour() {
         onViewChange={setView}
       >
         <div className="tile-grid" key="tour-grid">
-          <CreateTile view={view} onClick={() => {}} />
+          <CreateTile view={view} onClick={() => setCreating(true)} />
           <AnimatePresence mode="popLayout">
             <ActivityTile
               key={activity.id}
@@ -107,6 +141,43 @@ export function HomeTour() {
           nextLabel={script.isLast ? 'Go to /FOLD' : 'Next'}
         />
       </div>
+      {showPolicyPanel && (
+        <PolicyPanel
+          rules={rules}
+          onRulesChange={saveRules}
+          onClose={() => setShowPolicyPanel(false)}
+          hint="Rules in this tutorial are saved locally as a demo."
+          notifyStatus={notifyStatus}
+          onRequestNotifications={() => {
+            void requestNotificationPermission().then(setNotifyStatus)
+          }}
+          onShare={() => {
+            const url = `${window.location.origin}/fold?policy=${encodeURIComponent(encodePolicySources(rules))}`
+            void navigator.clipboard.writeText(url)
+          }}
+        />
+      )}
+      {creating && (
+        <div className="modal-backdrop modal-backdrop-lower" onClick={() => setCreating(false)}>
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <div
+              onSubmitCapture={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+              }}
+            >
+              <ProposeForm
+                categoryOptions={[...CATEGORY_OPTIONS]}
+                onCreated={() => {
+                  setCreating(false)
+                }}
+                onClose={() => setCreating(false)}
+              />
+            </div>
+            <p className="small">Posting is disabled in the tutorial.</p>
+          </div>
+        </div>
+      )}
     </>
   )
 }
