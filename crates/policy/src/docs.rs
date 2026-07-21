@@ -20,17 +20,11 @@ pub fn language_docs() -> String {
     out.push_str("However, newlines separate statements and there are no semicolons.\n");
     out.push_str("A policy is a program whose final expression is an `Action`.\n\n");
 
-    out.push_str("## Syntax at a glance\n\n```\n");
-    out.push_str(
-        "count = #interested\n\
-double x = x * 2\n\
-add = fun a b -> a + b\n\
-label = if count > 3 then \"many\" else \"few\"\n\
-text = \"we have {count} people\"\n\
-first = match interested with\n  | [] -> None\n  | x :: rest -> Some(x)\n\
-count > min_people => notify \"ready! ({count})\"\n",
-    );
-    out.push_str("```\n\n");
+    out.push_str("## Examples\n\n");
+    out.push_str(&format!(
+        "For examples and ready-to-copy templates, see [`docs/policy-examples.md`]({}).\n\n",
+        blob("docs/policy-examples.md")
+    ));
 
     out.push_str("## Bindings and functions\n\n");
     out.push_str("- `name = expr` binds a value.\n");
@@ -152,13 +146,7 @@ Plus collections/functions: `List<T>`, tuples `(A, B)`, and functions `A -> B`.\
     out.push_str("## Evaluation model\n\n");
     out.push_str("Policies are re-evaluated as room state changes and polling ticks.\n");
     out.push_str("`now`/`today` reflect current wall-clock context from the host app.\n");
-    out.push_str("Evaluation is step-bounded, so recursive helpers cannot run forever.\n\n");
-
-    out.push_str("## Examples\n\n");
-    out.push_str(&format!(
-        "For examples and ready-to-copy templates, see [`docs/policy-examples.md`]({}).\n",
-        blob("docs/policy-examples.md")
-    ));
+    out.push_str("Evaluation is step-bounded, so recursive helpers cannot run forever.\n");
 
     out
 }

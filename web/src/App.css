@@ -1267,11 +1267,12 @@ a.panel-button:visited {
   padding: 0.2rem;
 }
 .policy-icon-only.dirty {
-  color: var(--danger);
+  color: var(--text);
 }
 .policy-dirty-star {
   font: 700 14px/1 ui-sans-serif, system-ui, sans-serif;
   margin-left: 1px;
+  color: currentColor;
 }
 .policy-tabs {
   display: flex;

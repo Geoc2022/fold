@@ -53,12 +53,13 @@ is_weekend today => lurk
 five_pm_nudge =
   now.hour == 17 and now.minute == 0 and #committed < min_people
 
-if five_pm_nudge then
-  notify "It is 5pm - submit your commits for {title}!"
-else
-  {}
-
-notify "3 minutes till {title}" before ready_in by 3min
+{
+  if five_pm_nudge then
+    notify "It is 5pm - submit your commits for {title}!"
+  else
+    {},
+  notify "3 minutes till {title}" before ready_in by 3min
+}
 ```
 
 ### Lunch Example
@@ -68,12 +69,13 @@ notify "3 minutes till {title}" before ready_in by 3min
 lunch_nudge =
   now.hour == 12 and now.minute == 0 and #committed < min_people
 
-if lunch_nudge then
-  notify "Lunch window is open - commit now for {title}."
-else
-  {}
-
-notify "Lunch starts in 3 minutes" before ready_in by 3min
+{
+  if lunch_nudge then
+    notify "Lunch window is open - commit now for {title}."
+  else
+    {},
+  notify "Lunch starts in 3 minutes" before ready_in by 3min
+}
 ```
 
 ### Pickup Sports Example
@@ -81,10 +83,11 @@ notify "Lunch starts in 3 minutes" before ready_in by 3min
 ```policy
 enough = #committed >= min_people
 
-if enough then
-  commit -5m
-else
-  interest
-
-notify "Warm up. We'll be starting in 5" before ready_in by 5min
+{
+  if enough then
+    commit -5m
+  else
+    interest,
+  notify "Warm up. We'll be starting in 5" before ready_in by 5min
+}
 ```

@@ -5,19 +5,9 @@ A small, strongly-typed language for writing room notification policies.
 It reads like a simplified OCaml. However, newlines separate statements and there are no semicolons.
 A policy is a program whose final expression is an `Action`.
 
-## Syntax at a glance
+## Examples
 
-```
-count = #interested
-double x = x * 2
-add = fun a b -> a + b
-label = if count > 3 then "many" else "few"
-text = "we have {count} people"
-first = match interested with
-  | [] -> None
-  | x :: rest -> Some(x)
-count > min_people => notify "ready! ({count})"
-```
+For examples and ready-to-copy templates, see [`docs/policy-examples.md`](https://github.com/Geoc2022/fold/blob/main/docs/policy-examples.md).
 
 ## Bindings and functions
 
@@ -198,7 +188,3 @@ match ready_in with
 Policies are re-evaluated as room state changes and polling ticks.
 `now`/`today` reflect current wall-clock context from the host app.
 Evaluation is step-bounded, so recursive helpers cannot run forever.
-
-## Examples
-
-For examples and ready-to-copy templates, see [`docs/policy-examples.md`](https://github.com/Geoc2022/fold/blob/main/docs/policy-examples.md).

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { highlightPolicy, type HighlightToken } from '../policy/engine'
+import { compilePolicy, highlightPolicy, type HighlightToken } from '../policy/engine'
 import { buildHighlightedSegments } from '../policy/highlight'
 import { LANGUAGE_DOCS_URL } from '../links'
 import { newPolicyRule, type PolicyRule } from '../policy/rules'
@@ -27,6 +27,7 @@ export function PolicyPanel({
   const selected = useMemo(() => rules.find((r) => r.id === selectedId) ?? rules[0] ?? null, [rules, selectedId])
   const [draft, setDraft] = useState(selected?.source ?? '')
   const [tokens, setTokens] = useState<HighlightToken[]>([])
+  const [policyStatus, setPolicyStatus] = useState('ready')
   const highlightRef = useRef<HTMLPreElement | null>(null)
 
   // Reset the draft whenever a different rule is selected, when the
@@ -52,6 +53,7 @@ export function PolicyPanel({
 
   const highlightedSegments = useMemo(() => buildHighlightedSegments(draft, tokens), [draft, tokens])
   const dirty = selected != null && draft !== selected.source
+  const notificationsAlreadyEnabled = typeof Notification !== 'undefined' && Notification.permission === 'granted'
 
   function patchRule(id: string, patch: Partial<PolicyRule>) {
     onRulesChange(rules.map((r) => (r.id === id ? { ...r, ...patch } : r)))
@@ -69,9 +71,16 @@ export function PolicyPanel({
     if (selectedId === id) setSelectedId(next[0]?.id ?? '')
   }
 
-  function save() {
+  async function save() {
     if (!selected) return
+    setPolicyStatus('checking')
+    const compiled = await compilePolicy(draft)
+    if (!compiled.policy || compiled.diagnostics.length > 0) {
+      setPolicyStatus(`error: ${compiled.diagnostics[0]?.message ?? 'compile failed'}`)
+      return
+    }
     patchRule(selected.id, { source: draft })
+    setPolicyStatus('ready')
   }
 
   return (
@@ -81,7 +90,7 @@ export function PolicyPanel({
           className="card propose-form policy-home-panel"
           onSubmit={(e) => {
             e.preventDefault()
-            save()
+            void save()
           }}
         >
           <div className="propose-head">
@@ -97,10 +106,16 @@ export function PolicyPanel({
             {hint} {notifyStatus}
           </p>
 
+          <header className="math-head">
+            <span className="math-status">{policyStatus}</span>
+          </header>
+
           <div className="policy-actions-row">
-            <button type="button" className="panel-button" onClick={onRequestNotifications}>
-              Enable notifications
-            </button>
+            {!notificationsAlreadyEnabled && (
+              <button type="button" className="panel-button" onClick={onRequestNotifications}>
+                Enable notifications
+              </button>
+            )}
               <button
                 type="button"
                 className="panel-button policy-emoji-button policy-icon-only"
@@ -124,7 +139,9 @@ export function PolicyPanel({
             <button
               type="button"
               className={`panel-button policy-emoji-button policy-icon-only ${dirty ? 'dirty' : ''}`}
-              onClick={save}
+              onClick={() => {
+                void save()
+              }}
               title="Save"
               aria-label="Save"
             >
@@ -189,7 +206,9 @@ export function PolicyPanel({
               }}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => {
-                if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') save()
+                if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                  void save()
+                }
               }}
             />
           </div>

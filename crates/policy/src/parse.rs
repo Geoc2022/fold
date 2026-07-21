@@ -228,6 +228,7 @@ impl Parser {
         ) {
             let pattern = self.parse_pattern();
             self.expect(&TokenKind::Eq, "'=' in binding");
+            self.skip_layout();
             let value = self.parse_expr();
             return Binding {
                 doc,
@@ -249,6 +250,8 @@ impl Parser {
             }
         }
         self.expect(&TokenKind::Eq, "'=' in binding");
+        // Allow the binding's value to begin on an indented next line.
+        self.skip_layout();
         let mut value = self.parse_expr();
         for param in args.into_iter().rev() {
             value = Expr::Lambda {
@@ -458,10 +461,16 @@ impl Parser {
 
     fn parse_if(&mut self) -> Expr {
         self.bump();
+        self.skip_layout();
         let cond = Box::new(self.parse_expr());
+        self.skip_layout();
         self.expect(&TokenKind::Then, "'then'");
+        // The then/else branches may be written on indented next lines.
+        self.skip_layout();
         let then = Box::new(self.parse_expr());
+        self.skip_layout();
         self.expect(&TokenKind::Else, "'else'");
+        self.skip_layout();
         let els = Box::new(self.parse_expr());
         Expr::If { cond, then, els }
     }
@@ -476,6 +485,7 @@ impl Parser {
             self.error("expected at least one parameter after 'fun'");
         }
         self.expect(&TokenKind::Arrow, "'->' after parameters");
+        self.skip_layout();
         let mut body = self.parse_expr();
         for param in params.into_iter().rev() {
             body = Expr::Lambda {
@@ -499,6 +509,7 @@ impl Parser {
             self.bump(); // '|'
             let pattern = self.parse_pattern();
             self.expect(&TokenKind::Arrow, "'->' in match arm");
+            self.skip_layout();
             let body = self.parse_expr();
             arms.push(MatchArm { pattern, body });
         }
