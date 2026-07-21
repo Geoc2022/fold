@@ -178,6 +178,17 @@ export function RoomTutorial() {
     }
   })()
 
+  const replayTutorial = () => {
+    crowdRef.current = buildFakeCrowd(4)
+    setSelf({ state: 'lurker', arrivalAt: null })
+    setCrowdStarted(false)
+    setPartyActive(false)
+    setCrowdTick((n) => n + 1)
+    script.reset()
+  }
+
+  const showReplay = script.step === 'ready' || script.isLast
+
   return (
     <main className={`room-page room-${theme}`}>
       <RoomCanvas
@@ -204,18 +215,11 @@ export function RoomTutorial() {
           body={coach.body}
           onNext={script.step === 'intro' || script.step === 'controls'
             ? script.next
-            : script.isLast
-              ? () => {
-                  crowdRef.current = buildFakeCrowd(4)
-                  setSelf({ state: 'lurker', arrivalAt: null })
-                  setCrowdStarted(false)
-                  setPartyActive(false)
-                  setCrowdTick((n) => n + 1)
-                  script.reset()
-                }
+            : showReplay
+              ? replayTutorial
               : undefined
           }
-          nextLabel={script.isLast ? 'Replay' : (script.step === 'intro' ? 'Start' : 'Next')}
+          nextLabel={showReplay ? 'Replay' : (script.step === 'intro' ? 'Start' : 'Next')}
         />
         <div className="tutorial-links">
           <Link to="/fold">Homepage tutorial</Link>
