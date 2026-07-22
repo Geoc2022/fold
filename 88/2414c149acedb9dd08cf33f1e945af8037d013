@@ -1,0 +1,21 @@
+Cargo.lock
+  s_671abaafbac307::t_21d4939bb58c20 200
+docs/policy-examples-stress.md
+  s_671abaafbac307::t_5b872337ed8f69 1-199
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "882414c149acedb9dd08cf33f1e945af8037d013",
+  "prompts": {},
+  "sessions": {
+    "s_671abaafbac307": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_07cde2752ffe1sz0NUafsA3b25",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "geo <gchemmala@cloudflare.com>"
+    }
+  }
+}
