@@ -47,7 +47,7 @@ jobs:
           RUSTFLAGS: "-D warnings"
 
       - name: Rust tests
-        run: cargo test
+        run: cargo test --workspace
         env:
           RUSTFLAGS: "-D warnings"
 

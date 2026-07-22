@@ -4,11 +4,11 @@ import {
   compileAndEvaluate,
   evaluateExpression,
   highlightPolicy,
-  type Effect,
   type HighlightToken,
   type JsonValue,
   type PolicyValue,
 } from '../policy/engine'
+import { runEffect, type EffectRun } from '../policy/effects'
 import { buildHighlightedSegments } from '../policy/highlight'
 import { bool, dur, envFromVars, list, num, record, str, variant } from '../policy/values'
 import { LANGUAGE_DOCS_URL } from '../links'
@@ -64,12 +64,12 @@ export function MathPage() {
   const terminalBodyRef = useRef<HTMLDivElement | null>(null)
   const consoleBodyRef = useRef<HTMLDivElement | null>(null)
   const prevPolicyFireRef = useRef(false)
-  const effectTimersRef = useRef<number[]>([])
+  const activeEffectRef = useRef<EffectRun | null>(null)
   const lastPolicyErrorRef = useRef<string | null>(null)
 
-  const clearEffectTimers = useCallback(() => {
-    for (const t of effectTimersRef.current) window.clearTimeout(t)
-    effectTimersRef.current = []
+  const clearActiveEffect = useCallback(() => {
+    activeEffectRef.current?.cancel()
+    activeEffectRef.current = null
   }, [])
 
   const env = useMemo(
@@ -128,22 +128,25 @@ export function MathPage() {
       const fired = out.fired
       const currentlyFired = fired != null && fired.op !== 'noop'
       if (currentlyFired && !prevPolicyFireRef.current) {
-        clearEffectTimers()
-        scheduleEffect(
-          fired,
-          0,
-          effectTimersRef.current,
-          (message) => pushLog(`notify: ${message}`, 'warn'),
-          (state, etaDeltaSeconds) => {
+        clearActiveEffect()
+        const run = runEffect(fired, {
+          onNotify: (message) => {
+            pushLog(`notify: ${message}`, 'warn')
+          },
+          onState: (state, etaDeltaSeconds) => {
             setSelfState(state as NodeState)
             const adjustment = etaDeltaSeconds == null
               ? ''
               : ` (${etaDeltaSeconds >= 0 ? '+' : ''}${etaDeltaSeconds}s)`
             pushLog(`self -> ${state}${adjustment}`, 'warn')
           },
-        )
+        })
+        activeEffectRef.current = run
+        void run.done.finally(() => {
+          if (activeEffectRef.current === run) activeEffectRef.current = null
+        })
       } else if (!currentlyFired && prevPolicyFireRef.current) {
-        clearEffectTimers()
+        clearActiveEffect()
       }
       prevPolicyFireRef.current = currentlyFired
       setPolicyStatus(currentlyFired ? 'fired' : 'ready')
@@ -155,13 +158,13 @@ export function MathPage() {
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [activePolicy, env, pushLog, clearEffectTimers])
+  }, [activePolicy, env, pushLog, clearActiveEffect])
 
   useEffect(() => {
     return () => {
-      clearEffectTimers()
+      clearActiveEffect()
     }
-  }, [clearEffectTimers])
+  }, [clearActiveEffect])
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -273,7 +276,7 @@ export function MathPage() {
     setActivePolicy(policySource)
     prevPolicyFireRef.current = false
     lastPolicyErrorRef.current = null
-    clearEffectTimers()
+    clearActiveEffect()
     pushLog('policy saved', 'info')
   }
 
@@ -501,33 +504,4 @@ function personFrom(name: string, state: NodeState, etaSecs: number, waitedSecs:
       st = variant('State', 'Lurker', [])
   }
   return record('Person', { name: str(name), state: st })
-}
-
-/** Schedule a policy effect tree, accumulating delays from `sleep`. Returns
- * the final time offset (ms). */
-function scheduleEffect(
-  effect: Effect,
-  offsetMs: number,
-  timers: number[],
-  onNotify: (message: string) => void,
-  onState: (state: string, etaDeltaSeconds: number | null) => void,
-): number {
-  switch (effect.op) {
-    case 'notify':
-      timers.push(window.setTimeout(() => onNotify(effect.message), offsetMs))
-      return offsetMs
-    case 'state':
-      timers.push(window.setTimeout(() => onState(effect.state, effect.eta_delta_secs ?? null), offsetMs))
-      return offsetMs
-    case 'sleep':
-      return offsetMs + Math.max(0, effect.secs) * 1000
-    case 'seq': {
-      let o = offsetMs
-      for (const step of effect.steps) o = scheduleEffect(step, o, timers, onNotify, onState)
-      return o
-    }
-    case 'noop':
-    default:
-      return offsetMs
-  }
 }

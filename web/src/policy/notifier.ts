@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { deliverPolicyNotification } from '../notify-client'
 import type { ActivityView } from '../types'
 import { compileAndEvaluate, type Effect } from './engine'
+import { runEffect, type EffectRun } from './effects'
 import { buildActivityPolicyEnv } from './homeEnv'
 import type { PolicyRule } from './rules'
 
@@ -12,12 +13,7 @@ interface EvalState {
 }
 
 const fireState = new Map<string, EvalState>()
-interface ScheduledCommit {
-  cancelled: boolean
-  timer: number | null
-  wake: (() => void) | null
-}
-const scheduledCommits = new Map<string, ScheduledCommit>()
+const scheduledEffects = new Map<string, EffectRun>()
 const STALE_STATE_MS = 12 * 60 * 60 * 1000
 
 export interface ActivityNotificationOptions {
@@ -30,76 +26,38 @@ export interface ActivityNotificationOptions {
   onCommit?: (activity: ActivityView, etaDeltaSeconds: number | null) => ActivityView | void | Promise<ActivityView | void>
 }
 
-function firstNotifyMessage(effect: Effect | null): string | null {
-  if (!effect) return null
-  if (effect.op === 'notify') return effect.message
-  if (effect.op === 'seq') {
-    for (const step of effect.steps) {
-      const msg = firstNotifyMessage(step)
-      if (msg) return msg
-    }
-  }
-  return null
-}
-
-function hasCommitEffect(effect: Effect | null): boolean {
+function hasStateEffect(effect: Effect | null): boolean {
   if (!effect) return false
-  if (effect.op === 'state') return effect.state === 'committed'
-  return effect.op === 'seq' && effect.steps.some(hasCommitEffect)
+  if (effect.op === 'state') return true
+  return effect.op === 'seq' && effect.steps.some(hasStateEffect)
 }
 
-function cancelScheduledCommit(key: string) {
-  const scheduled = scheduledCommits.get(key)
+export interface NotificationTransition {
+  notificationRising: boolean
+  actionRising: boolean
+  shouldRunEffect: boolean
+}
+
+export function computeNotificationTransition(
+  prevFired: boolean | undefined,
+  isFired: boolean,
+  sourceChanged: boolean,
+  effect: Effect | null,
+): NotificationTransition {
+  const notificationRising = isFired && prevFired != null && !prevFired
+  const actionRising = isFired && (!prevFired || sourceChanged)
+  return {
+    notificationRising,
+    actionRising,
+    shouldRunEffect: actionRising && effect != null && (notificationRising || hasStateEffect(effect)),
+  }
+}
+
+function cancelScheduledEffect(key: string) {
+  const scheduled = scheduledEffects.get(key)
   if (!scheduled) return
-  scheduled.cancelled = true
-  if (scheduled.timer != null) window.clearTimeout(scheduled.timer)
-  scheduled.wake?.()
-  scheduledCommits.delete(key)
-}
-
-function waitForEffect(secs: number, scheduled: ScheduledCommit): Promise<boolean> {
-  if (secs <= 0) return Promise.resolve(!scheduled.cancelled)
-  return new Promise((resolve) => {
-    let finished = false
-    const finish = (active: boolean) => {
-      if (finished) return
-      finished = true
-      scheduled.timer = null
-      scheduled.wake = null
-      resolve(active)
-    }
-    scheduled.wake = () => finish(false)
-    scheduled.timer = window.setTimeout(
-      () => finish(!scheduled.cancelled),
-      Math.min(secs * 1000, 2_147_483_647),
-    )
-  })
-}
-
-async function executeCommitEffects(
-  effect: Effect,
-  activity: ActivityView,
-  scheduled: ScheduledCommit,
-  onCommit: NonNullable<ActivityNotificationOptions['onCommit']>,
-): Promise<ActivityView> {
-  if (scheduled.cancelled) return activity
-  if (effect.op === 'sleep') {
-    await waitForEffect(Math.max(0, effect.secs), scheduled)
-    return activity
-  }
-  if (effect.op === 'state' && effect.state === 'committed') {
-    const updated = await onCommit(activity, effect.eta_delta_secs ?? null)
-    return updated ?? activity
-  }
-  if (effect.op === 'seq') {
-    let current = activity
-    for (const step of effect.steps) {
-      current = await executeCommitEffects(step, current, scheduled, onCommit)
-      if (scheduled.cancelled) break
-    }
-    return current
-  }
-  return activity
+  scheduled.cancel()
+  scheduledEffects.delete(key)
 }
 
 function stateKey(activity: ActivityView, ruleId: string): string {
@@ -132,13 +90,13 @@ export function useActivityNotifications({ activities, now, enabled, revision, r
   }, [onCommit])
 
   useEffect(() => () => {
-    for (const key of ownedSchedulesRef.current) cancelScheduledCommit(key)
+    for (const key of ownedSchedulesRef.current) cancelScheduledEffect(key)
     ownedSchedulesRef.current.clear()
   }, [])
 
   useEffect(() => {
     if (enabled) return
-    for (const key of ownedSchedulesRef.current) cancelScheduledCommit(key)
+    for (const key of ownedSchedulesRef.current) cancelScheduledEffect(key)
     ownedSchedulesRef.current.clear()
   }, [enabled])
 
@@ -157,49 +115,50 @@ export function useActivityNotifications({ activities, now, enabled, revision, r
           seenKeys.add(key)
           const result = await compileAndEvaluate(rule.source, env)
           if (cancelled) return
-          const message = firstNotifyMessage(result.fired)
           const isFired = result.fired != null && result.fired.op !== 'noop'
           const prev = fireState.get(key)
           const sourceChanged = prev != null && prev.source !== rule.source
           fireState.set(key, { fired: isFired, lastSeenAt: observedAt, source: rule.source })
           if (sourceChanged) {
-            cancelScheduledCommit(key)
+            cancelScheduledEffect(key)
             ownedSchedulesRef.current.delete(key)
           }
-          const notificationRising = isFired && prev != null && !prev.fired
-          const actionRising = isFired && (!prev?.fired || sourceChanged)
+          const transition = computeNotificationTransition(prev?.fired, isFired, sourceChanged, result.fired)
           if (!isFired) {
-            cancelScheduledCommit(key)
+            cancelScheduledEffect(key)
             ownedSchedulesRef.current.delete(key)
           }
-          if (notificationRising || actionRising) {
-            // Notifications prime silently on first sighting, but state
-            // actions must run or an always-true rule would never take effect.
-            if (notificationRising && message) {
-              onNotifyRef.current?.(activity, message)
-              void deliverPolicyNotification(activity, message, key)
-            }
+          if (transition.shouldRunEffect && result.fired) {
             const commit = onCommitRef.current
-            if (actionRising && commit && result.fired && hasCommitEffect(result.fired)) {
-              cancelScheduledCommit(key)
-              const scheduled: ScheduledCommit = { cancelled: false, timer: null, wake: null }
-              scheduledCommits.set(key, scheduled)
-              ownedSchedulesRef.current.add(key)
-              void executeCommitEffects(result.fired, activity, scheduled, commit)
-                .catch(() => {})
-                .finally(() => {
-                  if (scheduledCommits.get(key) === scheduled) {
-                    scheduledCommits.delete(key)
-                    ownedSchedulesRef.current.delete(key)
-                  }
-                })
-            }
+            const allowNotify = transition.notificationRising
+            let currentActivity = activity
+            cancelScheduledEffect(key)
+            const run = runEffect(result.fired, {
+              onNotify: async (nextMessage) => {
+                if (!allowNotify) return
+                onNotifyRef.current?.(activity, nextMessage)
+                await deliverPolicyNotification(activity, nextMessage, key)
+              },
+              onState: async (state, etaDeltaSeconds) => {
+                if (state !== 'committed' || !commit) return
+                const updated = await commit(currentActivity, etaDeltaSeconds)
+                currentActivity = updated ?? currentActivity
+              },
+            })
+            scheduledEffects.set(key, run)
+            ownedSchedulesRef.current.add(key)
+            void run.done.finally(() => {
+              if (scheduledEffects.get(key) === run) {
+                scheduledEffects.delete(key)
+                ownedSchedulesRef.current.delete(key)
+              }
+            })
           }
         }
       }
       for (const key of ownedSchedulesRef.current) {
         if (!seenKeys.has(key)) {
-          cancelScheduledCommit(key)
+          cancelScheduledEffect(key)
           ownedSchedulesRef.current.delete(key)
         }
       }
