@@ -1,4 +1,4 @@
-import { enablePushNotifications } from './push-client'
+import { enablePushNotifications, PUSH_NOTIFICATION_EVENT } from './push-client'
 import type { ActivityView } from './types'
 import { readString, writeString } from './storage'
 
@@ -39,27 +39,58 @@ function emojiIconDataUrl(emoji: string): string {
 
 let audioCtx: AudioContext | null = null
 
-export function playPolicyChime(): void {
+function policyAudioContext(): AudioContext | null {
+  const Ctx = window.AudioContext ?? (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+  if (!Ctx) return null
+  audioCtx ??= new Ctx()
+  return audioCtx
+}
+
+export function armPolicyChime(): void {
   try {
-    const Ctx = window.AudioContext ?? (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
-    if (!Ctx) return
-    if (!audioCtx) audioCtx = new Ctx()
-    if (audioCtx.state === 'suspended') {
-      void audioCtx.resume().catch(() => {})
+    const ctx = policyAudioContext()
+    if (ctx?.state === 'suspended') void ctx.resume().catch(() => {})
+  } catch {
+    // Audio is best effort and may be unavailable in restricted contexts.
+  }
+}
+
+export function playPolicySnap(): void {
+  try {
+    const ctx = policyAudioContext()
+    if (!ctx) return
+    const play = () => {
+      const start = ctx.currentTime + 0.005
+      const body = ctx.createOscillator()
+      const bodyGain = ctx.createGain()
+      body.type = 'triangle'
+      body.frequency.setValueAtTime(200, start)
+      body.frequency.exponentialRampToValueAtTime(300, start + 0.055)
+      bodyGain.gain.setValueAtTime(0.0001, start)
+      bodyGain.gain.exponentialRampToValueAtTime(0.16, start + 0.003)
+      bodyGain.gain.exponentialRampToValueAtTime(0.0001, start + 0.07)
+      body.connect(bodyGain)
+      bodyGain.connect(ctx.destination)
+      body.start(start)
+      body.stop(start + 0.08)
+
+      const click = ctx.createOscillator()
+      const clickGain = ctx.createGain()
+      click.type = 'square'
+      click.frequency.setValueAtTime(510, start)
+      clickGain.gain.setValueAtTime(0.0001, start)
+      clickGain.gain.exponentialRampToValueAtTime(0.08, start + 0.0015)
+      clickGain.gain.exponentialRampToValueAtTime(0.001, start + 0.018)
+      click.connect(clickGain)
+      clickGain.connect(ctx.destination)
+      click.start(start)
+      click.stop(start + 0.022)
     }
-    const start = audioCtx.currentTime + 0.005
-    const osc = audioCtx.createOscillator()
-    const gain = audioCtx.createGain()
-    osc.type = 'triangle'
-    osc.frequency.setValueAtTime(784, start)
-    osc.frequency.exponentialRampToValueAtTime(1175, start + 0.14)
-    gain.gain.setValueAtTime(0.0001, start)
-    gain.gain.exponentialRampToValueAtTime(0.12, start + 0.02)
-    gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.22)
-    osc.connect(gain)
-    gain.connect(audioCtx.destination)
-    osc.start(start)
-    osc.stop(start + 0.24)
+    if (ctx.state === 'suspended') {
+      void ctx.resume().then(play).catch(() => {})
+    } else {
+      play()
+    }
   } catch {
     // Best effort.
   }
@@ -105,6 +136,7 @@ export async function showLocalNotification(
     body,
     icon,
     badge: '/favicon.svg',
+    silent: true,
     tag: tag ?? `fold-policy-${title}`,
     data: { url },
   }
@@ -124,5 +156,12 @@ export async function showLocalNotification(
 
 export async function deliverPolicyNotification(activity: ActivityView, message: string, key: string): Promise<void> {
   void showLocalNotification(activity.title, message, `/${activity.code}`, `fold-policy-${key}`, { emoji: activity.emoji })
-  if (isPolicySoundEnabled()) playPolicyChime()
+  if (isPolicySoundEnabled()) playPolicySnap()
+}
+
+if (typeof window !== 'undefined') {
+  const arm = () => armPolicyChime()
+  window.addEventListener('pointerdown', arm, { capture: true, once: true })
+  window.addEventListener('keydown', arm, { capture: true, once: true })
+  window.addEventListener(PUSH_NOTIFICATION_EVENT, () => playPolicySnap())
 }

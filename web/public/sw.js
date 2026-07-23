@@ -99,6 +99,7 @@ self.addEventListener('push', (event) => {
       badge: '/favicon.svg',
       tag: notification.tag,
       renotify: true,
+      silent: true,
       data: {
         id: notification.id,
         url: notification.url,
@@ -202,9 +203,14 @@ function sameOriginUrl(value) {
   }
 }
 
-async function postToWindowClients(message, visibleOnly = false) {
+async function postToWindowClients(message, singleClient = false) {
   const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+  if (singleClient) {
+    const target = windows.find((client) => client.visibilityState === 'visible') || windows[0]
+    if (target) target.postMessage(message)
+    return
+  }
   for (const client of windows) {
-    if (!visibleOnly || client.visibilityState === 'visible') client.postMessage(message)
+    client.postMessage(message)
   }
 }
