@@ -1,0 +1,23 @@
+Cargo.lock
+  s_dce8fb5f1d2513::t_c46bb233c0a366 274
+src/policy_runtime.rs
+  s_dce8fb5f1d2513::t_862c3cdfb70b47 5,27-32,266-271,339-348,998-1044,1287,1292-1296,1305-1310,1312-1317,1323-1328,1330-1337,1339-1342
+src/push_crypto.rs
+  s_dce8fb5f1d2513::t_597e9da1a27bbc 36-39,56-59,111-133,310-338
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "84636393dbe9eab285d65ff4723c9f3e40de1f76",
+  "prompts": {},
+  "sessions": {
+    "s_dce8fb5f1d2513": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_073427886ffeLaT9xsgD6MBXkH",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "geo <gchemmala@cloudflare.com>"
+    }
+  }
+}
