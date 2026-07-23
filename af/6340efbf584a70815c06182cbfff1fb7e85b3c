@@ -1,0 +1,39 @@
+Cargo.lock
+  s_dce8fb5f1d2513::t_4c0374a3cc37cc 5-39,113-132,167,171-179,240,263,265-266,268,270,273,372-381,399-407,540-548,605-610,638-655,701-712,881-886,995-1004,1122
+crates/policy/tests/docs_up_to_date.rs
+  s_8782eb6adb9ec6::t_1414eb059cf9b3 21
+crates/policy/tests/examples_compile.rs
+  s_dce8fb5f1d2513::t_78061254152e7b 32,235,258,310,313-314,336-339,347-350,355-358,369-372,381-384,463-464,466-470,509-510
+src/api.rs
+  s_dce8fb5f1d2513::t_136c78d4de4492 8,10-13,42,44,48-77,85-101,297,305-312,321-325,330,332-339,341-345,435-442,496-504,531-532,599-606,647-655,724-732,794-802,924-939,944-952,1028-1036,1107-1115,1179-1187,1192,1195,1216-1264,1277-1278,1281-1312,1353-1354
+src/lib.rs
+  s_dce8fb5f1d2513::t_0e7e6b9126f95d 2-5,17-20,23-24,37-39,50,72-74,92-113,121-125,136-145,166-175
+src/policy_env.rs
+  s_dce8fb5f1d2513::t_fa3a0dc56cd9e8 1-573
+src/policy_store.rs
+  s_dce8fb5f1d2513::t_c6f1ac0ea5281e 1-1073
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "af6340efbf584a70815c06182cbfff1fb7e85b3c",
+  "prompts": {},
+  "sessions": {
+    "s_8782eb6adb9ec6": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_072f59041ffe7f5kDgdI6zExAs",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "geo <gchemmala@cloudflare.com>"
+    },
+    "s_dce8fb5f1d2513": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_073427886ffeLaT9xsgD6MBXkH",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "geo <gchemmala@cloudflare.com>"
+    }
+  }
+}
