@@ -19,7 +19,7 @@ mod policy_runtime;
 mod policy_store;
 #[cfg(target_arch = "wasm32")]
 mod push;
-#[cfg(target_arch = "wasm32")]
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod push_crypto;
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 mod util;
@@ -69,6 +69,8 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .get_async("/api/push/public-key", api::push_public_key)
         .post_async("/api/push/subscriptions", api::push_subscribe)
         .delete_async("/api/push/subscriptions", api::push_unsubscribe)
+        .get_async("/api/push/diagnostics", api::push_diagnostics)
+        .post_async("/api/push/test", api::push_test)
         // Revisioned personal policy sets.
         .get_async("/api/policies", api::policies_get)
         .put_async("/api/policies", api::policies_replace)

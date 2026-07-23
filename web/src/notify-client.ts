@@ -75,13 +75,17 @@ export async function requestNotificationPermission(): Promise<string> {
   if (Notification.permission === 'denied') return 'Notifications are blocked in this browser'
 
   if (Notification.permission === 'granted') {
-    void enablePushNotifications().catch(() => {})
+    void enablePushNotifications().catch((error) => {
+      console.error('[fold:push] permission_setup_failed', error)
+    })
     return 'Notifications already enabled'
   }
 
   const permission = await Notification.requestPermission()
   if (permission !== 'granted') return 'Notifications were not enabled'
-  void enablePushNotifications().catch(() => {})
+  void enablePushNotifications().catch((error) => {
+    console.error('[fold:push] permission_setup_failed', error)
+  })
   return 'Notifications enabled'
 }
 

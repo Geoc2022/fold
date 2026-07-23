@@ -67,24 +67,43 @@ export interface ReplacePolicySetInput {
   rules: Array<{ id?: string; source: string; enabled: boolean }>
 }
 
+export interface PushDeliveryDiagnostic {
+  notification_id: string
+  status: 'pending' | 'sending' | 'delivered' | 'retry' | 'failed'
+  attempts: number
+  last_status: number | null
+  last_error: string | null
+  created_at: number
+  updated_at: number
+}
+
+export interface PushDiagnostics {
+  vapid_enabled: boolean
+  active_subscriptions: number
+  recent_deliveries: PushDeliveryDiagnostic[]
+}
+
 interface RequestOptions {
   method?: string
   body?: unknown
   signal?: AbortSignal
+  cache?: RequestCache
 }
 
 async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
-  const { method = 'GET', body, signal } = opts
+  const { method = 'GET', body, signal, cache } = opts
   const headers: Record<string, string> = {}
   if (body !== undefined) headers['Content-Type'] = 'application/json'
 
-  const res = await fetch(path, {
+  const init: RequestInit = {
     method,
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
     credentials: 'same-origin',
     signal,
-  })
+  }
+  if (cache) init.cache = cache
+  const res = await fetch(path, init)
 
   const text = await res.text()
   const parsed: unknown = text ? safeJson(text) : null
@@ -139,6 +158,16 @@ export const api = {
 
   replacePolicySet(input: ReplacePolicySetInput): Promise<ServerPolicySet> {
     return request<ServerPolicySet>('/api/policies', { method: 'PUT', body: input })
+  },
+
+  pushDiagnostics(): Promise<PushDiagnostics> {
+    return request<PushDiagnostics>('/api/push/diagnostics')
+  },
+
+  pushTest(): Promise<{ notification_id: string; deliveries_queued: number }> {
+    return request<{ notification_id: string; deliveries_queued: number }>('/api/push/test', {
+      method: 'POST',
+    })
   },
 
   sync(signal?: AbortSignal): Promise<SyncResponse> {
@@ -224,7 +253,7 @@ export const api = {
   },
 
   pushPublicKey(): Promise<{ enabled: boolean; public_key: string | null }> {
-    return request('/api/push/public-key')
+    return request('/api/push/public-key', { cache: 'no-store' })
   },
 
   pushSubscribe(subscription: PushSubscriptionJSON): Promise<unknown> {

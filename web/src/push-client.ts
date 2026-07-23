@@ -22,9 +22,11 @@ function appServerKey(publicKey: string): ArrayBuffer {
 
 export async function enablePushNotifications(): Promise<string> {
   if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
+    pushLog('unsupported')
     return 'Notifications are not supported here'
   }
   const cfg = await api.pushPublicKey()
+  pushLog('configuration', { enabled: cfg.enabled, key: cfg.public_key?.slice(0, 12) ?? null })
   if (!cfg.enabled || !cfg.public_key) return 'Push is not configured yet'
   if (Notification.permission === 'denied') return 'Notifications are blocked in this browser'
 
@@ -34,9 +36,16 @@ export async function enablePushNotifications(): Promise<string> {
   const reg = await navigator.serviceWorker.register('/sw.js')
   const desiredKey = appServerKey(cfg.public_key)
   let existing = await reg.pushManager.getSubscription()
-  if (existing && !keysEqual(existing.options.applicationServerKey, desiredKey)) {
+  const keyMatches = existing ? keysEqual(existing.options.applicationServerKey, desiredKey) : false
+  pushLog('subscription_checked', {
+    exists: existing !== null,
+    key_matches: keyMatches,
+    origin: existing ? endpointOrigin(existing.endpoint) : null,
+  })
+  if (existing && !keyMatches) {
     await api.pushUnsubscribe(existing.endpoint).catch(() => undefined)
     await existing.unsubscribe()
+    pushLog('subscription_rotated')
     existing = null
   }
   const sub = existing ?? await reg.pushManager.subscribe({
@@ -44,7 +53,36 @@ export async function enablePushNotifications(): Promise<string> {
     applicationServerKey: desiredKey,
   })
   await api.pushSubscribe(sub.toJSON())
+  pushLog('subscription_registered', { origin: endpointOrigin(sub.endpoint), reused: existing !== null })
   return existing ? 'Notifications are already enabled' : 'Notifications enabled'
+}
+
+export async function testPushNotifications(): Promise<string> {
+  const setup = await enablePushNotifications()
+  pushLog('test_setup', { result: setup })
+  const before = await api.pushDiagnostics()
+  pushLog('diagnostics_before_test', before)
+  if (before.active_subscriptions < 1) return 'No active push subscription'
+
+  const queued = await api.pushTest()
+  pushLog('test_queued', queued)
+  if (queued.deliveries_queued < 1) return 'Test notification was not queued'
+
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    await delay(1_000)
+    const diagnostics = await api.pushDiagnostics()
+    const delivery = diagnostics.recent_deliveries.find(
+      (candidate) => candidate.notification_id === queued.notification_id,
+    )
+    if (!delivery || delivery.status === 'pending' || delivery.status === 'sending' || delivery.status === 'retry') {
+      continue
+    }
+    pushLog('test_finished', delivery)
+    if (delivery.status === 'delivered') return 'Test notification delivered'
+    return `Test failed (${delivery.last_status ?? 'no status'}): ${delivery.last_error ?? 'unknown error'}`
+  }
+  pushLog('test_timed_out', queued)
+  return 'Test notification is still pending'
 }
 
 function keysEqual(current: ArrayBuffer | null, desired: ArrayBuffer): boolean {
@@ -54,16 +92,34 @@ function keysEqual(current: ArrayBuffer | null, desired: ArrayBuffer): boolean {
   return left.every((byte, index) => byte === right[index])
 }
 
+function endpointOrigin(endpoint: string): string {
+  try {
+    return new URL(endpoint).origin
+  } catch {
+    return 'invalid'
+  }
+}
+
+function pushLog(stage: string, details?: unknown): void {
+  console.info(`[fold:push] ${stage}`, details ?? '')
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => globalThis.setTimeout(resolve, milliseconds))
+}
+
 if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
   navigator.serviceWorker.addEventListener('message', (event: MessageEvent<unknown>) => {
     if (!isRecord(event.data) || typeof event.data.type !== 'string') return
 
     if (event.data.type === 'fold:push-subscription-change' && isPushSubscription(event.data.subscription)) {
+      pushLog('subscription_change_received')
       void api.pushSubscribe(event.data.subscription).catch(() => {})
       return
     }
 
     if (event.data.type === 'fold:push-notification' && isPushNotification(event.data.notification)) {
+      pushLog('notification_message_received', event.data.notification)
       window.dispatchEvent(new CustomEvent<PushNotificationDetail>(PUSH_NOTIFICATION_EVENT, {
         detail: event.data.notification,
       }))

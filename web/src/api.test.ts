@@ -135,4 +135,31 @@ describe('cookie session client', () => {
       }),
     })
   })
+
+  it('queues a test push and reads delivery diagnostics', async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({
+        notification_id: 'notification-1',
+        deliveries_queued: 1,
+      }, 202))
+      .mockResolvedValueOnce(jsonResponse({
+        vapid_enabled: true,
+        active_subscriptions: 1,
+        recent_deliveries: [],
+      }))
+
+    await expect(api.pushTest()).resolves.toEqual({
+      notification_id: 'notification-1',
+      deliveries_queued: 1,
+    })
+    await expect(api.pushDiagnostics()).resolves.toMatchObject({
+      vapid_enabled: true,
+      active_subscriptions: 1,
+    })
+
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/push/test')
+    expect(fetchMock.mock.calls[0][1]?.method).toBe('POST')
+    expect(fetchMock.mock.calls[1][0]).toBe('/api/push/diagnostics')
+    fetchMock.mock.calls.forEach(([, init]) => expectCookieRequest(init))
+  })
 })

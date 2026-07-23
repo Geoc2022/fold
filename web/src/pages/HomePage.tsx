@@ -16,7 +16,7 @@ import { ProposeForm } from '../components/ProposeForm'
 import type { SortKey } from '../components/SortSelect'
 import type { HomeView } from '../components/ViewToggle'
 import { requestNotificationPermission } from '../notify-client'
-import { enablePushNotifications } from '../push-client'
+import { enablePushNotifications, testPushNotifications } from '../push-client'
 import { loadHomeRules, type PolicyRule } from '../policy/rules'
 import { appendPolicySources, decodePolicySources, encodePolicySources } from '../policy/share'
 
@@ -85,7 +85,9 @@ export function HomePage() {
 
   useEffect(() => {
     if (me && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-      void enablePushNotifications().catch(() => undefined)
+      void enablePushNotifications().catch((error) => {
+        console.error('[fold:push] automatic_setup_failed', error)
+      })
     }
   }, [me])
 
@@ -264,6 +266,15 @@ export function HomePage() {
 
   async function enableNotifications() {
     setNotifyStatus(await requestNotificationPermission())
+  }
+
+  async function testNotifications() {
+    setNotifyStatus('Testing notification...')
+    try {
+      setNotifyStatus(await testPushNotifications())
+    } catch (error) {
+      setNotifyStatus(`Test failed: ${error instanceof Error ? error.message : 'unknown error'}`)
+    }
   }
 
   function sharePolicy() {
@@ -513,6 +524,7 @@ export function HomePage() {
           hint="Rules run against activities you've joined."
           notifyStatus={notifyStatus}
           onRequestNotifications={enableNotifications}
+          onTestNotifications={testNotifications}
           onShare={sharePolicy}
         />
       )}

@@ -11,6 +11,7 @@ interface Props {
   hint: string
   notifyStatus: string
   onRequestNotifications: () => void
+  onTestNotifications?: () => void
   onShare?: () => void
 }
 
@@ -21,6 +22,7 @@ export function PolicyPanel({
   hint,
   notifyStatus,
   onRequestNotifications,
+  onTestNotifications,
   onShare,
 }: Props) {
   const [selectedId, setSelectedId] = useState<string>(() => rules[0]?.id ?? '')
@@ -114,6 +116,11 @@ export function PolicyPanel({
             {!notificationsAlreadyEnabled && (
               <button type="button" className="panel-button" onClick={onRequestNotifications}>
                 Enable notifications
+              </button>
+            )}
+            {notificationsAlreadyEnabled && onTestNotifications && (
+              <button type="button" className="panel-button" onClick={onTestNotifications}>
+                Test notification
               </button>
             )}
               <button

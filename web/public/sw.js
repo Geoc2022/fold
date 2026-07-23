@@ -57,6 +57,7 @@ self.addEventListener('fetch', (event) => {
 
 self.addEventListener('pushsubscriptionchange', (event) => {
   event.waitUntil((async () => {
+    console.info('[fold:push] service_worker_subscription_change')
     const oldSubscription = event.oldSubscription
     const subscription = event.newSubscription || await createReplacementSubscription(oldSubscription)
     if (!subscription) return
@@ -77,13 +78,20 @@ self.addEventListener('pushsubscriptionchange', (event) => {
 
     const [, upsertResult] = await Promise.allSettled([pageRelay, endpointUpsert])
     if (upsertResult.status === 'rejected') {
-      console.warn(upsertResult.reason)
+      console.warn('[fold:push] service_worker_subscription_upsert_failed', upsertResult.reason)
+    } else {
+      console.info('[fold:push] service_worker_subscription_upserted')
     }
   })())
 })
 
 self.addEventListener('push', (event) => {
   const notification = pushNotification(event.data)
+  console.info('[fold:push] service_worker_push_received', {
+    id: notification.id,
+    title: notification.title,
+    url: notification.url,
+  })
   event.waitUntil(Promise.all([
     self.registration.showNotification(notification.title, {
       body: notification.body,
@@ -96,7 +104,7 @@ self.addEventListener('push', (event) => {
         url: notification.url,
         created_at: notification.created_at,
       },
-    }),
+    }).then(() => console.info('[fold:push] service_worker_notification_shown', notification.id)),
     postToWindowClients({
       type: 'fold:push-notification',
       notification,
@@ -107,6 +115,10 @@ self.addEventListener('push', (event) => {
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
   const targetUrl = sameOriginUrl(event.notification.data?.url)
+  console.info('[fold:push] service_worker_notification_clicked', {
+    id: event.notification.data?.id || null,
+    url: targetUrl,
+  })
   event.waitUntil((async () => {
     const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
     const matching = windows.find((client) => sameOriginUrl(client.url) === targetUrl)

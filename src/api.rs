@@ -1152,6 +1152,22 @@ pub async fn notifications_read(mut req: Request, ctx: RouteContext<()>) -> Resu
 
 // ---- push subscriptions -----------------------------------------------------
 
+#[derive(serde::Deserialize, serde::Serialize)]
+struct PushDeliveryDiagnostic {
+    notification_id: String,
+    status: String,
+    attempts: i64,
+    last_status: Option<i64>,
+    last_error: Option<String>,
+    created_at: i64,
+    updated_at: i64,
+}
+
+#[derive(serde::Deserialize)]
+struct PushSubscriptionCount {
+    active_subscriptions: i64,
+}
+
 pub async fn push_public_key(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let key = push::public_key(&ctx.env);
     Response::from_json(&serde_json::json!({
@@ -1196,6 +1212,15 @@ pub async fn push_subscribe(mut req: Request, ctx: RouteContext<()>) -> Result<R
         now,
     )
     .await?;
+    let origin = Url::parse(&endpoint)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_string))
+        .unwrap_or_else(|| "unknown".to_string());
+    console_log!(
+        "[fold:push] subscription_upsert person={} origin={}",
+        person.id,
+        origin
+    );
     Response::from_json(&serde_json::json!({ "ok": true }))
 }
 
@@ -1210,7 +1235,55 @@ pub async fn push_unsubscribe(mut req: Request, ctx: RouteContext<()>) -> Result
         Err(_) => return err_json("invalid JSON body", 400),
     };
     db::delete_push_subscription(&db, &person.id, &body.endpoint).await?;
+    console_log!("[fold:push] subscription_deleted person={}", person.id);
     Response::from_json(&serde_json::json!({ "ok": true }))
+}
+
+pub async fn push_diagnostics(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let db = ctx.env.d1("DB")?;
+    let person = match require_person(&db, &req).await? {
+        Ok(person) => person,
+        Err(response) => return Ok(response),
+    };
+    let subscription = db
+        .prepare(
+            "SELECT COUNT(*) AS active_subscriptions FROM push_subscriptions \
+             WHERE person_id = ?1 AND disabled_at IS NULL \
+               AND (expiration_time IS NULL OR expiration_time > ?2)",
+        )
+        .bind(&[db::s(&person.id), db::i(now_ms())])?
+        .first::<PushSubscriptionCount>(None)
+        .await?
+        .unwrap_or(PushSubscriptionCount {
+            active_subscriptions: 0,
+        });
+    let deliveries = db
+        .prepare(
+            "SELECT pd.notification_id, pd.status, pd.attempts, pd.last_status, pd.last_error, \
+                    pd.created_at, pd.updated_at \
+             FROM push_deliveries pd \
+             JOIN notifications n ON n.id = pd.notification_id \
+             WHERE n.recipient_id = ?1 ORDER BY pd.updated_at DESC LIMIT 20",
+        )
+        .bind(&[db::s(&person.id)])?
+        .all()
+        .await?
+        .results::<PushDeliveryDiagnostic>()?;
+    Response::from_json(&serde_json::json!({
+        "vapid_enabled": push::public_key(&ctx.env).is_some(),
+        "active_subscriptions": subscription.active_subscriptions,
+        "recent_deliveries": deliveries,
+    }))
+}
+
+pub async fn push_test(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let db = ctx.env.d1("DB")?;
+    let person = match require_person(&db, &req).await? {
+        Ok(person) => person,
+        Err(response) => return Ok(response),
+    };
+    let queued = crate::policy_runtime::queue_test_push(&ctx.env, &db, &person.id).await?;
+    json_status(&queued, 202)
 }
 
 // ---- personal policies -----------------------------------------------------

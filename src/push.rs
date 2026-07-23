@@ -5,7 +5,7 @@ use p256::ecdsa::{signature::Signer, Signature, SigningKey};
 use worker::*;
 
 use crate::db::{self, PushSubscriptionRow};
-use crate::push_crypto::encrypt_payload;
+use crate::push_crypto::{encrypt_payload, validate_vapid_key_pair, vapid_audience};
 
 const PUSH_LIMIT: i64 = 100;
 
@@ -26,11 +26,18 @@ struct VapidConfig {
     subject: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct PushResponse {
+    pub status: u16,
+    pub details: Option<String>,
+}
+
 fn env_string(env: &Env, name: &str) -> Option<String> {
     env.var(name)
         .ok()
         .map(|v| v.to_string())
-        .filter(|v| !v.trim().is_empty())
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
 }
 
 fn vapid_config(env: &Env) -> Option<VapidConfig> {
@@ -73,8 +80,8 @@ pub async fn send_payload_to_people(
     let subs = db::push_subscriptions_for_people(db, person_ids, PUSH_LIMIT).await?;
     for sub in subs {
         match send_one(&cfg, &sub, &plaintext).await {
-            Ok(status) => {
-                if matches!(status, 404 | 410) {
+            Ok(response) => {
+                if matches!(response.status, 404 | 410) {
                     db::delete_push_endpoint(db, &sub.endpoint).await?;
                 }
             }
@@ -92,7 +99,7 @@ pub async fn send_payload_to_subscription(
     env: &Env,
     sub: &PushSubscriptionRow,
     payload: &PushPayload<'_>,
-) -> Result<Option<u16>> {
+) -> Result<Option<PushResponse>> {
     let Some(cfg) = vapid_config(env) else {
         return Ok(None);
     };
@@ -101,7 +108,11 @@ pub async fn send_payload_to_subscription(
     send_one(&cfg, sub, &plaintext).await.map(Some)
 }
 
-async fn send_one(cfg: &VapidConfig, sub: &PushSubscriptionRow, plaintext: &[u8]) -> Result<u16> {
+async fn send_one(
+    cfg: &VapidConfig,
+    sub: &PushSubscriptionRow,
+    plaintext: &[u8],
+) -> Result<PushResponse> {
     let jwt = vapid_jwt(cfg, &sub.endpoint)?;
     let encrypted = encrypt_payload(&sub.p256dh, &sub.auth, plaintext)
         .map_err(|e| Error::RustError(format!("push encryption failed: {e}")))?;
@@ -120,11 +131,29 @@ async fn send_one(cfg: &VapidConfig, sub: &PushSubscriptionRow, plaintext: &[u8]
         .with_headers(headers)
         .with_body(Some(body.into()));
     let req = Request::new_with_init(&sub.endpoint, &init)?;
-    let resp = Fetch::Request(req).send().await?;
-    Ok(resp.status_code())
+    let mut resp = Fetch::Request(req).send().await?;
+    let status = resp.status_code();
+    let origin = endpoint_origin(&sub.endpoint)?;
+    let details = if (200..300).contains(&status) {
+        None
+    } else {
+        let challenge = resp.headers().get("WWW-Authenticate")?.unwrap_or_default();
+        let body = resp.text().await.unwrap_or_default();
+        Some(response_details(&challenge, &body))
+    };
+    console_log!(
+        "[fold:push] delivery subscription={} origin={} status={} details={}",
+        sub.id,
+        origin,
+        status,
+        details.as_deref().unwrap_or("none")
+    );
+    Ok(PushResponse { status, details })
 }
 
 fn vapid_jwt(cfg: &VapidConfig, endpoint: &str) -> Result<String> {
+    validate_vapid_key_pair(&cfg.public_key, &cfg.private_key)
+        .map_err(|error| Error::RustError(error.to_string()))?;
     let aud = endpoint_origin(endpoint)?;
     let exp = (Date::now().as_millis() / 1000) as i64 + 12 * 60 * 60;
     let header = serde_json::json!({ "typ": "JWT", "alg": "ES256" });
@@ -148,6 +177,16 @@ fn vapid_jwt(cfg: &VapidConfig, endpoint: &str) -> Result<String> {
     ))
 }
 
+fn response_details(challenge: &str, body: &str) -> String {
+    let combined = match (challenge.trim(), body.trim()) {
+        ("", "") => "push service returned no error details".to_string(),
+        ("", body) => body.to_string(),
+        (challenge, "") => format!("WWW-Authenticate: {challenge}"),
+        (challenge, body) => format!("WWW-Authenticate: {challenge}; body: {body}"),
+    };
+    combined.chars().take(500).collect()
+}
+
 fn b64_json(value: &serde_json::Value) -> Result<String> {
     let bytes = serde_json::to_vec(value)
         .map_err(|e| Error::RustError(format!("json encode failed: {e}")))?;
@@ -155,13 +194,5 @@ fn b64_json(value: &serde_json::Value) -> Result<String> {
 }
 
 fn endpoint_origin(endpoint: &str) -> Result<String> {
-    let url = Url::parse(endpoint)?;
-    let protocol = url.scheme();
-    let host = url
-        .host_str()
-        .ok_or_else(|| Error::RustError("push endpoint missing host".into()))?;
-    Ok(match url.port() {
-        Some(port) => format!("{protocol}//{host}:{port}"),
-        None => format!("{protocol}//{host}"),
-    })
+    vapid_audience(endpoint).map_err(|error| Error::RustError(error.to_string()))
 }

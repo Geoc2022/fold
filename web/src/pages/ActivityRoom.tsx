@@ -12,7 +12,7 @@ import { PolicyPanel } from '../components/PolicyPanel'
 import { DEFAULT_VISUAL_CONFIG, type VisualConfig } from '../nodeVisual'
 import { readJson, writeJson } from '../storage'
 import { requestNotificationPermission } from '../notify-client'
-import { enablePushNotifications } from '../push-client'
+import { enablePushNotifications, testPushNotifications } from '../push-client'
 import { loadHomeRules, loadRoomRules, type PolicyRule } from '../policy/rules'
 import { appendPolicySources, decodePolicySources, encodePolicySources } from '../policy/share'
 import { buildActivityShareText } from '../activityShare'
@@ -83,7 +83,9 @@ export function ActivityRoom() {
 
   useEffect(() => {
     if (me && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-      void enablePushNotifications().catch(() => undefined)
+      void enablePushNotifications().catch((error) => {
+        console.error('[fold:push] automatic_setup_failed', error)
+      })
     }
   }, [me])
 
@@ -334,6 +336,15 @@ export function ActivityRoom() {
     setNotifyStatus(await requestNotificationPermission())
   }
 
+  async function testNotifications() {
+    setNotifyStatus('Testing notification...')
+    try {
+      setNotifyStatus(await testPushNotifications())
+    } catch (error) {
+      setNotifyStatus(`Test failed: ${error instanceof Error ? error.message : 'unknown error'}`)
+    }
+  }
+
   function sharePolicy() {
     const url = `${window.location.origin}/${activity.code}?policy=${encodeURIComponent(encodePolicySources(policyRules))}`
     navigator.clipboard.writeText(url).then(
@@ -465,6 +476,7 @@ export function ActivityRoom() {
           hint="Rules run against this room while you're here."
           notifyStatus={notifyStatus}
           onRequestNotifications={enableNotifications}
+          onTestNotifications={testNotifications}
           onShare={sharePolicy}
         />
       )}

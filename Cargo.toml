@@ -22,6 +22,7 @@ p256 = { version = "0.13", features = ["ecdsa", "ecdh"] }
 aes-gcm = "0.10"
 hkdf = "0.12"
 sha2 = "0.10"
+url = "2"
 chrono = { version = "0.4", default-features = false, features = ["wasmbind"] }
 chrono-tz = { version = "0.10", default-features = false }
 # Pin below 0.2.126 (parser/EH regression with current toolchain).

@@ -2,7 +2,7 @@
 
 use policy::evaluate_policy_safe;
 use serde::{Deserialize, Serialize};
-use worker::{console_error, D1Database, Env, Error, MessageBuilder, Queue, Result};
+use worker::{console_error, console_log, D1Database, Env, Error, MessageBuilder, Queue, Result};
 
 use crate::policy_planner::{
     reconcile, ActionChange, ActionSnapshot, ActionStatus, InstanceSnapshot, ReconcileInput,
@@ -22,6 +22,12 @@ pub enum PolicyJob {
     Evaluate { event_id: String },
     Action { action_id: String },
     Push { delivery_id: String },
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PushTestQueued {
+    pub notification_id: String,
+    pub deliveries_queued: i64,
 }
 
 #[derive(Deserialize)]
@@ -257,6 +263,12 @@ async fn process_event(env: &Env, db: &D1Database, event_id: &str) -> Result<()>
         .bind(&[db::i(util::now_ms()), db::s(&event.id)])?
         .run()
         .await?;
+    console_log!(
+        "[fold:policy] event_processed event={} activity={} run={}",
+        event.id,
+        event.activity_id,
+        event.run_id.as_deref().unwrap_or("none")
+    );
     Ok(())
 }
 
@@ -324,6 +336,16 @@ async fn evaluate_activity(
                 continue;
             }
             let timeline = result.fired.as_ref().map(collect_timeline);
+            console_log!(
+                "[fold:policy] rule_evaluated rule={} version={} activity={} fired={} actions={}",
+                rule.id,
+                rule.version,
+                activity_id,
+                timeline.is_some(),
+                timeline
+                    .as_ref()
+                    .map_or(0, |timeline| timeline.entries.len())
+            );
             reconcile_rule(
                 env,
                 db,
@@ -973,6 +995,53 @@ async fn create_policy_notification(
     enqueue_notification_deliveries(env, db, &notification.id, now).await
 }
 
+pub async fn queue_test_push(
+    env: &Env,
+    db: &D1Database,
+    person_id: &str,
+) -> Result<PushTestQueued> {
+    let now = util::now_ms();
+    let notification_id = util::new_id();
+    let dedupe = format!("push-test:{notification_id}");
+    db.prepare(
+        "INSERT INTO notifications \
+           (id, recipient_id, kind, message, read_at, created_at, title, url, dedupe_key) \
+         VALUES (?1, ?2, 'push_test', 'Web Push reached this browser.', NULL, ?3, \
+                 'fold notification test', '/', ?4)",
+    )
+    .bind(&[
+        db::s(&notification_id),
+        db::s(person_id),
+        db::i(now),
+        db::s(&dedupe),
+    ])?
+    .run()
+    .await?;
+    let inserted = db
+        .prepare(
+            "INSERT OR IGNORE INTO push_deliveries \
+               (id, notification_id, subscription_id, status, next_attempt_at, created_at, updated_at) \
+             SELECT lower(hex(randomblob(16))), ?1, id, 'pending', ?2, ?2, ?2 \
+             FROM push_subscriptions \
+             WHERE person_id = ?3 AND disabled_at IS NULL \
+               AND (expiration_time IS NULL OR expiration_time > ?2)",
+        )
+        .bind(&[db::s(&notification_id), db::i(now), db::s(person_id)])?
+        .run()
+        .await?;
+    let deliveries_queued = inserted.meta()?.and_then(|meta| meta.changes).unwrap_or(0) as i64;
+    enqueue_notification_deliveries(env, db, &notification_id, now).await?;
+    console_log!(
+        "[fold:push] test_queued notification={} deliveries={}",
+        notification_id,
+        deliveries_queued
+    );
+    Ok(PushTestQueued {
+        notification_id,
+        deliveries_queued,
+    })
+}
+
 async fn enqueue_notification_deliveries(
     env: &Env,
     db: &D1Database,
@@ -1215,12 +1284,16 @@ async fn process_delivery(env: &Env, db: &D1Database, delivery_id: &str) -> Resu
         created_at: row.created_at,
     };
     match push::send_payload_to_subscription(env, &subscription, &payload).await {
-        Ok(Some(status)) if (200..300).contains(&status) => {
+        Ok(Some(response)) if (200..300).contains(&response.status) => {
             db.prepare(
                 "UPDATE push_deliveries SET status = 'delivered', last_status = ?1, \
                    last_error = NULL, updated_at = ?2 WHERE id = ?3",
             )
-            .bind(&[db::i(i64::from(status)), db::i(now), db::s(delivery_id)])?
+            .bind(&[
+                db::i(i64::from(response.status)),
+                db::i(now),
+                db::s(delivery_id),
+            ])?
             .run()
             .await?;
             db.prepare(
@@ -1229,27 +1302,44 @@ async fn process_delivery(env: &Env, db: &D1Database, delivery_id: &str) -> Resu
             .bind(&[db::i(now), db::s(&row.subscription_id)])?
             .run()
             .await?;
+            console_log!(
+                "[fold:push] delivery_delivered delivery={} notification={} status={}",
+                delivery_id,
+                row.notification_id,
+                response.status
+            );
         }
-        Ok(Some(status @ (404 | 410))) => {
-            mark_delivery_failed(db, delivery_id, Some(status), "subscription expired", now)
-                .await?;
+        Ok(Some(response)) if matches!(response.status, 404 | 410) => {
+            let error = response
+                .details
+                .as_deref()
+                .unwrap_or("subscription expired");
+            mark_delivery_failed(db, delivery_id, Some(response.status), error, now).await?;
             db.prepare("UPDATE push_subscriptions SET disabled_at = ?1 WHERE id = ?2")
                 .bind(&[db::i(now), db::s(&row.subscription_id)])?
                 .run()
                 .await?;
         }
-        Ok(Some(status)) if status == 429 || status >= 500 => {
-            retry_delivery(env, db, &row, Some(status), "push service unavailable", now).await?;
+        Ok(Some(response)) if response.status == 429 || response.status >= 500 => {
+            let error = response
+                .details
+                .as_deref()
+                .unwrap_or("push service unavailable");
+            retry_delivery(env, db, &row, Some(response.status), error, now).await?;
         }
-        Ok(Some(status)) => {
-            mark_delivery_failed(
-                db,
+        Ok(Some(response)) => {
+            let error = response
+                .details
+                .as_deref()
+                .unwrap_or("push service rejected request");
+            mark_delivery_failed(db, delivery_id, Some(response.status), error, now).await?;
+            console_log!(
+                "[fold:push] delivery_failed delivery={} notification={} status={} details={}",
                 delivery_id,
-                Some(status),
-                "push service rejected request",
-                now,
-            )
-            .await?;
+                row.notification_id,
+                response.status,
+                error
+            );
         }
         Ok(None) => {
             retry_delivery(env, db, &row, None, "VAPID is not configured", now).await?;

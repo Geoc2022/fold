@@ -33,6 +33,10 @@ pub enum PushCryptoError {
     InvalidP256dhKey,
     InvalidAuthBase64,
     InvalidAuthLength,
+    InvalidVapidPrivateKey,
+    InvalidVapidPublicKey,
+    VapidKeyMismatch,
+    InvalidPushEndpoint,
     PayloadTooLarge { len: usize, max: usize },
     Randomness(String),
     KeyDerivation,
@@ -49,6 +53,10 @@ impl fmt::Display for PushCryptoError {
             Self::InvalidP256dhKey => write!(f, "p256dh is not a valid P-256 public key"),
             Self::InvalidAuthBase64 => write!(f, "auth is not canonical base64url"),
             Self::InvalidAuthLength => write!(f, "auth must decode to exactly 16 bytes"),
+            Self::InvalidVapidPrivateKey => write!(f, "VAPID private key is invalid"),
+            Self::InvalidVapidPublicKey => write!(f, "VAPID public key is invalid"),
+            Self::VapidKeyMismatch => write!(f, "VAPID public and private keys do not match"),
+            Self::InvalidPushEndpoint => write!(f, "push endpoint has no valid HTTPS origin"),
             Self::PayloadTooLarge { len, max } => {
                 write!(f, "push payload is {len} bytes; maximum is {max}")
             }
@@ -98,6 +106,29 @@ pub fn validate_subscription(p256dh: &str, auth: &str) -> Result<(), PushCryptoE
     decode_subscriber_public_key(p256dh)?;
     decode_auth_secret(auth)?;
     Ok(())
+}
+
+pub fn validate_vapid_key_pair(public_key: &str, private_key: &str) -> Result<(), PushCryptoError> {
+    let private_bytes =
+        decode_canonical_base64url(private_key, PushCryptoError::InvalidVapidPrivateKey)?;
+    let private = SecretKey::from_slice(&private_bytes)
+        .map_err(|_| PushCryptoError::InvalidVapidPrivateKey)?;
+    let public_bytes =
+        decode_canonical_base64url(public_key, PushCryptoError::InvalidVapidPublicKey)?;
+    let public = PublicKey::from_sec1_bytes(&public_bytes)
+        .map_err(|_| PushCryptoError::InvalidVapidPublicKey)?;
+    if private.public_key() != public {
+        return Err(PushCryptoError::VapidKeyMismatch);
+    }
+    Ok(())
+}
+
+pub fn vapid_audience(endpoint: &str) -> Result<String, PushCryptoError> {
+    let url = url::Url::parse(endpoint).map_err(|_| PushCryptoError::InvalidPushEndpoint)?;
+    if url.scheme() != "https" || url.host_str().is_none() {
+        return Err(PushCryptoError::InvalidPushEndpoint);
+    }
+    Ok(url.origin().ascii_serialization())
 }
 
 fn decode_canonical_base64url(
@@ -273,6 +304,35 @@ mod tests {
         assert_eq!(
             decode_subscriber_public_key(&URL_SAFE_NO_PAD.encode(off_curve)).unwrap_err(),
             PushCryptoError::InvalidP256dhKey
+        );
+    }
+
+    #[test]
+    fn validates_matching_vapid_key_pair_and_rejects_mismatch() {
+        validate_vapid_key_pair(SENDER_PUBLIC, SENDER_PRIVATE).unwrap();
+        assert_eq!(
+            validate_vapid_key_pair(RECEIVER_PUBLIC, SENDER_PRIVATE).unwrap_err(),
+            PushCryptoError::VapidKeyMismatch
+        );
+    }
+
+    #[test]
+    fn canonicalizes_vapid_audience_to_endpoint_origin() {
+        assert_eq!(
+            vapid_audience("https://updates.push.services.mozilla.com/wpush/v2/token").unwrap(),
+            "https://updates.push.services.mozilla.com"
+        );
+        assert_eq!(
+            vapid_audience("https://updates.push.services.mozilla.com:443/wpush/v2/token").unwrap(),
+            "https://updates.push.services.mozilla.com"
+        );
+        assert_eq!(
+            vapid_audience("https://push.example:8443/subscription").unwrap(),
+            "https://push.example:8443"
+        );
+        assert_eq!(
+            vapid_audience("http://push.example/subscription").unwrap_err(),
+            PushCryptoError::InvalidPushEndpoint
         );
     }
 
