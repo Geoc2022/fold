@@ -6,9 +6,15 @@ Try the tutorial at `/fold`
 
 ## Next Steps:
 
-### Add "badges"
+### Latency is high
+I think this might have to do with the new server side notifications. In general, how often can we make stuff poll?
 
-It would be cool to have the favicon update with the state of the room. In the process of this we should be able to programmatically draw the favicon, which is currently created in Figma.
+### Notification policy panel
+- Adding a policy through the url query should have the view moved to that tab
+- There's something wrong with the scroll bar and the cursor
+
+### "Add an activity"
+The number inputs don't have a removed border
 
 ### Align the Fold title Animation
 
