@@ -495,7 +495,7 @@ function personFrom(name: string, state: NodeState, etaSecs: number, waitedSecs:
       st = variant('State', 'Committed', [dur(etaSecs)])
       break
     case 'arrived':
-      st = variant('State', 'Arrived', [dur(waitedSecs)])
+      st = variant('State', 'Arrived', [dur(0)])
       break
     case 'interested':
       st = variant('State', 'Interested', [])
@@ -503,5 +503,5 @@ function personFrom(name: string, state: NodeState, etaSecs: number, waitedSecs:
     default:
       st = variant('State', 'Lurker', [])
   }
-  return record('Person', { name: str(name), state: st })
+  return record('Person', { name: str(name), state: st, engaged_for: dur(waitedSecs) })
 }

@@ -5,8 +5,12 @@ use worker::*;
 use crate::db;
 use crate::logic::{compute_group_state, grouping_is_feasible, GroupingMode};
 use crate::models::*;
+use crate::policy_store::{self, PolicyStoreError, ReplacePolicySetRequest};
 use crate::push;
-use crate::util::{err_json, json_status, new_code, new_id, now_ms, person_id, random_color};
+use crate::util::{
+    err_json, expired_session_cookie, json_status, new_code, new_id, new_session_token, now_ms,
+    random_color, session_cookie, session_token, session_token_hash, SESSION_TTL_MS,
+};
 
 const ACTIVITY_LIST_LIMIT: i64 = 100;
 const NOTIFICATION_LIMIT: i64 = 50;
@@ -35,22 +39,62 @@ async fn require_person(
     db: &D1Database,
     req: &Request,
 ) -> Result<std::result::Result<PersonRow, Response>> {
-    let pid = match person_id(req) {
-        Some(p) => p,
-        None => return Ok(Err(err_json("missing X-Person-Id header", 401)?)),
-    };
-    match db::get_person(db, &pid).await? {
+    match optional_person(db, req).await? {
         Some(p) => Ok(Ok(p)),
-        None => Ok(Err(err_json(
-            "unknown person; create a session first",
-            401,
-        )?)),
+        None => Ok(Err(err_json("missing or expired session", 401)?)),
     }
+}
+
+async fn optional_person(db: &D1Database, req: &Request) -> Result<Option<PersonRow>> {
+    let Some(token) = session_token(req) else {
+        return Ok(None);
+    };
+    db::person_for_session(db, &session_token_hash(&token), now_ms()).await
+}
+
+fn policy_store_error(error: PolicyStoreError) -> Result<Response> {
+    let body = match &error {
+        PolicyStoreError::Compile {
+            rule_index,
+            diagnostics,
+        } => serde_json::json!({
+            "error": error.to_string(),
+            "rule_index": rule_index,
+            "diagnostics": diagnostics,
+        }),
+        PolicyStoreError::Conflict {
+            expected_revision,
+            actual_revision,
+        } => serde_json::json!({
+            "error": error.to_string(),
+            "expected_revision": expected_revision,
+            "actual_revision": actual_revision,
+        }),
+        _ => serde_json::json!({ "error": error.to_string() }),
+    };
+    json_status(&body, error.status_code())
 }
 
 async fn push_people(env: &Env, db: &D1Database, people: Vec<String>) -> Result<()> {
     if !people.is_empty() {
         push::send_to_people(env, db, &people).await?;
+    }
+    Ok(())
+}
+
+async fn policy_event(
+    env: &Env,
+    db: &D1Database,
+    activity_id: &str,
+    run_id: &str,
+    kind: &str,
+    actor_id: Option<&str>,
+) -> Result<()> {
+    if let Err(error) =
+        crate::policy_runtime::emit_event(env, db, activity_id, Some(run_id), kind, actor_id, 0)
+            .await
+    {
+        console_error!("could not enqueue policy event: {error}");
     }
     Ok(())
 }
@@ -250,12 +294,21 @@ pub async fn session_create(mut req: Request, ctx: RouteContext<()>) -> Result<R
     let now = now_ms();
     let id = new_id();
     let color = body.color.unwrap_or_else(random_color);
+    let (token, token_hash) = new_session_token();
 
     db.prepare(
         "INSERT INTO people (id, handle, color, created_at, last_seen_at) VALUES (?1, ?2, ?3, ?4, ?4)",
     )
     .bind(&[db::s(&id), db::s(handle), db::s(&color), db::i(now)])?
     .run()
+    .await?;
+    db::insert_auth_session(
+        &db,
+        &token_hash,
+        &id,
+        now,
+        now.saturating_add(SESSION_TTL_MS),
+    )
     .await?;
 
     let person = PersonRow {
@@ -265,19 +318,31 @@ pub async fn session_create(mut req: Request, ctx: RouteContext<()>) -> Result<R
         created_at: now,
         last_seen_at: now,
     };
-    json_status(&person, 201)
+    let mut response = json_status(&person, 201)?;
+    response
+        .headers_mut()
+        .set("Set-Cookie", &session_cookie(&req, &token)?)?;
+    Ok(response)
 }
 
 pub async fn session_get(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let db = ctx.env.d1("DB")?;
-    let pid = match person_id(&req) {
-        Some(p) => p,
-        None => return err_json("missing X-Person-Id header", 401),
-    };
-    match db::get_person(&db, &pid).await? {
+    match optional_person(&db, &req).await? {
         Some(p) => Response::from_json(&p),
-        None => err_json("not found", 404),
+        None => err_json("missing or expired session", 401),
     }
+}
+
+pub async fn session_delete(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let db = ctx.env.d1("DB")?;
+    if let Some(token) = session_token(&req) {
+        db::delete_auth_session(&db, &session_token_hash(&token)).await?;
+    }
+    let mut response = Response::from_json(&serde_json::json!({ "ok": true }))?;
+    response
+        .headers_mut()
+        .set("Set-Cookie", &expired_session_cookie(&req)?)?;
+    Ok(response)
 }
 
 pub async fn session_update(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -367,8 +432,14 @@ pub async fn activity_create(mut req: Request, ctx: RouteContext<()>) -> Result<
 
     let emoji = clean_emoji(body.emoji.as_deref());
     let category = clean_category(body.category.as_deref());
-    let duration_seconds = body.duration_seconds.unwrap_or(30 * 60).clamp(0, 24 * 60 * 60);
-    let max_commit_seconds = body.max_commit_seconds.unwrap_or(30 * 60).clamp(0, 24 * 60 * 60);
+    let duration_seconds = body
+        .duration_seconds
+        .unwrap_or(30 * 60)
+        .clamp(0, 24 * 60 * 60);
+    let max_commit_seconds = body
+        .max_commit_seconds
+        .unwrap_or(30 * 60)
+        .clamp(0, 24 * 60 * 60);
 
     let now = now_ms();
     let id = new_id();
@@ -422,6 +493,15 @@ pub async fn activity_create(mut req: Request, ctx: RouteContext<()>) -> Result<
         now,
     )
     .await?;
+    policy_event(
+        &ctx.env,
+        &db,
+        &id,
+        &run_id,
+        "activity_created",
+        Some(&proposer.id),
+    )
+    .await?;
 
     // Public activities are discoverable; private-by-link activities are not.
     if !body.private_by_link.unwrap_or(false) {
@@ -448,7 +528,8 @@ pub async fn activity_create(mut req: Request, ctx: RouteContext<()>) -> Result<
 pub async fn activity_get(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let db = ctx.env.d1("DB")?;
     let id = ctx.param("id").cloned().unwrap_or_default();
-    match build_activity_view(&db, &id, person_id(&req).as_deref()).await? {
+    let me = optional_person(&db, &req).await?;
+    match build_activity_view(&db, &id, me.as_ref().map(|p| p.id.as_str())).await? {
         Some(view) => Response::from_json(&view),
         None => err_json("activity not found", 404),
     }
@@ -515,8 +596,14 @@ pub async fn activity_update(mut req: Request, ctx: RouteContext<()>) -> Result<
 
     let emoji = clean_emoji(body.emoji.as_deref());
     let category = clean_category(body.category.as_deref());
-    let duration_seconds = body.duration_seconds.unwrap_or(30 * 60).clamp(0, 24 * 60 * 60);
-    let max_commit_seconds = body.max_commit_seconds.unwrap_or(30 * 60).clamp(0, 24 * 60 * 60);
+    let duration_seconds = body
+        .duration_seconds
+        .unwrap_or(30 * 60)
+        .clamp(0, 24 * 60 * 60);
+    let max_commit_seconds = body
+        .max_commit_seconds
+        .unwrap_or(30 * 60)
+        .clamp(0, 24 * 60 * 60);
     let now = now_ms();
 
     db.prepare(
@@ -557,6 +644,15 @@ pub async fn activity_update(mut req: Request, ctx: RouteContext<()>) -> Result<
     if let Some(updated) = db::get_activity(&db, &existing.id).await? {
         if let Some(run_id) = updated.current_run_id.clone() {
             let _ = refresh_run(&db, &run_id, &updated, now).await?;
+            policy_event(
+                &ctx.env,
+                &db,
+                &updated.id,
+                &run_id,
+                "activity_updated",
+                Some(&person.id),
+            )
+            .await?;
         }
     }
 
@@ -625,6 +721,15 @@ pub async fn activity_create_run(mut req: Request, ctx: RouteContext<()>) -> Res
     .await?;
     db::set_activity_current_run(&db, &activity.id, Some(&run_id), now).await?;
     db::touch_activity_last_active(&db, &activity.id, now).await?;
+    policy_event(
+        &ctx.env,
+        &db,
+        &activity.id,
+        &run_id,
+        "run_created",
+        Some(&proposer.id),
+    )
+    .await?;
 
     if activity.private_by_link == 0 {
         let msg = format!(
@@ -686,6 +791,15 @@ pub async fn run_interest(req: Request, ctx: RouteContext<()>) -> Result<Respons
     db::touch_activity_last_active(&db, &activity.id, now).await?;
 
     let (fresh_run, _newly_ready) = refresh_run(&db, &run.id, &activity, now).await?;
+    policy_event(
+        &ctx.env,
+        &db,
+        &activity.id,
+        &run.id,
+        "participation_changed",
+        Some(&person.id),
+    )
+    .await?;
 
     if activity.proposer_id != person.id {
         let msg = format!("{} is interested in \"{}\"", person.handle, activity.title);
@@ -807,11 +921,35 @@ pub async fn run_commit(mut req: Request, ctx: RouteContext<()>) -> Result<Respo
     let requested_eta = body.eta_seconds.map(|v| v as i64).unwrap_or(default_eta);
     let eta = requested_eta.clamp(0, max_commit);
     let arrival_at = now + eta * 1000;
-    db::upsert_participation(&db, &run.id, &person.id, "committed", Some(arrival_at), now).await?;
+    if let Err(error) =
+        db::upsert_participation(&db, &run.id, &person.id, "committed", Some(arrival_at), now).await
+    {
+        if error.to_string().contains("activity is full") {
+            return err_json("activity is full", 409);
+        }
+        if let Some(other) = db::other_committed_run(&db, &person.id, &run.id).await? {
+            let body = serde_json::json!({
+                "error": "already committed to another activity",
+                "conflict_activity_id": other.activity_id,
+                "conflict_run_id": other.run_id,
+            });
+            return json_status(&body, 409);
+        }
+        return Err(error);
+    }
     db::touch_person(&db, &person.id, now).await?;
     db::touch_activity_last_active(&db, &activity.id, now).await?;
 
     let (_fresh_run, newly_ready) = refresh_run(&db, &run.id, &activity, now).await?;
+    policy_event(
+        &ctx.env,
+        &db,
+        &activity.id,
+        &run.id,
+        "participation_changed",
+        Some(&person.id),
+    )
+    .await?;
 
     if !already_committed && activity.proposer_id != person.id {
         let msg = format!("{} committed to \"{}\"", person.handle, activity.title);
@@ -887,6 +1025,15 @@ pub async fn run_withdraw(req: Request, ctx: RouteContext<()>) -> Result<Respons
     if activity.current_run_id.as_deref() == Some(run.id.as_str()) {
         refresh_run(&db, &run.id, &activity, now).await?;
     }
+    policy_event(
+        &ctx.env,
+        &db,
+        &activity.id,
+        &run.id,
+        "participation_changed",
+        Some(&person.id),
+    )
+    .await?;
 
     let view = build_activity_view(&db, &activity.id, Some(&person.id))
         .await?
@@ -957,6 +1104,15 @@ async fn proposer_run_action(
     )
     .await?;
     push_people(&ctx.env, &db, recipients).await?;
+    policy_event(
+        &ctx.env,
+        &db,
+        &activity.id,
+        &run.id,
+        "run_changed",
+        Some(&person.id),
+    )
+    .await?;
 
     let view = build_activity_view(&db, &activity.id, Some(&person.id))
         .await?
@@ -1020,13 +1176,23 @@ pub async fn push_subscribe(mut req: Request, ctx: RouteContext<()>) -> Result<R
     {
         return err_json("invalid push subscription", 400);
     }
+    let endpoint = match Url::parse(&body.endpoint) {
+        Ok(url) if url.scheme() == "https" && url.host_str().is_some() => body.endpoint,
+        _ => return err_json("push endpoint must be an HTTPS URL", 400),
+    };
+    if let Err(error) =
+        crate::push_crypto::validate_subscription(&body.keys.p256dh, &body.keys.auth)
+    {
+        return err_json(&format!("invalid push subscription: {error}"), 400);
+    }
     let now = now_ms();
     db::upsert_push_subscription(
         &db,
         &person.id,
-        &body.endpoint,
+        &endpoint,
         &body.keys.p256dh,
         &body.keys.auth,
+        body.expiration_time,
         now,
     )
     .await?;
@@ -1047,6 +1213,55 @@ pub async fn push_unsubscribe(mut req: Request, ctx: RouteContext<()>) -> Result
     Response::from_json(&serde_json::json!({ "ok": true }))
 }
 
+// ---- personal policies -----------------------------------------------------
+
+pub async fn policies_get(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let db = ctx.env.d1("DB")?;
+    let person = match require_person(&db, &req).await? {
+        Ok(person) => person,
+        Err(response) => return Ok(response),
+    };
+    let url = req.url()?;
+    let activity_id = url
+        .query_pairs()
+        .find_map(|(key, value)| (key == "activity_id").then(|| value.into_owned()));
+    match policy_store::get_policy_sets_for_api(&db, &person.id, activity_id.as_deref()).await {
+        Ok(sets) => Response::from_json(&sets),
+        Err(error) => policy_store_error(error),
+    }
+}
+
+pub async fn policies_replace(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let db = ctx.env.d1("DB")?;
+    let person = match require_person(&db, &req).await? {
+        Ok(person) => person,
+        Err(response) => return Ok(response),
+    };
+    let request: ReplacePolicySetRequest = match req.json().await {
+        Ok(request) => request,
+        Err(_) => return err_json("invalid JSON body", 400),
+    };
+    let scope = request.scope;
+    let activity_id = request.activity_id.clone();
+    match policy_store::replace_policy_set(&db, &person.id, request, now_ms()).await {
+        Ok(set) => {
+            if let Err(error) = crate::policy_runtime::policy_set_changed(
+                &ctx.env,
+                &db,
+                &person.id,
+                scope,
+                activity_id.as_deref(),
+            )
+            .await
+            {
+                console_error!("could not enqueue changed policy set: {error}");
+            }
+            Response::from_json(&set)
+        }
+        Err(error) => policy_store_error(error),
+    }
+}
+
 // ---- activity rooms ---------------------------------------------------------
 
 pub async fn room_get(req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -1059,11 +1274,42 @@ pub async fn room_get(req: Request, ctx: RouteContext<()>) -> Result<Response> {
         Some(r) => r,
         None => return err_json("activity not found", 404),
     };
-    let me_id = person_id(&req);
+    let me = optional_person(&db, &req).await?;
+    let me_id = me.as_ref().map(|p| p.id.clone());
     let now = now_ms();
 
-    if let Some(pid) = &me_id {
-        db::heartbeat(&db, pid, now, HEARTBEAT_COALESCE_MS).await?;
+    if crate::util::request_has_same_origin_context(&req)? {
+        if let Some(pid) = &me_id {
+            db::heartbeat(&db, pid, now, HEARTBEAT_COALESCE_MS).await?;
+            let presence = db
+            .prepare(
+                "INSERT INTO room_presence (activity_id, person_id, last_seen_at) \
+                 VALUES (?1, ?2, ?3) \
+                 ON CONFLICT(activity_id, person_id) DO UPDATE SET last_seen_at = excluded.last_seen_at \
+                 WHERE room_presence.last_seen_at <= excluded.last_seen_at - ?4",
+            )
+            .bind(&[
+                db::s(&row.id),
+                db::s(pid),
+                db::i(now),
+                db::i(HEARTBEAT_COALESCE_MS),
+            ])?
+            .run()
+            .await?;
+            if presence.meta()?.and_then(|meta| meta.changes).unwrap_or(0) != 0 {
+                if let Some(run_id) = row.current_run_id.as_deref() {
+                    policy_event(
+                        &ctx.env,
+                        &db,
+                        &row.id,
+                        run_id,
+                        "presence_changed",
+                        Some(pid),
+                    )
+                    .await?;
+                }
+            }
+        }
     }
     // Lazy reap: this is the primary "look at the room" read path, so keep
     // its participant list/counts free of despondent or event-over ghosts
@@ -1104,15 +1350,11 @@ pub async fn sync(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let db = ctx.env.d1("DB")?;
     let now = now_ms();
 
-    let me_id = person_id(&req);
+    let me = optional_person(&db, &req).await?;
+    let me_id = me.as_ref().map(|p| p.id.clone());
     if let Some(pid) = &me_id {
         db::heartbeat(&db, pid, now, HEARTBEAT_COALESCE_MS).await?;
     }
-    let me = match &me_id {
-        Some(pid) => db::get_person(&db, pid).await?,
-        None => None,
-    };
-
     let since = now - ACTIVITY_VISIBLE_WINDOW_MS;
     let activities = db::list_activities(&db, since, ACTIVITY_LIST_LIMIT).await?;
 

@@ -18,8 +18,7 @@ fn docs_up_to_date() {
 
     let existing = fs::read_to_string(&docs_path).expect("read docs/language.md");
     assert_eq!(
-        existing,
-        generated,
+        existing, generated,
         "docs/language.md is out of date. Run: REGEN_DOCS=1 cargo test -p policy docs_up_to_date",
     );
 }

@@ -14,6 +14,7 @@ cd "$ROOT_DIR"
 SMOKE_PORT="${SMOKE_PORT:-8787}"
 SKIP_INSTALL="${SKIP_INSTALL:-0}"
 SERVE_MODE=0
+WRANGLER="npx -y wrangler@latest"
 
 if [[ "${1:-}" == "--serve" ]]; then
   SERVE_MODE=1
@@ -39,6 +40,9 @@ fi
 step "Rust tests (workspace)"
 cargo test --workspace
 
+step "Rust WASM build (warnings denied)"
+RUSTFLAGS="-D warnings" cargo build --target wasm32-unknown-unknown
+
 if [[ "$SKIP_INSTALL" != "1" ]]; then
   step "Install web dependencies"
   npm ci --prefix web
@@ -48,22 +52,34 @@ step "Web lint"
 npm --prefix web run lint
 
 step "Web tests"
-npm --prefix web run test
+npm --prefix web run test -- --run
 
 step "Web build"
 npm --prefix web run build
 
-step "Apply local D1 migrations"
-npx wrangler d1 migrations apply fold-db --local
+step "Apply local D1 migrations from empty database"
+LOCAL_D1_DIR="$(mktemp -d -t fold-final-check-d1.XXXXXX)"
+cleanup_local_d1() {
+  rm -rf "$LOCAL_D1_DIR"
+}
+trap cleanup_local_d1 EXIT
+$WRANGLER d1 migrations apply fold-db --local --persist-to "$LOCAL_D1_DIR"
+
+step "Wrangler deploy dry run"
+$WRANGLER deploy --dry-run
+
+step "Whitespace check"
+git diff --check
 
 if [[ "$SERVE_MODE" == "1" ]]; then
   step "Starting wrangler dev (interactive)"
-  exec npx wrangler dev --port "$SMOKE_PORT"
+  exec $WRANGLER dev --port "$SMOKE_PORT"
 fi
 
 step "Wrangler dev smoke test"
 DEV_LOG="$(mktemp -t fold-wrangler-dev-log.XXXXXX)"
 cleanup() {
+  cleanup_local_d1
   if [[ -n "${DEV_PID:-}" ]] && kill -0 "$DEV_PID" >/dev/null 2>&1; then
     kill "$DEV_PID" >/dev/null 2>&1 || true
     wait "$DEV_PID" >/dev/null 2>&1 || true
@@ -71,7 +87,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-npx wrangler dev --port "$SMOKE_PORT" >"$DEV_LOG" 2>&1 &
+$WRANGLER dev --port "$SMOKE_PORT" >"$DEV_LOG" 2>&1 &
 DEV_PID=$!
 
 HEALTH_URL="http://127.0.0.1:${SMOKE_PORT}/api/health"

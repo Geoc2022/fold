@@ -1,0 +1,1 @@
+ALTER TABLE policy_actions ADD COLUMN causal_depth INTEGER NOT NULL DEFAULT 0;

@@ -1,7 +1,7 @@
 // Typed fetch client for the fold Worker API.
 //
-// Identity is a lightweight person_id (UUID) persisted in localStorage and sent
-// as the `X-Person-Id` header. There are no passwords; handles are not unique.
+// Identity is an anonymous, HttpOnly same-origin session cookie. There are no
+// passwords; handles are not unique.
 
 import type {
   ActivityView,
@@ -12,34 +12,17 @@ import type {
   SyncResponse,
   UpdateActivityInput,
 } from './types'
-import { readString, removeItem, writeString } from './storage'
-
-const PERSON_KEY = 'fold.person_id'
-
-function getPersonId(): string | null {
-  return readString(PERSON_KEY)
-}
-
-function setPersonId(id: string): void {
-  writeString(PERSON_KEY, id)
-}
-
-export function clearPersonId(): void {
-  removeItem(PERSON_KEY)
-}
-
 export async function ensureSession(): Promise<Person> {
-  const existing = getPersonId()
-  if (existing) {
-    try {
-      return await api.getSession()
-    } catch {
-      clearPersonId()
-    }
+  try {
+    return await api.getSession()
+  } catch (error) {
+    if (!(error instanceof ApiError) || error.status !== 401) throw error
   }
-  const person = await api.createSession('')
-  setPersonId(person.id)
-  return person
+  return api.createSession('')
+}
+
+export async function resetSession(): Promise<void> {
+  await api.deleteSession()
 }
 
 export class ApiError extends Error {
@@ -53,27 +36,53 @@ export class ApiError extends Error {
   }
 }
 
+export interface ServerPolicyRule {
+  id: string
+  position: number
+  source: string
+  source_hash: string
+  time_dependent: boolean
+  enabled: boolean
+  version: number
+  created_at: number
+  updated_at: number
+}
+
+export interface ServerPolicySet {
+  id: string
+  scope: 'home' | 'room'
+  activity_id: string | null
+  timezone: string
+  revision: number
+  created_at: number
+  updated_at: number
+  rules: ServerPolicyRule[]
+}
+
+export interface ReplacePolicySetInput {
+  scope: 'home' | 'room'
+  activity_id?: string
+  timezone: string
+  revision: number
+  rules: Array<{ id?: string; source: string; enabled: boolean }>
+}
+
 interface RequestOptions {
   method?: string
   body?: unknown
-  /** Attach the X-Person-Id header when available. Default: true. */
-  auth?: boolean
   signal?: AbortSignal
 }
 
 async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
-  const { method = 'GET', body, auth = true, signal } = opts
+  const { method = 'GET', body, signal } = opts
   const headers: Record<string, string> = {}
   if (body !== undefined) headers['Content-Type'] = 'application/json'
-  if (auth) {
-    const pid = getPersonId()
-    if (pid) headers['X-Person-Id'] = pid
-  }
 
   const res = await fetch(path, {
     method,
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    credentials: 'same-origin',
     signal,
   })
 
@@ -107,7 +116,6 @@ export const api = {
   createSession(handle: string, color?: string): Promise<Person> {
     return request<Person>('/api/session', {
       method: 'POST',
-      auth: false,
       body: { handle, color },
     })
   },
@@ -118,6 +126,19 @@ export const api = {
 
   updateSession(patch: { handle?: string; color?: string }): Promise<Person> {
     return request<Person>('/api/session', { method: 'PATCH', body: patch })
+  },
+
+  deleteSession(): Promise<{ ok: boolean }> {
+    return request<{ ok: boolean }>('/api/session', { method: 'DELETE' })
+  },
+
+  policySets(activityId?: string): Promise<{ sets: ServerPolicySet[] }> {
+    const query = activityId ? `?activity_id=${encodeURIComponent(activityId)}` : ''
+    return request<{ sets: ServerPolicySet[] }>(`/api/policies${query}`)
+  },
+
+  replacePolicySet(input: ReplacePolicySetInput): Promise<ServerPolicySet> {
+    return request<ServerPolicySet>('/api/policies', { method: 'PUT', body: input })
   },
 
   sync(signal?: AbortSignal): Promise<SyncResponse> {
@@ -203,7 +224,7 @@ export const api = {
   },
 
   pushPublicKey(): Promise<{ enabled: boolean; public_key: string | null }> {
-    return request('/api/push/public-key', { auth: false })
+    return request('/api/push/public-key')
   },
 
   pushSubscribe(subscription: PushSubscriptionJSON): Promise<unknown> {

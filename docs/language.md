@@ -45,7 +45,7 @@ For examples and ready-to-copy templates, see [`docs/policy-examples.md`](https:
 
 ```
 type State = Lurker | Interested | Committed(Dur) | Arrived(Dur)
-type Person = { name: Str, state: State }
+type Person = { name: Str, state: State, engaged_for: Dur }
 type Option<a> = None | Some(a)
 type Day = Mon | Tue | Wed | Thu | Fri | Sat | Sun
 type Grouping = Single | Parallel

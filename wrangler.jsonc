@@ -32,17 +32,33 @@
     }
   ],
 
-  // Housekeeping: expire past-due activities and prune old notifications.
-  // Every 15 minutes (well under the 5-cron free-plan limit).
+  // Durable policy reconciliation plus bounded housekeeping.
   "triggers": {
-    "crons": ["*/15 * * * *"]
+    "crons": ["* * * * *"]
+  },
+
+  "queues": {
+    "producers": [
+      { "binding": "JOBS", "queue": "fold-jobs" }
+    ],
+    "consumers": [
+      {
+        "queue": "fold-jobs",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 5,
+        "retry_delay": 15,
+        "max_concurrency": 1,
+        "dead_letter_queue": "fold-jobs-dlq"
+      }
+    ]
   },
 
   // Web Push setup. The public key + subject are safe to commit; the private
   // key is stored as a Worker secret (never in git):
   //   npx wrangler secret put VAPID_PRIVATE_KEY
   "vars": {
-    "VAPID_PUBLIC_KEY": "BI1vvIOYAapNIZFWyIIRo6BDC_jD9M82y-iaXYF3xa-LselmVLJG2AX9VSY-dIosrmEXH7veUWw5h5weQ-O-34k",
+    "VAPID_PUBLIC_KEY": "BPIVvkl88VyPElT4vyXkIQNZn8xkJUEf1mzVzvgAWNZhu7Xz6d7YwA786egU2p0N0VmoBi03ut1WDovbmBdpzvk",
     "VAPID_SUBJECT": "mailto:george_chemmala@brown.edu"
   },
 

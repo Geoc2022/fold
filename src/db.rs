@@ -16,7 +16,10 @@ use crate::models::{
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct PushSubscriptionRow {
+    pub id: String,
     pub endpoint: String,
+    pub p256dh: String,
+    pub auth: String,
 }
 
 // ---- bind value helpers ----------------------------------------------------
@@ -51,11 +54,44 @@ const RUN_COLS: &str = "id, activity_id, status, location, details, scheduled_fo
 
 // ---- people ----------------------------------------------------------------
 
-pub async fn get_person(db: &D1Database, id: &str) -> Result<Option<PersonRow>> {
-    db.prepare("SELECT id, handle, color, created_at, last_seen_at FROM people WHERE id = ?")
-        .bind(&[s(id)])?
-        .first::<PersonRow>(None)
-        .await
+pub async fn person_for_session(
+    db: &D1Database,
+    token_hash: &str,
+    now: i64,
+) -> Result<Option<PersonRow>> {
+    db.prepare(
+        "SELECT p.id, p.handle, p.color, p.created_at, p.last_seen_at \
+         FROM auth_sessions s JOIN people p ON p.id = s.person_id \
+         WHERE s.token_hash = ? AND s.expires_at > ?",
+    )
+    .bind(&[s(token_hash), i(now)])?
+    .first::<PersonRow>(None)
+    .await
+}
+
+pub async fn insert_auth_session(
+    db: &D1Database,
+    token_hash: &str,
+    person_id: &str,
+    now: i64,
+    expires_at: i64,
+) -> Result<()> {
+    db.prepare(
+        "INSERT INTO auth_sessions (token_hash, person_id, created_at, last_seen_at, expires_at) \
+         VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(&[s(token_hash), s(person_id), i(now), i(now), i(expires_at)])?
+    .run()
+    .await?;
+    Ok(())
+}
+
+pub async fn delete_auth_session(db: &D1Database, token_hash: &str) -> Result<()> {
+    db.prepare("DELETE FROM auth_sessions WHERE token_hash = ?")
+        .bind(&[s(token_hash)])?
+        .run()
+        .await?;
+    Ok(())
 }
 
 pub async fn touch_person(db: &D1Database, id: &str, now: i64) -> Result<()> {
@@ -74,13 +110,16 @@ pub async fn upsert_push_subscription(
     endpoint: &str,
     p256dh: &str,
     auth: &str,
+    expiration_time: Option<i64>,
     now: i64,
 ) -> Result<()> {
     let id = crate::util::new_id();
     db.prepare(
-        "INSERT INTO push_subscriptions (id, person_id, endpoint, p256dh, auth, created_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
-         ON CONFLICT(person_id, endpoint) DO UPDATE SET p256dh = ?4, auth = ?5",
+        "INSERT INTO push_subscriptions \
+           (id, person_id, endpoint, p256dh, auth, created_at, expiration_time, updated_at, disabled_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?6, NULL) \
+         ON CONFLICT(endpoint) DO UPDATE SET person_id = ?2, p256dh = ?4, auth = ?5, \
+           expiration_time = ?7, updated_at = ?6, disabled_at = NULL, failure_count = 0",
     )
     .bind(&[
         s(&id),
@@ -89,7 +128,16 @@ pub async fn upsert_push_subscription(
         s(p256dh),
         s(auth),
         i(now),
+        oi(expiration_time),
     ])?
+    .run()
+    .await?;
+    db.prepare(
+        "DELETE FROM push_subscriptions WHERE person_id = ? AND id NOT IN (\
+           SELECT id FROM push_subscriptions WHERE person_id = ? ORDER BY updated_at DESC LIMIT 5\
+         )",
+    )
+    .bind(&[s(person_id), s(person_id)])?
     .run()
     .await?;
     Ok(())
@@ -128,8 +176,8 @@ pub async fn push_subscriptions_for_people(
         .collect::<Vec<_>>()
         .join(",");
     let sql = format!(
-        "SELECT endpoint \
-         FROM push_subscriptions WHERE person_id IN ({placeholders}) LIMIT ?"
+        "SELECT id, endpoint, p256dh, auth \
+         FROM push_subscriptions WHERE disabled_at IS NULL AND person_id IN ({placeholders}) LIMIT ?"
     );
     let mut values = Vec::new();
     for id in person_ids {
@@ -423,10 +471,12 @@ pub async fn participation_for_person(
     run_id: &str,
     person_id: &str,
 ) -> Result<Option<ParticipationLite>> {
-    db.prepare("SELECT run_id, state, arrival_at FROM participations WHERE run_id = ? AND person_id = ?")
-        .bind(&[s(run_id), s(person_id)])?
-        .first::<ParticipationLite>(None)
-        .await
+    db.prepare(
+        "SELECT run_id, state, arrival_at FROM participations WHERE run_id = ? AND person_id = ?",
+    )
+    .bind(&[s(run_id), s(person_id)])?
+    .first::<ParticipationLite>(None)
+    .await
 }
 
 /// The other run (and its activity) a person is currently committed to, if
@@ -480,9 +530,13 @@ pub async fn upsert_participation(
 ) -> Result<()> {
     let id = crate::util::new_id();
     db.prepare(
-        "INSERT INTO participations (id, run_id, person_id, state, arrival_at, created_at, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6) \
-         ON CONFLICT(run_id, person_id) DO UPDATE SET state = ?4, arrival_at = ?5, updated_at = ?6",
+        "INSERT INTO participations \
+           (id, run_id, person_id, state, arrival_at, created_at, updated_at, state_changed_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?6) \
+         ON CONFLICT(run_id, person_id) DO UPDATE SET \
+           state_changed_at = CASE WHEN participations.state != excluded.state \
+                                   THEN excluded.updated_at ELSE participations.state_changed_at END, \
+           state = excluded.state, arrival_at = excluded.arrival_at, updated_at = excluded.updated_at",
     )
     .bind(&[
         s(&id),
@@ -592,7 +646,12 @@ pub async fn heartbeat(
 /// Returns true if anything was deleted, so the caller knows to
 /// recompute that run's denormalized counts. Cheap and small in scope --
 /// safe to call on every room read.
-pub async fn reap_run(db: &D1Database, run_id: &str, now: i64, despondent_cutoff: i64) -> Result<bool> {
+pub async fn reap_run(
+    db: &D1Database,
+    run_id: &str,
+    now: i64,
+    despondent_cutoff: i64,
+) -> Result<bool> {
     #[derive(serde::Deserialize)]
     struct Row {
         id: String,

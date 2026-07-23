@@ -1,16 +1,23 @@
-//! Minimal Web Push delivery.
-//!
-//! We send no payload. That means no Web Push content encryption is needed; the
-//! browser service worker receives a wake-up event and shows a generic
-//! notification, then the app syncs on open.
+//! VAPID-authenticated, RFC 8291 encrypted Web Push delivery.
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use p256::ecdsa::{signature::Signer, Signature, SigningKey};
 use worker::*;
 
 use crate::db::{self, PushSubscriptionRow};
+use crate::push_crypto::encrypt_payload;
 
 const PUSH_LIMIT: i64 = 100;
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PushPayload<'a> {
+    pub id: &'a str,
+    pub title: &'a str,
+    pub body: &'a str,
+    pub url: &'a str,
+    pub tag: &'a str,
+    pub created_at: i64,
+}
 
 #[derive(Debug, Clone)]
 struct VapidConfig {
@@ -40,38 +47,81 @@ pub fn public_key(env: &Env) -> Option<String> {
 }
 
 pub async fn send_to_people(env: &Env, db: &D1Database, person_ids: &[String]) -> Result<()> {
+    let id = crate::util::new_id();
+    let payload = PushPayload {
+        id: &id,
+        title: "fold activity update",
+        body: "Open fold to see what changed.",
+        url: "/",
+        tag: "fold-update",
+        created_at: crate::util::now_ms(),
+    };
+    send_payload_to_people(env, db, person_ids, &payload).await
+}
+
+pub async fn send_payload_to_people(
+    env: &Env,
+    db: &D1Database,
+    person_ids: &[String],
+    payload: &PushPayload<'_>,
+) -> Result<()> {
     let Some(cfg) = vapid_config(env) else {
         return Ok(());
     };
+    let plaintext = serde_json::to_vec(payload)
+        .map_err(|e| Error::RustError(format!("push payload encode failed: {e}")))?;
     let subs = db::push_subscriptions_for_people(db, person_ids, PUSH_LIMIT).await?;
     for sub in subs {
-        match send_one(&cfg, &sub).await {
-            Ok(should_delete) => {
-                if should_delete {
+        match send_one(&cfg, &sub, &plaintext).await {
+            Ok(status) => {
+                if matches!(status, 404 | 410) {
                     db::delete_push_endpoint(db, &sub.endpoint).await?;
                 }
             }
-            Err(e) => console_warn!("push delivery failed for {}: {e}", sub.endpoint),
+            Err(e) => console_warn!(
+                "push delivery failed for subscription {} ({}): {e}",
+                sub.id,
+                sub.endpoint
+            ),
         }
     }
     Ok(())
 }
 
-async fn send_one(cfg: &VapidConfig, sub: &PushSubscriptionRow) -> Result<bool> {
+pub async fn send_payload_to_subscription(
+    env: &Env,
+    sub: &PushSubscriptionRow,
+    payload: &PushPayload<'_>,
+) -> Result<Option<u16>> {
+    let Some(cfg) = vapid_config(env) else {
+        return Ok(None);
+    };
+    let plaintext = serde_json::to_vec(payload)
+        .map_err(|e| Error::RustError(format!("push payload encode failed: {e}")))?;
+    send_one(&cfg, sub, &plaintext).await.map(Some)
+}
+
+async fn send_one(cfg: &VapidConfig, sub: &PushSubscriptionRow, plaintext: &[u8]) -> Result<u16> {
     let jwt = vapid_jwt(cfg, &sub.endpoint)?;
+    let encrypted = encrypt_payload(&sub.p256dh, &sub.auth, plaintext)
+        .map_err(|e| Error::RustError(format!("push encryption failed: {e}")))?;
     let headers = Headers::new();
     headers.set("TTL", "60")?;
+    headers.set("Content-Encoding", encrypted.content_encoding)?;
+    headers.set("Content-Type", "application/octet-stream")?;
     headers.set(
         "Authorization",
         &format!("vapid t={jwt}, k={}", cfg.public_key),
     )?;
 
     let mut init = RequestInit::new();
-    init.with_method(Method::Post).with_headers(headers);
+    let body = worker::js_sys::Uint8Array::from(encrypted.body.as_slice());
+    init.with_method(Method::Post)
+        .with_headers(headers)
+        .with_body(Some(body.into()));
     let req = Request::new_with_init(&sub.endpoint, &init)?;
     let resp = Fetch::Request(req).send().await?;
-    // 404/410 indicate stale browser subscriptions and should be pruned.
-    Ok(resp.status_code() == 404 || resp.status_code() == 410)
+    Ok(resp.status_code())
 }
 
 fn vapid_jwt(cfg: &VapidConfig, endpoint: &str) -> Result<String> {

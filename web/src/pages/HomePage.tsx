@@ -1,7 +1,7 @@
 import { AnimatePresence } from 'framer-motion'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
-import { api, clearPersonId, ensureSession } from '../api'
+import { api, ApiError, ensureSession, resetSession } from '../api'
 import { useTheme } from '../theme'
 import { popularityOrder, tileSizes } from '../tileLayout'
 import { useSync } from '../useSync'
@@ -16,10 +16,9 @@ import { ProposeForm } from '../components/ProposeForm'
 import type { SortKey } from '../components/SortSelect'
 import type { HomeView } from '../components/ViewToggle'
 import { requestNotificationPermission } from '../notify-client'
-import { useActivityNotifications } from '../policy/notifier'
-import { DEFAULT_POLICY, effectiveRulesForCode, HOME_RULES_KEY, newPolicyRule, type PolicyRule } from '../policy/rules'
+import { enablePushNotifications } from '../push-client'
+import { loadHomeRules, type PolicyRule } from '../policy/rules'
 import { appendPolicySources, decodePolicySources, encodePolicySources } from '../policy/share'
-import { readJson, writeJson } from '../storage'
 
 const CODE_PATTERN = /^[a-zA-Z]{4}$/
 const SORT_KEYS: SortKey[] = ['newest', 'oldest', 'runs', 'served', 'commit', 'name']
@@ -32,6 +31,10 @@ const CATEGORY_PRESETS = [
 ]
 
 const TOAST_VISIBLE_MS = 4000
+
+function browserTimezone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+}
 
 function sortActivities(list: ActivityView[], key: SortKey): ActivityView[] {
   const arr = [...list]
@@ -80,13 +83,18 @@ export function HomePage() {
     }
   }, [sessionEpoch])
 
+  useEffect(() => {
+    if (me && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      void enablePushNotifications().catch(() => undefined)
+    }
+  }, [me])
+
   const { data, error, loading, refresh } = useSync(me !== null)
 
   useEffect(() => {
     if (me && data && data.me === null) {
-      clearPersonId()
       setMe(null)
-      setSessionEpoch((e) => e + 1)
+      void resetSession().finally(() => setSessionEpoch((e) => e + 1))
     }
   }, [me, data])
 
@@ -138,21 +146,91 @@ export function HomePage() {
   const [notifyStatus, setNotifyStatus] = useState('')
   const [toast, setToast] = useState<string | null>(null)
   const toastTimerRef = useRef<number | null>(null)
-  const [rules, setRules] = useState<PolicyRule[]>(() => readJson(HOME_RULES_KEY, [newPolicyRule(DEFAULT_POLICY)]))
+  const [rules, setRules] = useState<PolicyRule[]>(loadHomeRules)
+  const [policiesReady, setPoliciesReady] = useState(false)
+  const policyRevisionRef = useRef(0)
+  const policyServerIdsRef = useRef(new Map<string, string>())
+  const policySaveRef = useRef<Promise<void>>(Promise.resolve())
 
   useEffect(() => {
-    writeJson(HOME_RULES_KEY, rules)
-  }, [rules])
+    if (!me) return
+    let cancelled = false
+    async function loadPolicies() {
+      const response = await api.policySets()
+      let home = response.sets.find((set) => set.scope === 'home')
+      if (!home) {
+        const local = loadHomeRules()
+        home = await api.replacePolicySet({
+          scope: 'home',
+          timezone: browserTimezone(),
+          revision: 0,
+          rules: local.map(({ source, enabled }) => ({ source, enabled })),
+        })
+      }
+      if (cancelled) return
+      policyRevisionRef.current = home.revision
+      policyServerIdsRef.current = new Map(home.rules.map((rule) => [rule.id, rule.id]))
+      setRules(home.rules.map(({ id, source, enabled }) => ({ id, source, enabled })))
+      setPoliciesReady(true)
+    }
+    void loadPolicies().catch((error) => {
+      if (!cancelled) setNotifyStatus(error instanceof Error ? error.message : String(error))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [me])
+
+  const saveHomeRules = useCallback((nextRules: PolicyRule[]) => {
+    setRules(nextRules)
+    policySaveRef.current = policySaveRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        const save = () => api.replacePolicySet({
+          scope: 'home' as const,
+          timezone: browserTimezone(),
+          revision: policyRevisionRef.current,
+          rules: nextRules.map(({ id, source, enabled }) => ({
+            id: policyServerIdsRef.current.get(id),
+            source,
+            enabled,
+          })),
+        })
+        let saved
+        try {
+          saved = await save()
+        } catch (error) {
+          if (!(error instanceof ApiError) || error.status !== 409) throw error
+          const current = (await api.policySets()).sets.find((set) => set.scope === 'home')
+          policyRevisionRef.current = current?.revision ?? 0
+          current?.rules.forEach((rule, index) => {
+            const localId = nextRules[index]?.id
+            if (localId) policyServerIdsRef.current.set(localId, rule.id)
+          })
+          saved = await save()
+        }
+        policyRevisionRef.current = saved.revision
+        saved.rules.forEach((rule, index) => {
+          const localId = nextRules[index]?.id
+          if (localId) policyServerIdsRef.current.set(localId, rule.id)
+        })
+        setNotifyStatus('Policy saved')
+      })
+      .catch((error) => {
+        setNotifyStatus(error instanceof Error ? error.message : String(error))
+        throw error
+      })
+  }, [])
 
   // A shared policy link (?policy=<base64 of source[]>) appends those rules
   // and opens the panel, mirroring the ?code= propose-form flow above.
   useEffect(() => {
     const policyParam = searchParams.get('policy')
-    if (policyParam) {
+    if (policyParam && policiesReady) {
       try {
         const sources = decodePolicySources(policyParam)
         if (sources.length > 0) {
-          setRules((current) => appendPolicySources(current, sources))
+          saveHomeRules(appendPolicySources(rules, sources))
           setShowPolicyPanel(true)
         }
       } catch {
@@ -167,7 +245,7 @@ export function HomePage() {
       )
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams])
+  }, [policiesReady, rules, saveHomeRules, searchParams, setSearchParams])
 
   const showToast = useCallback((message: string) => {
     setToast(message)
@@ -201,20 +279,6 @@ export function HomePage() {
 
   const activities = data?.activities ?? EMPTY_ACTIVITIES
   const now = data?.server_time ?? Date.now()
-  const joinedActivities = useMemo(() => activities.filter((a) => a.my_state != null), [activities])
-  const rulesRevision = useMemo(() => JSON.stringify(rules), [rules])
-  const resolveRules = useCallback((activity: ActivityView) => effectiveRulesForCode(activity.code, rules), [rules])
-  const handlePolicyNotify = useCallback((_activity: ActivityView, message: string) => showToast(message), [showToast])
-
-  useActivityNotifications({
-    activities: joinedActivities,
-    now,
-    enabled: data != null,
-    revision: `${rulesRevision}|${joinedActivities.length}|${now}`,
-    resolveRules,
-    onNotify: handlePolicyNotify,
-  })
-
   const categories = useMemo(() => {
     const set = new Set<string>()
     for (const a of activities) set.add(a.category)
@@ -441,10 +505,10 @@ export function HomePage() {
         </div>
       )}
 
-      {showPolicyPanel && (
+      {showPolicyPanel && policiesReady && (
         <PolicyPanel
           rules={rules}
-          onRulesChange={setRules}
+          onRulesChange={saveHomeRules}
           onClose={() => setShowPolicyPanel(false)}
           hint="Rules run against activities you've joined."
           notifyStatus={notifyStatus}

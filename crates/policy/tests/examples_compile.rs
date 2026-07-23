@@ -29,6 +29,7 @@ struct ScenarioEnv {
     arrived_count: Option<usize>,
     lurkers_count: Option<usize>,
     committed_eta_secs: Option<i64>,
+    committed_waited_secs: Option<i64>,
     arrived_waited_secs: Option<i64>,
     min_people: Option<f64>,
     max_people: Option<f64>,
@@ -231,7 +232,7 @@ fn person_value(state: &str, eta_secs: i64, waited_secs: i64) -> Value {
         "arrived" => Value::Variant {
             type_name: "State".to_string(),
             name: "Arrived".to_string(),
-            values: vec![Value::Dur(waited_secs.max(0))],
+            values: vec![Value::Dur(0)],
         },
         "interested" => Value::Variant {
             type_name: "State".to_string(),
@@ -254,6 +255,7 @@ fn person_value(state: &str, eta_secs: i64, waited_secs: i64) -> Value {
         fields: BTreeMap::from([
             ("name".to_string(), Value::Str(String::new())),
             ("state".to_string(), variant),
+            ("engaged_for".to_string(), Value::Dur(waited_secs.max(0))),
         ]),
     }
 }
@@ -305,9 +307,11 @@ fn env_from_scenario(env: &ScenarioEnv) -> EvalEnv {
     let arrived_count = env.arrived_count.unwrap_or(0);
     let lurkers_count = env.lurkers_count.unwrap_or(0);
     let committed_eta_secs = env.committed_eta_secs.unwrap_or(0);
+    let committed_waited_secs = env.committed_waited_secs.unwrap_or(0);
     let arrived_waited_secs = env.arrived_waited_secs.unwrap_or(0);
 
-    let committed = vec![person_value("committed", committed_eta_secs, 0); committed_count];
+    let committed =
+        vec![person_value("committed", committed_eta_secs, committed_waited_secs); committed_count];
     let interested = vec![person_value("interested", 0, 0); interested_count];
     let arrived = vec![person_value("arrived", 0, arrived_waited_secs); arrived_count];
     let lurkers = vec![person_value("lurker", 0, 0); lurkers_count];
@@ -329,7 +333,10 @@ fn env_from_scenario(env: &ScenarioEnv) -> EvalEnv {
             Value::Record {
                 type_name: "Time".to_string(),
                 fields: BTreeMap::from([
-                    ("hour".to_string(), Value::Num(env.now_hour.unwrap_or(16) as f64)),
+                    (
+                        "hour".to_string(),
+                        Value::Num(env.now_hour.unwrap_or(16) as f64),
+                    ),
                     (
                         "minute".to_string(),
                         Value::Num(env.now_minute.unwrap_or(30) as f64),
@@ -337,12 +344,18 @@ fn env_from_scenario(env: &ScenarioEnv) -> EvalEnv {
                 ]),
             },
         ),
-        ("min_people".to_string(), Value::Num(env.min_people.unwrap_or(3.0))),
+        (
+            "min_people".to_string(),
+            Value::Num(env.min_people.unwrap_or(3.0)),
+        ),
         (
             "max_people".to_string(),
             option_num(Some(env.max_people.unwrap_or(8.0))),
         ),
-        ("group_size".to_string(), Value::Num(env.group_size.unwrap_or(4.0))),
+        (
+            "group_size".to_string(),
+            Value::Num(env.group_size.unwrap_or(4.0)),
+        ),
         (
             "grouping_mode".to_string(),
             Value::Variant {
@@ -353,7 +366,10 @@ fn env_from_scenario(env: &ScenarioEnv) -> EvalEnv {
         ),
         ("duration".to_string(), Value::Dur(60 * 60)),
         ("max_commit".to_string(), Value::Dur(60 * 60)),
-        ("groups_ready".to_string(), Value::Num(env.groups_ready.unwrap_or(0.0))),
+        (
+            "groups_ready".to_string(),
+            Value::Num(env.groups_ready.unwrap_or(0.0)),
+        ),
         (
             "waiting_count".to_string(),
             Value::Num(env.waiting_count.unwrap_or(0.0)),
@@ -362,7 +378,10 @@ fn env_from_scenario(env: &ScenarioEnv) -> EvalEnv {
             "spots_to_next".to_string(),
             Value::Num(env.spots_to_next.unwrap_or(0.0)),
         ),
-        ("is_ready".to_string(), Value::Bool(env.is_ready.unwrap_or(false))),
+        (
+            "is_ready".to_string(),
+            Value::Bool(env.is_ready.unwrap_or(false)),
+        ),
         ("ready_in".to_string(), option_dur(env.ready_in_secs)),
         (
             "title".to_string(),
@@ -441,10 +460,14 @@ fn expected_timeline(events: &[ExpectedEvent]) -> Vec<TimelineEvent> {
 }
 
 fn assert_examples_file(docs_path: &PathBuf) {
-    let markdown = fs::read_to_string(docs_path)
-        .unwrap_or_else(|_| panic!("read {}", docs_path.display()));
+    let markdown =
+        fs::read_to_string(docs_path).unwrap_or_else(|_| panic!("read {}", docs_path.display()));
     let examples = parse_examples(&markdown);
-    assert!(!examples.is_empty(), "no policy examples found in {}", docs_path.display());
+    assert!(
+        !examples.is_empty(),
+        "no policy examples found in {}",
+        docs_path.display()
+    );
 
     for example in &examples {
         let compiled = policy::compile_policy_with_diagnostics(&example.source);
@@ -483,7 +506,8 @@ fn assert_examples_file(docs_path: &PathBuf) {
             let expected = expected_timeline(&scenario.events);
 
             assert_eq!(
-                actual, expected,
+                actual,
+                expected,
                 "scenario '{}' under '{}' in {} at line {} produced unexpected timeline",
                 scenario.name,
                 example.heading,

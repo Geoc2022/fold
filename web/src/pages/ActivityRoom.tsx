@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { api, ensureSession } from '../api'
+import { api, ApiError, ensureSession } from '../api'
 import { ActivityInfo } from '../components/ActivityInfo'
 import { useTheme } from '../theme'
 import { useRoom } from '../useRoom'
-import type { ActivityView, Person } from '../types'
+import type { Person } from '../types'
 import { CreateRunForm } from '../components/CreateRunForm'
 import { RoomCanvas, type RoomAlertInput } from '../components/RoomCanvas'
 import { RoomPanel } from '../components/RoomPanel'
@@ -12,17 +12,20 @@ import { PolicyPanel } from '../components/PolicyPanel'
 import { DEFAULT_VISUAL_CONFIG, type VisualConfig } from '../nodeVisual'
 import { readJson, writeJson } from '../storage'
 import { requestNotificationPermission } from '../notify-client'
-import { useActivityNotifications } from '../policy/notifier'
-import { loadHomeRules, loadRoomRules, roomRulesKey, type PolicyRule } from '../policy/rules'
+import { enablePushNotifications } from '../push-client'
+import { loadHomeRules, loadRoomRules, type PolicyRule } from '../policy/rules'
 import { appendPolicySources, decodePolicySources, encodePolicySources } from '../policy/share'
 import { buildActivityShareText } from '../activityShare'
-import { policyCommitEta } from '../policy/commit'
 import { activityPresenceBadgeModel } from '../activityPresence'
 import { setDefaultFavicon, setPresenceFavicon } from '../favicon'
 
 const VISUAL_KEY = 'fold.room_visual'
 const ALERT_COOLDOWN_MS = 1000
 const ALERT_VISIBLE_MS = 3600
+
+function browserTimezone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+}
 
 interface RoomAlert {
   message: string
@@ -52,8 +55,12 @@ export function ActivityRoom() {
   const [handleInput, setHandleInput] = useState('')
   const [visual, setVisual] = useState<VisualConfig>(() => readJson(VISUAL_KEY, DEFAULT_VISUAL_CONFIG))
   const [notifyStatus, setNotifyStatus] = useState('')
+  const [homeRules, setHomeRules] = useState<PolicyRule[]>(loadHomeRules)
   const [roomRules, setRoomRules] = useState<PolicyRule[] | null>(() => (code ? loadRoomRules(code) : null))
-  const [ruleEpoch, setRuleEpoch] = useState(0)
+  const [policiesReady, setPoliciesReady] = useState(false)
+  const roomPolicyRevisionsRef = useRef(new Map<string, number>())
+  const roomPolicyServerIdsRef = useRef(new Map<string, Map<string, string>>())
+  const roomPolicySaveRef = useRef<Promise<void>>(Promise.resolve())
   const alertTimerRef = useRef<number | null>(null)
   const alertLastShownRef = useRef(new Map<string, number>())
   const alertQueueRef = useRef<RoomAlert[]>([])
@@ -75,12 +82,19 @@ export function ActivityRoom() {
   }, [])
 
   useEffect(() => {
+    if (me && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      void enablePushNotifications().catch(() => undefined)
+    }
+  }, [me])
+
+  useEffect(() => {
     writeJson(VISUAL_KEY, visual)
   }, [visual])
 
   useEffect(() => {
     if (!code) return
     setRoomRules(loadRoomRules(code))
+    setPoliciesReady(false)
   }, [code])
 
   useEffect(() => {
@@ -170,27 +184,108 @@ export function ActivityRoom() {
     }
   }
 
-  const policyRules = roomRules ?? loadHomeRules()
-  const rulesRevision = useMemo(() => JSON.stringify(policyRules), [policyRules])
-  const serverClockOffset = useMemo(
-    () => (data?.server_time ?? Date.now()) - Date.now(),
-    [data?.server_time],
-  )
+  const policyRules = roomRules ?? homeRules
+  const policyActivityId = data?.activity.id
+
+  useEffect(() => {
+    if (!code || !me || !policyActivityId) return
+    const activityId = policyActivityId
+    const roomCode = code
+    let cancelled = false
+    async function loadPolicies() {
+      const response = await api.policySets(activityId)
+      let home = response.sets.find((set) => set.scope === 'home')
+      if (!home) {
+        const localHome = loadHomeRules()
+        home = await api.replacePolicySet({
+          scope: 'home',
+          timezone: browserTimezone(),
+          revision: 0,
+          rules: localHome.map(({ source, enabled }) => ({ source, enabled })),
+        })
+      }
+      let room = response.sets.find((set) => set.scope === 'room')
+      const localRoom = loadRoomRules(roomCode)
+      if (!room && localRoom) {
+        room = await api.replacePolicySet({
+          scope: 'room',
+          activity_id: activityId,
+          timezone: browserTimezone(),
+          revision: 0,
+          rules: localRoom.map(({ source, enabled }) => ({ source, enabled })),
+        })
+      }
+      if (cancelled) return
+      setHomeRules(home.rules.map(({ id, source, enabled }) => ({ id, source, enabled })))
+      setRoomRules(room ? room.rules.map(({ id, source, enabled }) => ({ id, source, enabled })) : null)
+      roomPolicyRevisionsRef.current.set(activityId, room?.revision ?? 0)
+      roomPolicyServerIdsRef.current.set(
+        activityId,
+        new Map((room?.rules ?? []).map((rule) => [rule.id, rule.id])),
+      )
+      setPoliciesReady(true)
+    }
+    void loadPolicies().catch((error) => {
+      if (!cancelled) setNotifyStatus(error instanceof Error ? error.message : String(error))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [code, me, policyActivityId])
 
   const saveRoomRules = useCallback((nextRules: PolicyRule[]) => {
-    if (!code) return
+    if (!policyActivityId) return
+    const activityId = policyActivityId
     setRoomRules(nextRules)
-    writeJson(roomRulesKey(code), nextRules)
-    setRuleEpoch((n) => n + 1)
-  }, [code])
+    roomPolicySaveRef.current = roomPolicySaveRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        const serverIds = roomPolicyServerIdsRef.current.get(activityId) ?? new Map<string, string>()
+        const save = () => api.replacePolicySet({
+          scope: 'room' as const,
+          activity_id: activityId,
+          timezone: browserTimezone(),
+          revision: roomPolicyRevisionsRef.current.get(activityId) ?? 0,
+          rules: nextRules.map(({ id, source, enabled }) => ({
+            id: serverIds.get(id),
+            source,
+            enabled,
+          })),
+        })
+        let saved
+        try {
+          saved = await save()
+        } catch (error) {
+          if (!(error instanceof ApiError) || error.status !== 409) throw error
+          const current = (await api.policySets(activityId)).sets.find((set) => set.scope === 'room')
+          roomPolicyRevisionsRef.current.set(activityId, current?.revision ?? 0)
+          current?.rules.forEach((rule, index) => {
+            const localId = nextRules[index]?.id
+            if (localId) serverIds.set(localId, rule.id)
+          })
+          saved = await save()
+        }
+        roomPolicyRevisionsRef.current.set(activityId, saved.revision)
+        saved.rules.forEach((rule, index) => {
+          const localId = nextRules[index]?.id
+          if (localId) serverIds.set(localId, rule.id)
+        })
+        roomPolicyServerIdsRef.current.set(activityId, serverIds)
+        setNotifyStatus('Policy saved')
+      })
+      .catch((error) => {
+        setNotifyStatus(error instanceof Error ? error.message : String(error))
+        throw error
+      })
+  }, [policyActivityId])
 
   useEffect(() => {
     const policyParam = searchParams.get('policy')
-    if (!policyParam || !code) return
+    if (!policyParam || !code || !policiesReady) return
     try {
       const sources = decodePolicySources(policyParam)
       if (sources.length > 0) {
-        saveRoomRules(appendPolicySources(loadRoomRules(code) ?? loadHomeRules(), sources))
+        saveRoomRules(appendPolicySources(policyRules, sources))
         setShowPolicyPanel(true)
       }
     } catch {
@@ -200,34 +295,7 @@ export function ActivityRoom() {
       current.delete('policy')
       return current
     }, { replace: true })
-  }, [code, saveRoomRules, searchParams, setSearchParams])
-
-  const resolveRoomRules = useCallback((_activity: ActivityView) => policyRules, [policyRules])
-  const onPolicyNotify = (_activity: ActivityView, message: string) => {
-    showAlert(message)
-  }
-  const onPolicyCommit = async (policyActivity: ActivityView, etaDeltaSeconds: number | null) => {
-    const run = policyActivity.current_run
-    if (!run) return
-    const eta = policyCommitEta(policyActivity, etaDeltaSeconds, Date.now() + serverClockOffset)
-    try {
-      const updated = await api.commit(run.id, eta)
-      refresh()
-      return updated
-    } catch (err) {
-      showAlert(err instanceof Error ? err.message : String(err))
-    }
-  }
-
-  useActivityNotifications({
-    activities: data ? [data.activity] : [],
-    now: data?.server_time ?? Date.now(),
-    enabled: code != null && !notFound && !loading && me != null && data != null,
-    revision: `${code ?? 'none'}|${data?.activity.current_run?.id ?? 'idle'}|${ruleEpoch}|${rulesRevision}`,
-    resolveRules: resolveRoomRules,
-    onNotify: onPolicyNotify,
-    onCommit: onPolicyCommit,
-  })
+  }, [code, policiesReady, policyRules, saveRoomRules, searchParams, setSearchParams])
 
   const presenceBadge = useMemo(
     () => (data ? activityPresenceBadgeModel(data.activity, data.server_time, data.participants) : null),
@@ -389,7 +457,7 @@ export function ActivityRoom() {
         onOpenPolicy={() => setShowPolicyPanel(true)}
         onShare={shareActivity}
       />
-      {showPolicyPanel && (
+      {showPolicyPanel && policiesReady && (
         <PolicyPanel
           rules={policyRules}
           onRulesChange={saveRoomRules}

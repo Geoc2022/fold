@@ -156,7 +156,7 @@ late => notify "Someone has waited over 20 minutes"
     "name": "late committed participant triggers notify",
     "env": {
       "committed_count": 1,
-      "committed_eta_secs": 1500
+      "committed_waited_secs": 1500
     },
     "events": [
       { "after_secs": 0, "notify": "Someone has waited over 20 minutes" }
@@ -166,7 +166,7 @@ late => notify "Someone has waited over 20 minutes"
     "name": "committed wait under threshold",
     "env": {
       "committed_count": 2,
-      "committed_eta_secs": 600
+      "committed_waited_secs": 600
     },
     "events": []
   }

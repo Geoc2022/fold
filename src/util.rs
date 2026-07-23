@@ -1,7 +1,13 @@
 //! Small runtime helpers (Worker-only).
 
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use worker::*;
+
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+
+pub const SESSION_COOKIE: &str = "fold_session";
+pub const SESSION_TTL_MS: i64 = 365 * 24 * 60 * 60 * 1000;
 
 /// Current time as unix epoch milliseconds.
 pub fn now_ms() -> i64 {
@@ -41,13 +47,68 @@ pub fn random_color() -> String {
     PALETTE[(b[0] as usize) % PALETTE.len()].to_string()
 }
 
-/// Extract the caller's person id from the `X-Person-Id` header, if present.
-pub fn person_id(req: &Request) -> Option<String> {
-    req.headers()
-        .get("X-Person-Id")
-        .ok()
-        .flatten()
-        .filter(|s| !s.is_empty())
+pub fn new_session_token() -> (String, String) {
+    let mut bytes = [0u8; 32];
+    getrandom::getrandom(&mut bytes).expect("rng unavailable");
+    let token = URL_SAFE_NO_PAD.encode(bytes);
+    let hash = session_token_hash(&token);
+    (token, hash)
+}
+
+pub fn session_token_hash(token: &str) -> String {
+    URL_SAFE_NO_PAD.encode(Sha256::digest(token.as_bytes()))
+}
+
+pub fn session_token(req: &Request) -> Option<String> {
+    let cookies = req.headers().get("Cookie").ok().flatten()?;
+    cookies.split(';').find_map(|part| {
+        let (name, value) = part.trim().split_once('=')?;
+        (name == SESSION_COOKIE && !value.is_empty()).then(|| value.to_string())
+    })
+}
+
+pub fn session_cookie(req: &Request, token: &str) -> Result<String> {
+    let secure = if req.url()?.scheme() == "https" {
+        "; Secure"
+    } else {
+        ""
+    };
+    Ok(format!(
+        "{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}{}",
+        SESSION_TTL_MS / 1000,
+        secure
+    ))
+}
+
+pub fn expired_session_cookie(req: &Request) -> Result<String> {
+    let secure = if req.url()?.scheme() == "https" {
+        "; Secure"
+    } else {
+        ""
+    };
+    Ok(format!(
+        "{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{secure}"
+    ))
+}
+
+pub fn request_is_same_origin(req: &Request) -> Result<bool> {
+    if matches!(req.method(), Method::Get | Method::Head | Method::Options) {
+        return Ok(true);
+    }
+    let Some(origin) = req.headers().get("Origin")? else {
+        return Ok(false);
+    };
+    Ok(origin == req.url()?.origin().ascii_serialization())
+}
+
+/// Whether a nominally safe request may perform incidental writes such as a
+/// presence heartbeat. Cross-site top-level GETs can carry SameSite=Lax
+/// cookies, so they must remain read-only.
+pub fn request_has_same_origin_context(req: &Request) -> Result<bool> {
+    if let Some(origin) = req.headers().get("Origin")? {
+        return Ok(origin == req.url()?.origin().ascii_serialization());
+    }
+    Ok(req.headers().get("Sec-Fetch-Site")?.as_deref() == Some("same-origin"))
 }
 
 /// JSON response with an explicit status code.

@@ -79,6 +79,7 @@ pub fn builtin_type_decls() -> Vec<TypeDecl> {
             body: TypeBody::Record(vec![
                 ("name".to_string(), Ty::str()),
                 ("state".to_string(), Ty::con("State")),
+                ("engaged_for".to_string(), Ty::dur()),
             ]),
         },
         TypeDecl {

@@ -112,10 +112,7 @@ eta p = match p.state with
   | _ -> None
 
 (** How long the person has been engaged. *)
-waited p = match p.state with
-  | Committed(d) -> d
-  | Arrived(d) -> d
-  | _ -> 0s
+waited p = p.engaged_for
 
 (** True on Saturday or Sunday. *)
 is_weekend d = match d with

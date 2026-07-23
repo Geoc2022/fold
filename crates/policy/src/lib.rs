@@ -375,6 +375,7 @@ mod smoke {
                 },
             };
             fields.insert("state".to_string(), st);
+            fields.insert("engaged_for".to_string(), Value::Dur(secs));
             Value::Record {
                 type_name: "Person".to_string(),
                 fields,
@@ -532,7 +533,8 @@ mod smoke {
         // `env` encoded exactly like MathPage's buildPolicyEnv.
         let env_json = r#"{"vars":{"self":{"kind":"Record","value":{"type":"Person","fields":{
             "name":{"kind":"Str","value":"A"},
-            "state":{"kind":"Variant","value":{"type":"State","name":"Lurker","values":[]}}}}}}}"#;
+            "state":{"kind":"Variant","value":{"type":"State","name":"Lurker","values":[]}},
+            "engaged_for":{"kind":"Dur","value":0}}}}}}"#;
         let env: EvalEnv = serde_json::from_str(env_json).unwrap();
 
         let res = evaluate_policy_safe(&policy, &env);

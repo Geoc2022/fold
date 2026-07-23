@@ -174,6 +174,8 @@ pub struct MarkRead {
 #[derive(Debug, Deserialize)]
 pub struct PushSubscribe {
     pub endpoint: String,
+    #[serde(default, rename = "expirationTime")]
+    pub expiration_time: Option<i64>,
     pub keys: PushKeys,
 }
 

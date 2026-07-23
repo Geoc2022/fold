@@ -65,5 +65,5 @@ function personPlaceholder(state: 'lurker' | 'interested' | 'committed', etaSecs
       : state === 'interested'
         ? variant('State', 'Interested', [])
         : variant('State', 'Lurker', [])
-  return record('Person', { name: str(''), state: st })
+  return record('Person', { name: str(''), state: st, engaged_for: dur(0) })
 }
