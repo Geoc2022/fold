@@ -1965,25 +1965,52 @@ a.panel-button:visited {
   margin-top: 0.6rem;
 }
 
-.activity-state-dot {
+.presence-badge {
   position: absolute;
-  top: 0.45rem;
-  right: 0.45rem;
-  width: 0.62rem;
-  height: 0.62rem;
+  top: 0.35rem;
+  right: 0.35rem;
+  width: 1.2rem;
+  height: 1.2rem;
+}
+
+.presence-node {
+  position: absolute;
+  width: 0.82rem;
+  height: 0.82rem;
   border-radius: 999px;
   border: 2px solid #fff;
 }
-.activity-state-dot.state-lurker {
+
+.presence-node.role-user {
+  z-index: 2;
+}
+
+.presence-node.role-other {
+  z-index: 1;
+}
+
+.presence-node.pos-center {
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.presence-node.pos-offset {
+  left: 66%;
+  top: 66%;
+  transform: translate(-50%, -50%);
+}
+
+.presence-node.state-lurker {
   background: #969696;
 }
-.activity-state-dot.state-interested {
+.presence-node.state-interested {
   background: #00a651;
 }
-.activity-state-dot.state-committed {
+.presence-node.state-committed {
   background: #fa841e;
 }
-.activity-state-dot.state-arrived {
+.presence-node.state-arrived {
   background: #f0282d;
 }
 

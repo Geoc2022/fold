@@ -3,7 +3,7 @@ import type { ReactNode } from 'react'
 import type { ActivityView } from '../types'
 import { ActivityBadge } from './ActivityBadge'
 import { ActivityInfo } from './ActivityInfo'
-import { myActivityPresenceState } from '../activityPresence'
+import { activityPresenceBadgeModel } from '../activityPresence'
 
 interface Props {
   activity: ActivityView
@@ -21,7 +21,7 @@ interface Props {
 export function ActivityTile({ activity: a, now, size, expanded, onToggle, cta }: Props) {
   const colSpan = expanded ? 4 : size
   const rowSpan = expanded ? 3 : size
-  const presenceState = myActivityPresenceState(a, now)
+  const presenceBadge = activityPresenceBadgeModel(a, now)
 
   return (
     <motion.article
@@ -40,7 +40,7 @@ export function ActivityTile({ activity: a, now, size, expanded, onToggle, cta }
           size={size}
           onClick={onToggle}
           ariaExpanded={expanded}
-          presenceState={presenceState}
+          presenceBadge={presenceBadge}
         />
       )}
       {expanded && (

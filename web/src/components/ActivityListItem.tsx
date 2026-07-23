@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom'
 import type { ActivityView } from '../types'
 import { EmojiGlyph } from './EmojiGlyph'
 import { ActivityStats } from './ActivityStats'
-import { myActivityPresenceState } from '../activityPresence'
+import { activityPresenceBadgeModel } from '../activityPresence'
+import { PresenceBadge } from './PresenceBadge'
 
 interface Props {
   activity: ActivityView
@@ -14,7 +15,7 @@ interface Props {
 
 /** List-view row: SE's lv-item, with our stats swapped in for theirs. */
 export function ActivityListItem({ activity: a, now, canEdit = false, onEdit }: Props) {
-  const presenceState = myActivityPresenceState(a, now)
+  const presenceBadge = activityPresenceBadgeModel(a, now)
   return (
     <motion.div
       layout
@@ -24,7 +25,7 @@ export function ActivityListItem({ activity: a, now, canEdit = false, onEdit }: 
       transition={{ type: 'spring', stiffness: 320, damping: 32 }}
       className="list-item"
     >
-      {presenceState && <span className={`activity-state-dot state-${presenceState}`} aria-hidden="true" />}
+      {presenceBadge && <PresenceBadge model={presenceBadge} />}
       <EmojiGlyph emoji={a.emoji} className="list-emoji" />
       <div className="list-info">
         <h3>{a.title}</h3>

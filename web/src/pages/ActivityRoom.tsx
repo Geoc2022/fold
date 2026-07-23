@@ -17,6 +17,8 @@ import { loadHomeRules, loadRoomRules, roomRulesKey, type PolicyRule } from '../
 import { appendPolicySources, decodePolicySources, encodePolicySources } from '../policy/share'
 import { buildActivityShareText } from '../activityShare'
 import { policyCommitEta } from '../policy/commit'
+import { activityPresenceBadgeModel } from '../activityPresence'
+import { setDefaultFavicon, setPresenceFavicon } from '../favicon'
 
 const VISUAL_KEY = 'fold.room_visual'
 const ALERT_COOLDOWN_MS = 1000
@@ -227,6 +229,20 @@ export function ActivityRoom() {
     onCommit: onPolicyCommit,
   })
 
+  const presenceBadge = useMemo(
+    () => (data ? activityPresenceBadgeModel(data.activity, data.server_time, data.participants) : null),
+    [data],
+  )
+
+  useEffect(() => {
+    if (code == null || notFound) {
+      setDefaultFavicon()
+      return
+    }
+    setPresenceFavicon(presenceBadge)
+    return () => setDefaultFavicon()
+  }, [code, notFound, presenceBadge])
+
   if (code === null) {
     return <RoomMessage title="Invalid link" message="Activity links are letters only." />
   }
@@ -391,6 +407,7 @@ export function ActivityRoom() {
               <ActivityInfo
                 activity={activity}
                 now={data.server_time}
+                participants={participants}
                 cta={<button className="activity-launch ghost" onClick={() => setShowInfo(false)}>Cancel</button>}
               />
             </section>

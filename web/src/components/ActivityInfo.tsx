@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { relativeTime } from '../format'
-import type { ActivityView } from '../types'
+import type { ActivityView, ParticipantView } from '../types'
+import { activityPresenceBadgeModel } from '../activityPresence'
 import { ActivityBadge } from './ActivityBadge'
 import { ActivityStats } from './ActivityStats'
 import { GroupMeter } from './GroupMeter'
@@ -10,10 +11,12 @@ interface Props {
   activity: ActivityView
   now: number
   cta?: ReactNode
+  participants?: ParticipantView[]
 }
 
-export function ActivityInfo({ activity: a, now, cta }: Props) {
+export function ActivityInfo({ activity: a, now, cta, participants }: Props) {
   const run = a.current_run
+  const presenceBadge = activityPresenceBadgeModel(a, now, participants)
   const action = cta !== undefined
     ? cta
     : (
@@ -25,7 +28,7 @@ export function ActivityInfo({ activity: a, now, cta }: Props) {
     <div className="activity-info">
       <div className="info-grid">
         <div className="info-left">
-          <ActivityBadge activity={a} variant="square" />
+          <ActivityBadge activity={a} variant="square" presenceBadge={presenceBadge} />
           <p className="info-location">{run?.location ?? 'Location TBD'}</p>
           {a.description && <p className="info-desc">{a.description}</p>}
         </div>
