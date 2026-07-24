@@ -5,6 +5,15 @@ const FAST_MS = 6_000
 const SLOW_MS = 30_000
 const BACKOFF = 1.5
 const RATE_LIMIT_MS = 60_000
+// Spread scheduled polls by ±15% so a crowd that loaded the page together
+// (e.g. everyone opening a room when a run goes ready) doesn't hammer the
+// Worker in lockstep every interval. Smooths server load without making any
+// individual client noticeably less responsive.
+const JITTER = 0.15
+
+function withJitter(ms: number): number {
+  return Math.round(ms * (1 + (Math.random() * 2 - 1) * JITTER))
+}
 
 interface PollState<T> {
   data: T | null
@@ -35,7 +44,7 @@ export function usePolling<T>({ enabled, load, signature, onNotFound, onSuccess 
   const schedule = useCallback(() => {
     clearTimer()
     if (!enabled || document.hidden) return
-    timerRef.current = setTimeout(() => void poll(), intervalRef.current)
+    timerRef.current = setTimeout(() => void poll(), withJitter(intervalRef.current))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled])
 

@@ -75,11 +75,33 @@ fn policy_store_error(error: PolicyStoreError) -> Result<Response> {
     json_status(&body, error.status_code())
 }
 
-async fn push_people(env: &Env, db: &D1Database, people: Vec<String>) -> Result<()> {
-    if !people.is_empty() {
-        push::send_to_people(env, db, &people).await?;
+/// Deliver a "something changed" Web Push to `people` off the response
+/// critical path.
+///
+/// Push delivery makes one outbound HTTPS request per subscriber to a
+/// third-party push service (FCM/Mozilla/Apple), each carrying full TLS RTT
+/// plus VAPID signing. Awaiting it inside a mutation handler made every
+/// interest/commit/close click pay that cost before the user got a response
+/// -- the main source of the reported latency. The user-visible notification
+/// rows are already persisted in D1 before this call, so the poll/`sync`
+/// endpoint reflects the change immediately regardless; only the browser
+/// push is deferred. `ctx.wait_until` keeps the Worker alive to finish the
+/// send after the response is flushed.
+fn push_people(ctx: &Context, env: &Env, people: Vec<String>) {
+    if people.is_empty() {
+        return;
     }
-    Ok(())
+    let env = env.clone();
+    ctx.wait_until(async move {
+        match env.d1("DB") {
+            Ok(db) => {
+                if let Err(error) = push::send_to_people(&env, &db, &people).await {
+                    console_error!("deferred push send failed: {error}");
+                }
+            }
+            Err(error) => console_error!("deferred push: DB binding unavailable: {error}"),
+        }
+    });
 }
 
 async fn policy_event(
@@ -276,7 +298,7 @@ async fn build_activity_view(
 
 // ---- session ---------------------------------------------------------------
 
-pub async fn session_create(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+pub async fn session_create(mut req: Request, ctx: RouteContext<Context>) -> Result<Response> {
     let body: CreateSession = match req.json().await {
         Ok(b) => b,
         Err(_) => return err_json("invalid JSON body", 400),
@@ -325,7 +347,7 @@ pub async fn session_create(mut req: Request, ctx: RouteContext<()>) -> Result<R
     Ok(response)
 }
 
-pub async fn session_get(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+pub async fn session_get(req: Request, ctx: RouteContext<Context>) -> Result<Response> {
     let db = ctx.env.d1("DB")?;
     match optional_person(&db, &req).await? {
         Some(p) => Response::from_json(&p),
@@ -333,7 +355,7 @@ pub async fn session_get(req: Request, ctx: RouteContext<()>) -> Result<Response
     }
 }
 
-pub async fn session_delete(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+pub async fn session_delete(req: Request, ctx: RouteContext<Context>) -> Result<Response> {
     let db = ctx.env.d1("DB")?;
     if let Some(token) = session_token(&req) {
         db::delete_auth_session(&db, &session_token_hash(&token)).await?;
@@ -345,7 +367,7 @@ pub async fn session_delete(req: Request, ctx: RouteContext<()>) -> Result<Respo
     Ok(response)
 }
 
-pub async fn session_update(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+pub async fn session_update(mut req: Request, ctx: RouteContext<Context>) -> Result<Response> {
     let db = ctx.env.d1("DB")?;
     let person = match require_person(&db, &req).await? {
         Ok(p) => p,
@@ -382,7 +404,7 @@ pub async fn session_update(mut req: Request, ctx: RouteContext<()>) -> Result<R
 
 // ---- activities (create tile + first run) ----------------------------------
 
-pub async fn activity_create(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+pub async fn activity_create(mut req: Request, ctx: RouteContext<Context>) -> Result<Response> {
     let db = ctx.env.d1("DB")?;
     let proposer = match require_person(&db, &req).await? {
         Ok(p) => p,
@@ -516,7 +538,7 @@ pub async fn activity_create(mut req: Request, ctx: RouteContext<()>) -> Result<
             now,
         )
         .await?;
-        push_people(&ctx.env, &db, recipients).await?;
+        push_people(&ctx.data, &ctx.env, recipients);
     }
 
     let view = build_activity_view(&db, &id, None)
@@ -525,7 +547,7 @@ pub async fn activity_create(mut req: Request, ctx: RouteContext<()>) -> Result<
     json_status(&view, 201)
 }
 
-pub async fn activity_get(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+pub async fn activity_get(req: Request, ctx: RouteContext<Context>) -> Result<Response> {
     let db = ctx.env.d1("DB")?;
     let id = ctx.param("id").cloned().unwrap_or_default();
     let me = optional_person(&db, &req).await?;
@@ -535,7 +557,7 @@ pub async fn activity_get(req: Request, ctx: RouteContext<()>) -> Result<Respons
     }
 }
 
-pub async fn activity_update(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+pub async fn activity_update(mut req: Request, ctx: RouteContext<Context>) -> Result<Response> {
     let db = ctx.env.d1("DB")?;
     let person = match require_person(&db, &req).await? {
         Ok(p) => p,
@@ -662,7 +684,7 @@ pub async fn activity_update(mut req: Request, ctx: RouteContext<()>) -> Result<
     }
 }
 
-pub async fn activity_delete(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+pub async fn activity_delete(req: Request, ctx: RouteContext<Context>) -> Result<Response> {
     let db = ctx.env.d1("DB")?;
     let person = match require_person(&db, &req).await? {
         Ok(p) => p,
@@ -687,7 +709,7 @@ pub async fn activity_delete(req: Request, ctx: RouteContext<()>) -> Result<Resp
 /// (no active run). Inherits grouping/code/emoji from the activity; the
 /// caller only supplies time/location/details, defaulting to the last run
 /// on the client side.
-pub async fn activity_create_run(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+pub async fn activity_create_run(mut req: Request, ctx: RouteContext<Context>) -> Result<Response> {
     let db = ctx.env.d1("DB")?;
     let proposer = match require_person(&db, &req).await? {
         Ok(p) => p,
@@ -746,7 +768,7 @@ pub async fn activity_create_run(mut req: Request, ctx: RouteContext<()>) -> Res
             now,
         )
         .await?;
-        push_people(&ctx.env, &db, recipients).await?;
+        push_people(&ctx.data, &ctx.env, recipients);
     }
 
     let view = build_activity_view(&db, &activity.id, None)
@@ -757,7 +779,7 @@ pub async fn activity_create_run(mut req: Request, ctx: RouteContext<()>) -> Res
 
 // ---- participation (on runs) ------------------------------------------------
 
-pub async fn run_interest(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+pub async fn run_interest(req: Request, ctx: RouteContext<Context>) -> Result<Response> {
     let db = ctx.env.d1("DB")?;
     let person = match require_person(&db, &req).await? {
         Ok(p) => p,
@@ -813,7 +835,7 @@ pub async fn run_interest(req: Request, ctx: RouteContext<()>) -> Result<Respons
             now,
         )
         .await?;
-        push_people(&ctx.env, &db, vec![activity.proposer_id.clone()]).await?;
+        push_people(&ctx.data, &ctx.env, vec![activity.proposer_id.clone()]);
     }
 
     if prior_interested < activity.min_people && fresh_run.interested_count >= activity.min_people {
@@ -827,7 +849,7 @@ pub async fn run_interest(req: Request, ctx: RouteContext<()>) -> Result<Respons
             now,
         )
         .await?;
-        push_people(&ctx.env, &db, recipients).await?;
+        push_people(&ctx.data, &ctx.env, recipients);
     }
 
     let view = build_activity_view(&db, &activity.id, Some(&person.id))
@@ -836,7 +858,7 @@ pub async fn run_interest(req: Request, ctx: RouteContext<()>) -> Result<Respons
     Response::from_json(&view)
 }
 
-pub async fn run_commit(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+pub async fn run_commit(mut req: Request, ctx: RouteContext<Context>) -> Result<Response> {
     let db = ctx.env.d1("DB")?;
     let person = match require_person(&db, &req).await? {
         Ok(p) => p,
@@ -963,7 +985,7 @@ pub async fn run_commit(mut req: Request, ctx: RouteContext<()>) -> Result<Respo
             now,
         )
         .await?;
-        push_people(&ctx.env, &db, vec![activity.proposer_id.clone()]).await?;
+        push_people(&ctx.data, &ctx.env, vec![activity.proposer_id.clone()]);
     }
     if newly_ready {
         let msg = format!("\"{}\" has enough people — it's on!", activity.title);
@@ -990,7 +1012,7 @@ pub async fn run_commit(mut req: Request, ctx: RouteContext<()>) -> Result<Respo
             .await?;
             recipients.push(activity.proposer_id.clone());
         }
-        push_people(&ctx.env, &db, recipients).await?;
+        push_people(&ctx.data, &ctx.env, recipients);
     }
 
     let view = build_activity_view(&db, &activity.id, Some(&person.id))
@@ -999,7 +1021,7 @@ pub async fn run_commit(mut req: Request, ctx: RouteContext<()>) -> Result<Respo
     Response::from_json(&view)
 }
 
-pub async fn run_withdraw(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+pub async fn run_withdraw(req: Request, ctx: RouteContext<Context>) -> Result<Response> {
     let db = ctx.env.d1("DB")?;
     let person = match require_person(&db, &req).await? {
         Ok(p) => p,
@@ -1045,7 +1067,7 @@ pub async fn run_withdraw(req: Request, ctx: RouteContext<()>) -> Result<Respons
 
 async fn proposer_run_action(
     req: &Request,
-    ctx: &RouteContext<()>,
+    ctx: &RouteContext<Context>,
     new_status: &str,
     schedule: Option<ScheduleRun>,
     notify_kind: &str,
@@ -1103,7 +1125,7 @@ async fn proposer_run_action(
         now,
     )
     .await?;
-    push_people(&ctx.env, &db, recipients).await?;
+    push_people(&ctx.data, &ctx.env, recipients);
     policy_event(
         &ctx.env,
         &db,
@@ -1120,7 +1142,7 @@ async fn proposer_run_action(
     Response::from_json(&view)
 }
 
-pub async fn run_schedule(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+pub async fn run_schedule(mut req: Request, ctx: RouteContext<Context>) -> Result<Response> {
     let sched: ScheduleRun = match req.json().await {
         Ok(b) => b,
         Err(_) => return err_json("invalid JSON body", 400),
@@ -1128,17 +1150,17 @@ pub async fn run_schedule(mut req: Request, ctx: RouteContext<()>) -> Result<Res
     proposer_run_action(&req, &ctx, "scheduled", Some(sched), "activity_scheduled").await
 }
 
-pub async fn run_close(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+pub async fn run_close(req: Request, ctx: RouteContext<Context>) -> Result<Response> {
     proposer_run_action(&req, &ctx, "closed", None, "activity_closed").await
 }
 
-pub async fn run_cancel(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+pub async fn run_cancel(req: Request, ctx: RouteContext<Context>) -> Result<Response> {
     proposer_run_action(&req, &ctx, "cancelled", None, "activity_cancelled").await
 }
 
 // ---- notifications ---------------------------------------------------------
 
-pub async fn notifications_read(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+pub async fn notifications_read(mut req: Request, ctx: RouteContext<Context>) -> Result<Response> {
     let db = ctx.env.d1("DB")?;
     let person = match require_person(&db, &req).await? {
         Ok(p) => p,
@@ -1168,7 +1190,7 @@ struct PushSubscriptionCount {
     active_subscriptions: i64,
 }
 
-pub async fn push_public_key(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
+pub async fn push_public_key(_req: Request, ctx: RouteContext<Context>) -> Result<Response> {
     let key = push::public_key(&ctx.env);
     Response::from_json(&serde_json::json!({
         "enabled": key.is_some(),
@@ -1176,7 +1198,7 @@ pub async fn push_public_key(_req: Request, ctx: RouteContext<()>) -> Result<Res
     }))
 }
 
-pub async fn push_subscribe(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+pub async fn push_subscribe(mut req: Request, ctx: RouteContext<Context>) -> Result<Response> {
     let db = ctx.env.d1("DB")?;
     let person = match require_person(&db, &req).await? {
         Ok(p) => p,
@@ -1224,7 +1246,7 @@ pub async fn push_subscribe(mut req: Request, ctx: RouteContext<()>) -> Result<R
     Response::from_json(&serde_json::json!({ "ok": true }))
 }
 
-pub async fn push_unsubscribe(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+pub async fn push_unsubscribe(mut req: Request, ctx: RouteContext<Context>) -> Result<Response> {
     let db = ctx.env.d1("DB")?;
     let person = match require_person(&db, &req).await? {
         Ok(p) => p,
@@ -1239,7 +1261,7 @@ pub async fn push_unsubscribe(mut req: Request, ctx: RouteContext<()>) -> Result
     Response::from_json(&serde_json::json!({ "ok": true }))
 }
 
-pub async fn push_diagnostics(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+pub async fn push_diagnostics(req: Request, ctx: RouteContext<Context>) -> Result<Response> {
     let db = ctx.env.d1("DB")?;
     let person = match require_person(&db, &req).await? {
         Ok(person) => person,
@@ -1276,7 +1298,7 @@ pub async fn push_diagnostics(req: Request, ctx: RouteContext<()>) -> Result<Res
     }))
 }
 
-pub async fn push_test(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+pub async fn push_test(req: Request, ctx: RouteContext<Context>) -> Result<Response> {
     let db = ctx.env.d1("DB")?;
     let person = match require_person(&db, &req).await? {
         Ok(person) => person,
@@ -1288,7 +1310,7 @@ pub async fn push_test(req: Request, ctx: RouteContext<()>) -> Result<Response> 
 
 // ---- personal policies -----------------------------------------------------
 
-pub async fn policies_get(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+pub async fn policies_get(req: Request, ctx: RouteContext<Context>) -> Result<Response> {
     let db = ctx.env.d1("DB")?;
     let person = match require_person(&db, &req).await? {
         Ok(person) => person,
@@ -1304,7 +1326,7 @@ pub async fn policies_get(req: Request, ctx: RouteContext<()>) -> Result<Respons
     }
 }
 
-pub async fn policies_replace(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+pub async fn policies_replace(mut req: Request, ctx: RouteContext<Context>) -> Result<Response> {
     let db = ctx.env.d1("DB")?;
     let person = match require_person(&db, &req).await? {
         Ok(person) => person,
@@ -1337,7 +1359,7 @@ pub async fn policies_replace(mut req: Request, ctx: RouteContext<()>) -> Result
 
 // ---- activity rooms ---------------------------------------------------------
 
-pub async fn room_get(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+pub async fn room_get(req: Request, ctx: RouteContext<Context>) -> Result<Response> {
     let db = ctx.env.d1("DB")?;
     let code = ctx.param("code").cloned().unwrap_or_default();
     if code.len() != 4 || !code.chars().all(|c| c.is_ascii_alphabetic()) {
@@ -1419,7 +1441,7 @@ pub async fn room_get(req: Request, ctx: RouteContext<()>) -> Result<Response> {
 
 // ---- sync ------------------------------------------------------------------
 
-pub async fn sync(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+pub async fn sync(req: Request, ctx: RouteContext<Context>) -> Result<Response> {
     let db = ctx.env.d1("DB")?;
     let now = now_ms();
 

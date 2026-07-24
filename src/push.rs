@@ -78,8 +78,20 @@ pub async fn send_payload_to_people(
     let plaintext = serde_json::to_vec(payload)
         .map_err(|e| Error::RustError(format!("push payload encode failed: {e}")))?;
     let subs = db::push_subscriptions_for_people(db, person_ids, PUSH_LIMIT).await?;
-    for sub in subs {
-        match send_one(&cfg, &sub, &plaintext).await {
+
+    // Fan the deliveries out concurrently instead of awaiting each in series.
+    // These calls run in a mutation's request path (see `api::push_people`);
+    // serial delivery made a single click cost ~sum(RTT) across every
+    // subscriber, which is the main source of the reported latency. Firing
+    // them together makes the request path cost ~max(RTT) instead.
+    let results = futures_util::future::join_all(
+        subs.iter().map(|sub| send_one(&cfg, sub, &plaintext)),
+    )
+    .await;
+
+    // D1 writes must stay serial, so reap gone endpoints after the fan-out.
+    for (sub, result) in subs.iter().zip(results) {
+        match result {
             Ok(response) => {
                 if matches!(response.status, 404 | 410) {
                     db::delete_push_endpoint(db, &sub.endpoint).await?;

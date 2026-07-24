@@ -16,6 +16,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 getrandom = { version = "0.2", features = ["js"] }
 policy = { path = "crates/policy" }
+# Concurrent fan-out of Web Push deliveries (already in the tree via `worker`).
+futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
 # Web Push VAPID signing and RFC 8291 payload encryption.
 base64 = "0.22"
 p256 = { version = "0.13", features = ["ecdsa", "ecdh"] }
