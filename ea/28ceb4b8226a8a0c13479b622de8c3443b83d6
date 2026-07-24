@@ -1,0 +1,19 @@
+Cargo.lock
+  s_02366cf197ffa1::t_f373d3c1e6c676 267
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "ea28ceb4b8226a8a0c13479b622de8c3443b83d6",
+  "prompts": {},
+  "sessions": {
+    "s_02366cf197ffa1": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_06ac8bc3fffe8aP6oqeU62afy0",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "geo <gchemmala@cloudflare.com>"
+    }
+  }
+}
