@@ -13,6 +13,10 @@ interface Props {
   onRequestNotifications: () => void
   onTestNotifications?: () => void
   onShare?: () => void
+  /** When set (e.g. a policy added via a shared `?policy=` link), the panel
+   * moves the active tab/view to that rule so the freshly added policy is the
+   * one shown. */
+  focusRuleId?: string
 }
 
 export function PolicyPanel({
@@ -24,6 +28,7 @@ export function PolicyPanel({
   onRequestNotifications,
   onTestNotifications,
   onShare,
+  focusRuleId,
 }: Props) {
   const [selectedId, setSelectedId] = useState<string>(() => rules[0]?.id ?? '')
   const selected = useMemo(() => rules.find((r) => r.id === selectedId) ?? rules[0] ?? null, [rules, selectedId])
@@ -31,6 +36,20 @@ export function PolicyPanel({
   const [tokens, setTokens] = useState<HighlightToken[]>([])
   const [policyStatus, setPolicyStatus] = useState('ready')
   const highlightRef = useRef<HTMLPreElement | null>(null)
+  const honoredFocusRef = useRef<string | undefined>(undefined)
+
+  // When a rule is added via the URL query (`?policy=` shared link), move the
+  // active view to that rule's tab so it becomes the visible/selected one. We
+  // only honor a given focusRuleId once (tracked via a ref) so that later
+  // rule-list changes -- e.g. editing/saving another tab -- don't yank the
+  // selection back to the shared rule.
+  useEffect(() => {
+    if (!focusRuleId || honoredFocusRef.current === focusRuleId) return
+    if (rules.some((r) => r.id === focusRuleId)) {
+      setSelectedId(focusRuleId)
+      honoredFocusRef.current = focusRuleId
+    }
+  }, [focusRuleId, rules])
 
   // Reset the draft whenever a different rule is selected, when the
   // selected rule's source changes from outside (e.g. Save, or loading a
