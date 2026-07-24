@@ -33,11 +33,14 @@ mod util;
 ///   and count against the 100k/day request budget.
 #[cfg(target_arch = "wasm32")]
 #[event(fetch)]
-async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
+async fn fetch(req: Request, env: Env, ctx: Context) -> Result<Response> {
     if !util::request_is_same_origin(&req)? {
         return util::err_json("cross-origin mutation denied", 403);
     }
-    Router::new()
+    // Thread the fetch `Context` into every route handler as router data so
+    // handlers can offload best-effort work (e.g. Web Push delivery) to
+    // `ctx.wait_until`, keeping it off the response critical path.
+    Router::with_data(ctx)
         .get("/api/health", |_req, _ctx| {
             Response::from_json(&serde_json::json!({ "status": "ok", "service": "fold" }))
         })
