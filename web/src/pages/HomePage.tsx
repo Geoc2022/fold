@@ -145,6 +145,7 @@ export function HomePage() {
   }, [searchParams])
 
   const [showPolicyPanel, setShowPolicyPanel] = useState(false)
+  const [policyFocusId, setPolicyFocusId] = useState<string | undefined>(undefined)
   const [notifyStatus, setNotifyStatus] = useState('')
   const [toast, setToast] = useState<string | null>(null)
   const toastTimerRef = useRef<number | null>(null)
@@ -232,7 +233,11 @@ export function HomePage() {
       try {
         const sources = decodePolicySources(policyParam)
         if (sources.length > 0) {
-          saveHomeRules(appendPolicySources(rules, sources))
+          const next = appendPolicySources(rules, sources)
+          saveHomeRules(next)
+          // Newly added rules are appended, so the first one added lives at the
+          // previous end of the list; focus it so the panel opens on that tab.
+          if (next.length > rules.length) setPolicyFocusId(next[rules.length].id)
           setShowPolicyPanel(true)
         }
       } catch {
@@ -521,6 +526,7 @@ export function HomePage() {
           rules={rules}
           onRulesChange={saveHomeRules}
           onClose={() => setShowPolicyPanel(false)}
+          focusRuleId={policyFocusId}
           hint="Rules run against activities you've joined."
           notifyStatus={notifyStatus}
           onRequestNotifications={enableNotifications}

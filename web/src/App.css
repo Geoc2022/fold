@@ -1353,7 +1353,11 @@ a.panel-button:visited {
   width: 100%;
   min-height: 92px;
   max-height: 220px;
-  overflow: auto;
+  /* Reserve the scrollbar gutter on both layers so the mirror and the input
+   * always wrap text at the same width. Otherwise, when only one layer shows a
+   * scrollbar, its content width shrinks and the (transparent) caret drifts out
+   * of alignment with the highlighted text underneath it. */
+  scrollbar-gutter: stable;
   border-radius: 8px;
   padding: 0.5rem 0.6rem;
   font: 600 12px ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -1366,15 +1370,21 @@ a.panel-button:visited {
   background: var(--panel);
   color: var(--text);
   pointer-events: none;
+  /* The mirror is scrolled programmatically to match the textarea (see the
+   * onScroll handler in PolicyPanel); it must not render its own scrollbar, or
+   * it would stack a second, dead scrollbar behind the input. */
+  overflow: hidden;
 }
 .policy-overlay-input {
   position: absolute;
   inset: 0;
+  overflow: auto;
   color: transparent;
   -webkit-text-fill-color: transparent;
   caret-color: var(--text);
   background: transparent;
   border: none;
+  cursor: text;
 }
 .policy-overlay-input:focus-visible {
   outline: 2px solid #2563eb;
