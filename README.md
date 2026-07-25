@@ -6,15 +6,8 @@ Try the tutorial at `/fold`
 
 ## Next Steps:
 
-### Latency is high
-I think this might have to do with the new server side notifications. In general, how often can we make stuff poll?
-
-### Notification policy panel
-- Adding a policy through the url query should have the view moved to that tab
-- There's something wrong with the scroll bar and the cursor
-
 ### "Add an activity"
-The number inputs don't have a removed border - when selecting them they pop up with the blue input border
+The number inputs don't have a removed border - when selecting them they pop up with the blue input border. Or at least the border should go on the outside and not on the inside.
 
 ### Align the Fold title Animation
 

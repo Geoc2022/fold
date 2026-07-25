@@ -241,7 +241,15 @@ export function BiologyRoom({
         return
       }
       const p = toWorld(e.clientX, e.clientY)
-      pointerRef.current = { id: e.pointerId, node: hit(p.x, p.y), startX: p.x, startY: p.y, downAt: performance.now(), dragging: false }
+      const node = hit(p.x, p.y)
+      pointerRef.current = {
+        id: e.pointerId,
+        node,
+        startX: p.x,
+        startY: p.y,
+        downAt: performance.now(),
+        dragging: node?.state === 'committed' || node?.state === 'arrived',
+      }
     }
 
     const onPointerMove = (e: PointerEvent) => {
@@ -278,6 +286,10 @@ export function BiologyRoom({
       if (ps.node.state === 'committed' || ps.node.state === 'arrived') {
         const targetR = tugPositionOutward(rawR, TUG.commitMaxR, TUG.commitOutTugR)
         setNodeRadius(ps.node, targetR, angle)
+        if (ps.node.state === 'arrived' && rawR > 1) ps.node.state = 'committed'
+        if (ps.node.state === 'committed') {
+          ps.node.arrivalAt = nowMs + etaFromDistance(ps.node.x, ps.node.y, WORLD_R)
+        }
         if (rawR > TUG.commitMaxR) {
           if (advanceTugWork(rawR - TUG.commitMaxR, nowPerf)) {
             ps.node.state = 'interested'
@@ -805,4 +817,3 @@ function nodesToParticipants(nodes: Node[], now: number): BioParticipant[] {
     isSelf: n.isSelf === true,
   }))
 }
-
