@@ -313,6 +313,10 @@ export function ActivityRoom() {
     return () => setDefaultFavicon()
   }, [code, notFound, presenceBadge])
 
+  useEffect(() => {
+    if (error) showAlert('Syncing')
+  }, [error])
+
   if (code === null) {
     return <RoomMessage title="Invalid link" message="Activity links are letters only." />
   }
@@ -324,7 +328,7 @@ export function ActivityRoom() {
   }
 
   if (!me || loading || !data) {
-    return <RoomMessage title="fold" message={error ?? 'Loading activity...'} />
+    return <RoomMessage title="fold" message={error ? 'Syncing' : 'Loading activity...'} />
   }
 
   const person = me
@@ -431,7 +435,6 @@ export function ActivityRoom() {
         otherCommittedRoomCode={data.other_committed_room_code}
       />
       <button type="button" className="room-code" onClick={copyRoomLink}>/{activity.code}</button>
-      {error && <div className="room-error">{error}</div>}
       {alert && (
         <div className="room-alert">
           {alert.href && alert.message.includes('{link}') ? (

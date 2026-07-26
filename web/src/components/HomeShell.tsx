@@ -42,6 +42,8 @@ export function HomeShell({
   onViewChange,
   children,
 }: Props) {
+  const notice = toast ?? (error ? 'Syncing' : null)
+
   return (
     <div className="app">
       <header className="topbar">
@@ -71,8 +73,7 @@ export function HomeShell({
       </header>
 
       <main className="layout">
-        {error && <p className="err small">Sync issue: {error}</p>}
-        {toast && <div className="home-toast">{toast}</div>}
+        {notice && <div className="home-toast">{notice}</div>}
 
         <div className="browser-controls">
           <TagBar categories={categories} active={activeTag} onSelect={onTagSelect} />
