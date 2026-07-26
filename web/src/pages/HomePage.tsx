@@ -269,12 +269,15 @@ export function HomePage() {
     }
   }, [])
 
-  async function enableNotifications() {
-    setNotifyStatus(await requestNotificationPermission())
+  async function openPolicyFromBell() {
+    if (typeof Notification !== 'undefined' && Notification.permission !== 'granted') {
+      setNotifyStatus(await requestNotificationPermission())
+    }
+    setShowPolicyPanel(true)
   }
 
   async function testNotifications() {
-    setNotifyStatus('Testing notification...')
+    setNotifyStatus('Testing bell...')
     try {
       setNotifyStatus(await testPushNotifications())
     } catch (error) {
@@ -407,7 +410,9 @@ export function HomePage() {
       )}
       theme={theme}
       onThemeToggle={toggleTheme}
-      onOpenPolicy={() => setShowPolicyPanel(true)}
+      onOpenPolicy={() => {
+        void openPolicyFromBell()
+      }}
       onRefresh={refresh}
       onHelp={() => navigate('/fold')}
       error={error}
@@ -529,7 +534,6 @@ export function HomePage() {
           focusRuleId={policyFocusId}
           hint="Rules run against activities you've joined."
           notifyStatus={notifyStatus}
-          onRequestNotifications={enableNotifications}
           onTestNotifications={testNotifications}
           onShare={sharePolicy}
         />

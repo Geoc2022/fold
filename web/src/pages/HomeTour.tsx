@@ -48,6 +48,13 @@ export function HomeTour() {
     writeJson(HOME_RULES_KEY, nextRules)
   }
 
+  async function openPolicyFromBell() {
+    if (typeof Notification !== 'undefined' && Notification.permission !== 'granted') {
+      setNotifyStatus(await requestNotificationPermission())
+    }
+    setShowPolicyPanel(true)
+  }
+
   const coach = (() => {
     if (script.step === 'welcome') {
       return {
@@ -98,7 +105,9 @@ export function HomeTour() {
         )}
         theme={theme}
         onThemeToggle={toggleTheme}
-        onOpenPolicy={() => setShowPolicyPanel(true)}
+        onOpenPolicy={() => {
+          void openPolicyFromBell()
+        }}
         onRefresh={() => window.location.reload()}
         onHelp={() => navigate('/fold')}
         categories={['board game', 'video game']}
@@ -148,9 +157,6 @@ export function HomeTour() {
           onClose={() => setShowPolicyPanel(false)}
           hint="Rules in this tutorial are saved locally as a demo."
           notifyStatus={notifyStatus}
-          onRequestNotifications={() => {
-            void requestNotificationPermission().then(setNotifyStatus)
-          }}
           onShare={() => {
             const url = `${window.location.origin}/fold?policy=${encodeURIComponent(encodePolicySources(rules))}`
             void navigator.clipboard.writeText(url)

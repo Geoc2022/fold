@@ -40,6 +40,13 @@ export function RoomTutorial() {
     writeJson(roomRulesKey('FOLD'), nextRules)
   }
 
+  async function openPolicyFromBell() {
+    if (typeof Notification !== 'undefined' && Notification.permission !== 'granted') {
+      setNotifyStatus(await requestNotificationPermission())
+    }
+    setShowPolicyPanel(true)
+  }
+
   useEffect(() => {
     const policyParam = searchParams.get('policy')
     if (!policyParam) return
@@ -232,7 +239,9 @@ export function RoomTutorial() {
         onThemeToggle={toggleTheme}
         onInfo={() => {}}
         onProposeRun={() => {}}
-        onOpenPolicy={() => setShowPolicyPanel(true)}
+        onOpenPolicy={() => {
+          void openPolicyFromBell()
+        }}
         onShare={() => {
           const url = `${window.location.origin}/FOLD`
           void navigator.clipboard.writeText(buildActivityShareText(activity, participants, Date.now(), url))
@@ -252,9 +261,6 @@ export function RoomTutorial() {
           onClose={() => setShowPolicyPanel(false)}
           hint="Rules in this tutorial are saved locally as a demo."
           notifyStatus={notifyStatus}
-          onRequestNotifications={() => {
-            void requestNotificationPermission().then(setNotifyStatus)
-          }}
           onShare={() => {
             const url = `${window.location.origin}/FOLD?policy=${encodeURIComponent(encodePolicySources(rules))}`
             void navigator.clipboard.writeText(url)

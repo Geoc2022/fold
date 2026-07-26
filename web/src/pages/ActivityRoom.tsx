@@ -332,12 +332,15 @@ export function ActivityRoom() {
   const participants = data.participants
   const serverTime = data.server_time
 
-  async function enableNotifications() {
-    setNotifyStatus(await requestNotificationPermission())
+  async function openPolicyFromBell() {
+    if (typeof Notification !== 'undefined' && Notification.permission !== 'granted') {
+      setNotifyStatus(await requestNotificationPermission())
+    }
+    setShowPolicyPanel(true)
   }
 
   async function testNotifications() {
-    setNotifyStatus('Testing notification...')
+    setNotifyStatus('Testing bell...')
     try {
       setNotifyStatus(await testPushNotifications())
     } catch (error) {
@@ -465,7 +468,9 @@ export function ActivityRoom() {
         onThemeToggle={toggleTheme}
         onInfo={() => setShowInfo(true)}
         onProposeRun={() => setProposingRun(true)}
-        onOpenPolicy={() => setShowPolicyPanel(true)}
+        onOpenPolicy={() => {
+          void openPolicyFromBell()
+        }}
         onShare={shareActivity}
       />
       {showPolicyPanel && policiesReady && (
@@ -475,7 +480,6 @@ export function ActivityRoom() {
           onClose={() => setShowPolicyPanel(false)}
           hint="Rules run against this room while you're here."
           notifyStatus={notifyStatus}
-          onRequestNotifications={enableNotifications}
           onTestNotifications={testNotifications}
           onShare={sharePolicy}
         />

@@ -13,7 +13,6 @@ interface Props {
   onClose: () => void
   hint: string
   notifyStatus: string
-  onRequestNotifications: () => void
   onTestNotifications?: () => void
   onShare?: () => void
   /** When set (e.g. a policy added via a shared `?policy=` link), the panel
@@ -28,7 +27,6 @@ export function PolicyPanel({
   onClose,
   hint,
   notifyStatus,
-  onRequestNotifications,
   onTestNotifications,
   onShare,
   focusRuleId,
@@ -164,14 +162,9 @@ export function PolicyPanel({
           </header>
 
           <div className="policy-actions-row">
-            {!notificationsAlreadyEnabled && (
-              <button type="button" className="panel-button" onClick={onRequestNotifications}>
-                Enable notifications
-              </button>
-            )}
             {notificationsAlreadyEnabled && onTestNotifications && (
               <button type="button" className="panel-button" onClick={onTestNotifications}>
-                Test notification
+                Test bell
               </button>
             )}
             <label className="policy-template-picker" aria-label="Policy template">

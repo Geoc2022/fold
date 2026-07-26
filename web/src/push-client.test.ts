@@ -115,7 +115,7 @@ describe('enablePushNotifications', () => {
 
     const result = testPushNotifications()
     await vi.runAllTimersAsync()
-    await expect(result).resolves.toBe('Test notification delivered')
+    await expect(result).resolves.toBe('Test bell delivered')
     vi.useRealTimers()
   })
 

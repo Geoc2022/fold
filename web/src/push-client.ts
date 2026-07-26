@@ -66,7 +66,7 @@ export async function testPushNotifications(): Promise<string> {
 
   const queued = await api.pushTest()
   pushLog('test_queued', queued)
-  if (queued.deliveries_queued < 1) return 'Test notification was not queued'
+  if (queued.deliveries_queued < 1) return 'Test bell was not queued'
 
   for (let attempt = 0; attempt < 20; attempt += 1) {
     await delay(1_000)
@@ -78,11 +78,11 @@ export async function testPushNotifications(): Promise<string> {
       continue
     }
     pushLog('test_finished', delivery)
-    if (delivery.status === 'delivered') return 'Test notification delivered'
+    if (delivery.status === 'delivered') return 'Test bell delivered'
     return `Test failed (${delivery.last_status ?? 'no status'}): ${delivery.last_error ?? 'unknown error'}`
   }
   pushLog('test_timed_out', queued)
-  return 'Test notification is still pending'
+  return 'Test bell is still pending'
 }
 
 function keysEqual(current: ArrayBuffer | null, desired: ArrayBuffer): boolean {
