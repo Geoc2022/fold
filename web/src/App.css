@@ -809,6 +809,9 @@ html[data-theme="dark"] .list-item {
   width: 4.2rem;
   padding: 0;
 }
+.num-field input:focus {
+  outline: none;
+}
 
 /* ---- emoji picker ---- */
 .title-row {
