@@ -202,15 +202,71 @@ is_weekend today => lurk
 
 ## Notification policy templates
 
-### After Work Board Games Example
+### Default
+
+```policy
+quorum_reached = #committed >= min_people
+
+{
+  if quorum_reached then
+    notify "{title} is ready with {#committed} committed"
+  else
+    {},
+  notify "{title} starts in 3 minutes" before ready_in by 3min
+}
+```
+
+<!-- policy-test
+[
+  {
+    "name": "default quorum reached",
+    "env": {
+      "committed_count": 3,
+      "min_people": 3,
+      "ready_in_secs": 300,
+      "title": "Lunch"
+    },
+    "events": [
+      { "after_secs": 0, "notify": "Lunch is ready with 3 committed" },
+      { "after_secs": 120, "notify": "Lunch starts in 3 minutes" }
+    ]
+  },
+  {
+    "name": "default quorum missing",
+    "env": {
+      "committed_count": 1,
+      "min_people": 3,
+      "ready_in_secs": 300,
+      "title": "Lunch"
+    },
+    "events": [
+      { "after_secs": 120, "notify": "Lunch starts in 3 minutes" }
+    ]
+  },
+  {
+    "name": "default unknown ready_in",
+    "env": {
+      "committed_count": 3,
+      "min_people": 3,
+      "ready_in_secs": null,
+      "title": "Lunch"
+    },
+    "events": [
+      { "after_secs": 0, "notify": "Lunch is ready with 3 committed" }
+    ]
+  }
+]
+-->
+
+### After Work
 
 ```policy
 five_pm_nudge =
-  now.hour == 17 and now.minute == 0 and #committed < min_people
+  not is_weekend today and now.hour == 16 and now.minute == 50 and #committed < min_people
 
 {
   if five_pm_nudge then
-    notify "It is 5pm - submit your commits for {title}!"
+    notify "Submit your ETA for {title}!"
   else
     {},
   notify "3 minutes till {title}" before ready_in by 3min
@@ -220,12 +276,12 @@ five_pm_nudge =
 <!-- policy-test
 [
   {
-    "name": "after-work before 5pm",
+    "name": "after-work before nudge",
     "env": {
       "committed_count": 1,
       "min_people": 3,
       "now_hour": 16,
-      "now_minute": 59,
+      "now_minute": 49,
       "ready_in_secs": 300,
       "title": "After Work Board Games"
     },
@@ -234,27 +290,27 @@ five_pm_nudge =
     ]
   },
   {
-    "name": "after-work at 5pm under quorum",
+    "name": "after-work nudge under quorum",
     "env": {
       "committed_count": 1,
       "min_people": 3,
-      "now_hour": 17,
-      "now_minute": 0,
+      "now_hour": 16,
+      "now_minute": 50,
       "ready_in_secs": 300,
       "title": "After Work Board Games"
     },
     "events": [
-      { "after_secs": 0, "notify": "It is 5pm - submit your commits for After Work Board Games!" },
+      { "after_secs": 0, "notify": "Submit your ETA for After Work Board Games!" },
       { "after_secs": 120, "notify": "3 minutes till After Work Board Games" }
     ]
   },
   {
-    "name": "after-work at 5pm already ready",
+    "name": "after-work nudge already ready",
     "env": {
       "committed_count": 3,
       "min_people": 3,
-      "now_hour": 17,
-      "now_minute": 0,
+      "now_hour": 16,
+      "now_minute": 50,
       "ready_in_secs": 300,
       "title": "After Work Board Games"
     },
@@ -263,12 +319,12 @@ five_pm_nudge =
     ]
   },
   {
-    "name": "after-work after 5pm",
+    "name": "after-work after nudge",
     "env": {
       "committed_count": 1,
       "min_people": 3,
-      "now_hour": 17,
-      "now_minute": 1,
+      "now_hour": 16,
+      "now_minute": 51,
       "ready_in_secs": 300,
       "title": "After Work Board Games"
     },
@@ -279,16 +335,15 @@ five_pm_nudge =
 ]
 -->
 
-### Lunch Example
+### Lunch
 
 ```policy
-(* commit at 12pm *)
 lunch_nudge =
-  now.hour == 12 and now.minute == 0 and #committed < min_people
+  not is_weekend today and now.hour == 12 and now.minute == 0 and #committed < min_people
 
 {
   if lunch_nudge then
-    notify "Lunch window is open - commit now for {title}."
+    notify "It's noon - commit now for {title}."
   else
     {},
   notify "Lunch starts in 3 minutes" before ready_in by 3min
@@ -322,7 +377,7 @@ lunch_nudge =
       "title": "Lunch"
     },
     "events": [
-      { "after_secs": 0, "notify": "Lunch window is open - commit now for Lunch." },
+      { "after_secs": 0, "notify": "It's noon - commit now for Lunch." },
       { "after_secs": 120, "notify": "Lunch starts in 3 minutes" }
     ]
   },
@@ -343,7 +398,7 @@ lunch_nudge =
 ]
 -->
 
-### Pickup Sports Example
+### Pickup Sports
 
 ```policy
 enough = #committed >= min_people

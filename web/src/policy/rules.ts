@@ -1,4 +1,5 @@
 import { readJson } from '../storage'
+import { DEFAULT_NOTIFICATION_POLICY_TEMPLATE_ID, NOTIFICATION_POLICY_TEMPLATES } from './templates'
 
 export interface PolicyRule {
   id: string
@@ -7,7 +8,10 @@ export interface PolicyRule {
 }
 
 export const HOME_RULES_KEY = 'fold.policy.home.rules'
-export const DEFAULT_POLICY = 'is_ready => notify "{title} is ready"'
+export const DEFAULT_POLICY =
+  NOTIFICATION_POLICY_TEMPLATES.find((template) => template.id === DEFAULT_NOTIFICATION_POLICY_TEMPLATE_ID)?.source
+  ?? 'is_ready => notify "{title} is ready"'
+const LEGACY_DEFAULT_POLICY = 'is_ready => notify "{title} is ready"'
 
 export function newPolicyRule(source: string): PolicyRule {
   return { id: crypto.randomUUID(), source, enabled: true }
@@ -22,7 +26,15 @@ function fallbackRules(): PolicyRule[] {
 }
 
 export function loadHomeRules(): PolicyRule[] {
-  return readJson(HOME_RULES_KEY, fallbackRules())
+  const loaded = readJson(HOME_RULES_KEY, fallbackRules())
+  if (
+    loaded.length === 1
+    && loaded[0]?.source.trim() === LEGACY_DEFAULT_POLICY
+    && loaded[0]?.enabled === true
+  ) {
+    return [{ ...loaded[0], source: DEFAULT_POLICY }]
+  }
+  return loaded
 }
 
 export function loadRoomRules(code: string): PolicyRule[] | null {

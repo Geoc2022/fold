@@ -1271,6 +1271,15 @@ a.panel-button:visited {
   flex-wrap: wrap;
   align-items: center;
 }
+.policy-template-picker {
+  display: inline-flex;
+  margin: 0;
+}
+.policy-template-picker select {
+  width: auto;
+  min-width: 168px;
+  min-height: 36px;
+}
 .policy-emoji-button {
   display: flex;
   align-items: center;

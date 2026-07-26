@@ -3,6 +3,9 @@ import { compilePolicy, highlightPolicy, type HighlightToken } from '../policy/e
 import { buildHighlightedSegments } from '../policy/highlight'
 import { LANGUAGE_DOCS_URL } from '../links'
 import { newPolicyRule, type PolicyRule } from '../policy/rules'
+import { DEFAULT_NOTIFICATION_POLICY_TEMPLATE_ID, NOTIFICATION_POLICY_TEMPLATES } from '../policy/templates'
+
+const LEGACY_DEFAULT_POLICY = 'is_ready => notify "{title} is ready"'
 
 interface Props {
   rules: PolicyRule[]
@@ -30,11 +33,15 @@ export function PolicyPanel({
   onShare,
   focusRuleId,
 }: Props) {
+  const defaultTemplate =
+    NOTIFICATION_POLICY_TEMPLATES.find((template) => template.id === DEFAULT_NOTIFICATION_POLICY_TEMPLATE_ID)
+    ?? NOTIFICATION_POLICY_TEMPLATES[0]
   const [selectedId, setSelectedId] = useState<string>(() => rules[0]?.id ?? '')
   const selected = useMemo(() => rules.find((r) => r.id === selectedId) ?? rules[0] ?? null, [rules, selectedId])
-  const [draft, setDraft] = useState(selected?.source ?? '')
+  const [draft, setDraft] = useState(selected?.source || defaultTemplate?.source || '')
   const [tokens, setTokens] = useState<HighlightToken[]>([])
   const [policyStatus, setPolicyStatus] = useState('ready')
+  const [selectedTemplateId, setSelectedTemplateId] = useState(defaultTemplate?.id ?? '')
   const highlightRef = useRef<HTMLPreElement | null>(null)
   const honoredFocusRef = useRef<string | undefined>(undefined)
 
@@ -55,8 +62,20 @@ export function PolicyPanel({
   // selected rule's source changes from outside (e.g. Save, or loading a
   // shared `?policy=` link), or on rule-list identity change.
   useEffect(() => {
-    setDraft(selected?.source ?? '')
-  }, [selectedId, selected?.source])
+    if (!selected?.source?.trim()) {
+      setDraft(defaultTemplate?.source ?? '')
+      setSelectedTemplateId(defaultTemplate?.id ?? '')
+      return
+    }
+    if (selected.source.trim() === LEGACY_DEFAULT_POLICY) {
+      setDraft(defaultTemplate?.source ?? selected.source)
+      setSelectedTemplateId(defaultTemplate?.id ?? '')
+      return
+    }
+    setDraft(selected.source)
+    const matchingTemplate = NOTIFICATION_POLICY_TEMPLATES.find((template) => template.source.trim() === selected.source.trim())
+    setSelectedTemplateId(matchingTemplate?.id ?? '')
+  }, [defaultTemplate?.id, defaultTemplate?.source, selectedId, selected?.source])
 
   useEffect(() => {
     let cancelled = false
@@ -104,6 +123,13 @@ export function PolicyPanel({
     setPolicyStatus('ready')
   }
 
+  function applyTemplate(templateId: string) {
+    const template = NOTIFICATION_POLICY_TEMPLATES.find((item) => item.id === templateId)
+    if (!template) return
+    setDraft(template.source)
+    setPolicyStatus('ready')
+  }
+
   return (
     <div className="modal-backdrop modal-backdrop-lower" onClick={onClose}>
       <div className="modal-card policy-panel-card" onClick={(e) => e.stopPropagation()}>
@@ -148,6 +174,24 @@ export function PolicyPanel({
                 Test notification
               </button>
             )}
+            <label className="policy-template-picker" aria-label="Policy template">
+              <select
+                className="panel-button"
+                value={selectedTemplateId}
+                onChange={(e) => {
+                  const nextTemplateId = e.target.value
+                  setSelectedTemplateId(nextTemplateId)
+                  applyTemplate(nextTemplateId)
+                }}
+              >
+                <option value="">Templates</option>
+                {NOTIFICATION_POLICY_TEMPLATES.map((template) => (
+                  <option key={template.id} value={template.id}>
+                    {template.label}
+                  </option>
+                ))}
+              </select>
+            </label>
               <button
                 type="button"
                 className="panel-button policy-emoji-button policy-icon-only"
