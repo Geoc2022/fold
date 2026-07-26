@@ -93,8 +93,14 @@ export function CreateRunForm({ activity, onCreated, onCancel }: Props) {
 
       {error && <p className="err">{error}</p>}
       <div className="row">
-        <button type="button" className="ghost" onClick={onCancel}>
-          Not now
+        <button
+          type="button"
+          className="ghost danger panel-close-button"
+          onClick={onCancel}
+          aria-label="Close panel"
+          title="Close"
+        >
+          X
         </button>
         <button type="submit" className="primary" disabled={busy}>
           {busy ? 'Posting…' : 'Propose run'}

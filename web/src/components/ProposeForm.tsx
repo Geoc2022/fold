@@ -131,7 +131,7 @@ export function ProposeForm({ initialCode, activity, categoryOptions, onCreated,
     setMaxCommitInput(secondsToHuman(activity.max_commit_seconds))
   }, [activity])
 
-  // Esc closes the form, same as clicking Cancel.
+  // Esc closes the form, same as clicking the close button.
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === 'Escape') onClose()
@@ -260,8 +260,14 @@ export function ProposeForm({ initialCode, activity, categoryOptions, onCreated,
           >
             {formMode === 'simple' ? '◀' : '▼'}
           </button>
-          <button type="button" className="ghost danger" onClick={onClose}>
-            Cancel
+          <button
+            type="button"
+            className="ghost danger panel-close-button"
+            onClick={onClose}
+            aria-label="Close panel"
+            title="Close"
+          >
+            X
           </button>
         </div>
       </div>

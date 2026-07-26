@@ -1,5 +1,7 @@
 export const TUG_WIDTH = 70
 export const TUG_WIDTH_HOLD_MS = 1000
+// Overall tug sensitivity: higher means less force needed, lower means more.
+export const TUG_FORCE_MULTIPLIER = 0.75
 // Keep the lurker/interested bands closer to the committed ring so nodes do
 // not idle too far out from center.
 export const INTERESTED_GAP = 50
@@ -22,7 +24,7 @@ export function createTugModel(worldR: number): TugModel {
   const interestedOutTugR = interestedMaxR + TUG_WIDTH
   const interestedInTugR = Math.max(0, interestedMaxR - TUG_WIDTH)
   return {
-    workNeeded: TUG_WIDTH * TUG_WIDTH_HOLD_MS,
+    workNeeded: (TUG_WIDTH * TUG_WIDTH_HOLD_MS) / Math.max(0.1, TUG_FORCE_MULTIPLIER),
     commitMaxR,
     commitOutTugR,
     commitInTugR,

@@ -488,7 +488,17 @@ export function ActivityRoom() {
                 activity={activity}
                 now={data.server_time}
                 participants={participants}
-                cta={<button className="activity-launch ghost" onClick={() => setShowInfo(false)}>Cancel</button>}
+                cta={(
+                  <button
+                    type="button"
+                    className="activity-launch ghost panel-close-button"
+                    aria-label="Close panel"
+                    title="Close"
+                    onClick={() => setShowInfo(false)}
+                  >
+                    X
+                  </button>
+                )}
               />
             </section>
           </div>
@@ -505,7 +515,15 @@ export function ActivityRoom() {
               onChange={(e) => setHandleInput(e.target.value)}
             />
             <div className="row">
-              <button type="button" className="ghost danger" onClick={() => setNamePrompt(false)}>Cancel</button>
+              <button
+                type="button"
+                className="ghost danger panel-close-button"
+                aria-label="Close panel"
+                title="Close"
+                onClick={() => setNamePrompt(false)}
+              >
+                X
+              </button>
               <button type="submit" className="primary" disabled={!handleInput.trim()}>Submit</button>
             </div>
           </form>
@@ -539,7 +557,7 @@ function VisualPanel({ visual, onChange }: { visual: VisualConfig; onChange: (v:
         <Slider label="outline" min={0} max={12} step={0.5} value={visual.outlineWidth} fmt={(v) => `${v}px`} onChange={(v) => patch({ outlineWidth: v })} />
         <Slider label="tightness" min={0} max={3} step={0.1} value={visual.clusterTightness} fmt={(v) => v.toFixed(1)} onChange={(v) => patch({ clusterTightness: v })} />
       </div>
-      <span className="bio-hint">Press v to hide · tap your node for interest · hold to commit · drag committed to set ETA</span>
+      <span className="bio-hint">Press v to hide</span>
     </div>
   )
 }

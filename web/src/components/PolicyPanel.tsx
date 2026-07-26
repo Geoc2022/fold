@@ -117,8 +117,14 @@ export function PolicyPanel({
           <div className="propose-head">
             <h2>Notification policy</h2>
             <div className="propose-head-actions">
-              <button type="button" className="ghost danger" onClick={onClose}>
-                Cancel
+              <button
+                type="button"
+                className="ghost danger panel-close-button"
+                onClick={onClose}
+                aria-label="Close panel"
+                title="Close"
+              >
+                X
               </button>
             </div>
           </div>

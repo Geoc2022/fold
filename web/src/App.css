@@ -1169,10 +1169,22 @@ a.panel-button:visited {
 }
 .room-visual-panel {
   left: 16px;
-  top: 44px;
+  top: calc(env(safe-area-inset-top) + 54px);
   background: color-mix(in srgb, var(--panel) 92%, transparent);
   border-color: var(--border);
   color: var(--text);
+}
+.room-visual-panel.physics-help {
+  top: calc(env(safe-area-inset-top) + 54px);
+}
+.panel-close-button {
+  min-width: 30px;
+  min-height: 30px;
+  padding: 0.2rem 0.45rem;
+  border-radius: 999px;
+  line-height: 1;
+  font-weight: 700;
+  font-size: 0.9rem;
 }
 .room-visual-panel .bio-slider-row,
 .room-visual-panel .bio-slider-val {
