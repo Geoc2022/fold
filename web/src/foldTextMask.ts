@@ -9,6 +9,36 @@ export interface TextMask {
   dpr: number
 }
 
+function textWidthWithSpacing(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  letterSpacingPx: number,
+): number {
+  if (text.length === 0) return 0
+  let width = 0
+  for (const ch of text) width += ctx.measureText(ch).width
+  return width + Math.max(0, text.length - 1) * letterSpacingPx
+}
+
+function fillTextWithSpacing(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  letterSpacingPx: number,
+): void {
+  if (text.length === 0) return
+  if (Math.abs(letterSpacingPx) < 0.01 || text.length < 2) {
+    ctx.fillText(text, x, y)
+    return
+  }
+  let cursor = x
+  for (const ch of text) {
+    ctx.fillText(ch, cursor, y)
+    cursor += ctx.measureText(ch).width + letterSpacingPx
+  }
+}
+
 function alphaAt(data: Uint8ClampedArray, widthPx: number, x: number, y: number): number {
   const idx = (y * widthPx + x) * 4 + 3
   return data[idx] ?? 0
@@ -20,6 +50,7 @@ export function createTextMask(opts: {
   dpr: number
   text: string
   font: string
+  letterSpacingPx?: number
   /** Top-left of the real DOM text's font box (CSS px, local to this mask's
    * canvas) -- see FoldTitleFX.measureGlyphAnchor. When provided, the glyph
    * is drawn to line up pixel-for-pixel with the live DOM text instead of
@@ -40,6 +71,7 @@ export function createTextMask(opts: {
   ctx.clearRect(0, 0, opts.widthCss, opts.heightCss)
   ctx.fillStyle = '#000'
   ctx.font = opts.font
+  const letterSpacingPx = opts.letterSpacingPx ?? 0
 
   if (opts.anchor) {
     // Anchor at the top-left of the font's own ascent/descent box (matching
@@ -51,28 +83,16 @@ export function createTextMask(opts: {
     ctx.textBaseline = 'alphabetic'
     const metrics = ctx.measureText(opts.text)
     const ascent = metrics.fontBoundingBoxAscent ?? metrics.actualBoundingBoxAscent
-    ctx.fillText(opts.text, opts.anchor.x, opts.anchor.y + ascent)
+    fillTextWithSpacing(ctx, opts.text, opts.anchor.x, opts.anchor.y + ascent, letterSpacingPx)
   } else {
-    ctx.textAlign = 'center'
+    ctx.textAlign = 'left'
     ctx.textBaseline = 'middle'
-    ctx.fillText(opts.text, opts.widthCss / 2, opts.heightCss / 2)
+    const textWidth = textWidthWithSpacing(ctx, opts.text, letterSpacingPx)
+    fillTextWithSpacing(ctx, opts.text, (opts.widthCss - textWidth) * 0.5, opts.heightCss / 2, letterSpacingPx)
   }
 
   const imageData = ctx.getImageData(0, 0, widthPx, heightPx)
   return { canvas, ctx, imageData, widthPx, heightPx, dpr: opts.dpr }
-}
-
-export function sampleInteriorPoints(mask: TextMask, spacingCss: number, alphaThreshold = 40): Array<{ x: number; y: number }> {
-  const points: Array<{ x: number; y: number }> = []
-  const stepPx = Math.max(1, Math.floor(spacingCss * mask.dpr))
-  const data = mask.imageData.data
-  for (let y = 0; y < mask.heightPx; y += stepPx) {
-    for (let x = 0; x < mask.widthPx; x += stepPx) {
-      if (alphaAt(data, mask.widthPx, x, y) <= alphaThreshold) continue
-      points.push({ x: x / mask.dpr, y: y / mask.dpr })
-    }
-  }
-  return points
 }
 
 export function paintBoilingMask(opts: {
