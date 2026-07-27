@@ -163,9 +163,10 @@ pub async fn delete_push_endpoint(db: &D1Database, endpoint: &str) -> Result<()>
     Ok(())
 }
 
-pub async fn push_subscriptions_for_people(
+pub async fn push_subscription_page(
     db: &D1Database,
     person_ids: &[String],
+    after_id: Option<&str>,
     limit: i64,
 ) -> Result<Vec<PushSubscriptionRow>> {
     if person_ids.is_empty() {
@@ -177,9 +178,11 @@ pub async fn push_subscriptions_for_people(
         .join(",");
     let sql = format!(
         "SELECT id, endpoint, p256dh, auth \
-         FROM push_subscriptions WHERE disabled_at IS NULL AND person_id IN ({placeholders}) LIMIT ?"
+         FROM push_subscriptions WHERE disabled_at IS NULL AND id > ? \
+         AND person_id IN ({placeholders}) ORDER BY id LIMIT ?"
     );
-    let mut values = Vec::new();
+    let mut values = Vec::with_capacity(person_ids.len() + 2);
+    values.push(s(after_id.unwrap_or("")));
     for id in person_ids {
         values.push(s(id));
     }
@@ -246,7 +249,7 @@ pub async fn get_activity(db: &D1Database, id: &str) -> Result<Option<ActivityRo
 pub async fn get_activity_by_code(db: &D1Database, code: &str) -> Result<Option<ActivityRow>> {
     let sql = format!(
         "SELECT {ACTIVITY_COLS} FROM activities a \
-         LEFT JOIN people p ON p.id = a.proposer_id WHERE UPPER(a.code) = ?"
+         LEFT JOIN people p ON p.id = a.proposer_id WHERE a.code = ?"
     );
     db.prepare(&sql)
         .bind(&[s(&code.to_ascii_uppercase())])?
@@ -445,12 +448,33 @@ pub async fn mark_run_reached_ready(db: &D1Database, run_id: &str) -> Result<()>
 pub async fn participations_for_person(
     db: &D1Database,
     person_id: &str,
+    run_ids: &[String],
 ) -> Result<Vec<ParticipationLite>> {
-    db.prepare("SELECT run_id, state, arrival_at FROM participations WHERE person_id = ?")
-        .bind(&[s(person_id)])?
-        .all()
-        .await?
-        .results::<ParticipationLite>()
+    if run_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut participations = Vec::new();
+    for chunk in run_ids.chunks(99) {
+        let placeholders = std::iter::repeat("?")
+            .take(chunk.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT run_id, state, arrival_at FROM participations \
+             WHERE person_id = ? AND run_id IN ({placeholders})"
+        );
+        let mut values = Vec::with_capacity(chunk.len() + 1);
+        values.push(s(person_id));
+        values.extend(chunk.iter().map(|id| s(id)));
+        participations.extend(
+            db.prepare(&sql)
+                .bind(&values)?
+                .all()
+                .await?
+                .results::<ParticipationLite>()?,
+        );
+    }
+    Ok(participations)
 }
 
 pub async fn participation_state(
@@ -602,8 +626,8 @@ pub async fn delete_participation(db: &D1Database, run_id: &str, person_id: &str
 //
 // There is no realtime/socket layer (see lib.rs) -- liveness is entirely
 // derived from `people.last_seen_at`, refreshed by a coalesced heartbeat on
-// every poll and consumed by three reap entry points (run-scoped, person-
-// scoped, and a global cron backstop). A participation is stale, and gets
+// active-participant polls and consumed by run-scoped/person-scoped mutation
+// paths plus a global cron backstop. A participation is stale, and gets
 // deleted (there is no "lurking" DB state -- see migrations/0001_init.sql),
 // when either:
 //   - the person hasn't been seen in `despondent_cutoff` (unreachable too
@@ -642,10 +666,9 @@ pub async fn heartbeat(
     Ok(())
 }
 
-/// Delete stale participations scoped to one run (lazy, on-read reap).
+/// Delete stale participations scoped to one run before a mutation.
 /// Returns true if anything was deleted, so the caller knows to
-/// recompute that run's denormalized counts. Cheap and small in scope --
-/// safe to call on every room read.
+/// recompute that run's denormalized counts.
 pub async fn reap_run(
     db: &D1Database,
     run_id: &str,
@@ -739,8 +762,8 @@ pub async fn reap_person(
 }
 
 /// Global cron backstop (see lib.rs `run_maintenance`): catches stale
-/// participations in rooms nobody is actively polling (so `reap_run`/
-/// `reap_person` never get a chance to run there). Bounded by `limit` to
+/// participations when no mutation invokes `reap_run`/`reap_person`.
+/// Bounded by `limit` to
 /// stay within the free-plan subrequest budget per cron tick. Returns the
 /// distinct affected run ids so the caller can refresh their counts.
 pub async fn reap_global(

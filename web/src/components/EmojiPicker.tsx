@@ -28,11 +28,20 @@ export function EmojiPicker({ value, onChange, searchText = '' }: Props) {
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    loadEmojiKeywords().then((data) => {
-      const all = Object.entries(data).map(([emoji, keywords]) => ({ emoji, keywords }))
-      setEntries(all)
-    })
-  }, [])
+    if (!open || entries.length > 0) return
+    let cancelled = false
+    void loadEmojiKeywords()
+      .then((data) => {
+        if (!cancelled) {
+          const all = Object.entries(data).map(([emoji, keywords]) => ({ emoji, keywords }))
+          setEntries(all)
+        }
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [open, entries.length])
 
   const results = searchEmoji(searchText, entries, 160)
 

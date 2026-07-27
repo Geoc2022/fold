@@ -19,9 +19,19 @@ const MAX_CAUSAL_DEPTH: i64 = 8;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "job", rename_all = "snake_case")]
 pub enum PolicyJob {
-    Evaluate { event_id: String },
-    Action { action_id: String },
-    Push { delivery_id: String },
+    Evaluate {
+        event_id: String,
+    },
+    Action {
+        action_id: String,
+    },
+    Push {
+        delivery_id: String,
+    },
+    BroadcastPush {
+        person_ids: Vec<String>,
+        after_id: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -124,6 +134,23 @@ async fn enqueue(env: &Env, job: PolicyJob, delay_ms: i64) -> Result<()> {
         .delay_seconds(delay_seconds.min(MAX_QUEUE_DELAY_SECONDS))
         .build();
     jobs(env)?.send(message).await
+}
+
+pub async fn enqueue_push_to_people(env: &Env, mut person_ids: Vec<String>) -> Result<()> {
+    person_ids.sort();
+    person_ids.dedup();
+    for chunk in person_ids.chunks(40) {
+        enqueue(
+            env,
+            PolicyJob::BroadcastPush {
+                person_ids: chunk.to_vec(),
+                after_id: None,
+            },
+            0,
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 pub async fn emit_event(
@@ -241,6 +268,25 @@ pub async fn process_job(env: &Env, job: &PolicyJob) -> Result<()> {
         PolicyJob::Evaluate { event_id } => process_event(env, &db, event_id).await,
         PolicyJob::Action { action_id } => process_action(env, &db, action_id).await,
         PolicyJob::Push { delivery_id } => process_delivery(env, &db, delivery_id).await,
+        PolicyJob::BroadcastPush {
+            person_ids,
+            after_id,
+        } => {
+            if let Some(next_id) =
+                push::send_to_people_page(env, &db, person_ids, after_id.as_deref()).await?
+            {
+                enqueue(
+                    env,
+                    PolicyJob::BroadcastPush {
+                        person_ids: person_ids.clone(),
+                        after_id: Some(next_id),
+                    },
+                    0,
+                )
+                .await?;
+            }
+            Ok(())
+        }
     }
 }
 
@@ -1418,6 +1464,7 @@ async fn mark_delivery_failed(
 }
 
 pub async fn sweep(env: &Env) -> Result<()> {
+    const RECOVERY_INTERVAL_MINUTES: i64 = 15;
     let db = env.d1("DB")?;
     let now = util::now_ms();
     db.prepare(
@@ -1459,11 +1506,13 @@ pub async fn sweep(env: &Env) -> Result<()> {
         evaluate_activity(env, &db, &due.activity_id, &due.run_id, 0).await?;
     }
 
-    // Recovery does not depend on the outbox: rotate through active policy
-    // contexts so a failed event insert/publication is eventually repaired.
-    let recovery = db
-        .prepare(
-            "SELECT a.id AS activity_id, a.current_run_id AS run_id \
+    // Recovery does not depend on the outbox. It is deliberately less
+    // frequent than due-event processing because this query considers every
+    // active policy context.
+    if (now / 60_000) % RECOVERY_INTERVAL_MINUTES == 0 {
+        let recovery = db
+            .prepare(
+                "SELECT a.id AS activity_id, a.current_run_id AS run_id \
              FROM activities a \
              JOIN runs r ON r.id = a.current_run_id \
              LEFT JOIN policy_instances pi \
@@ -1481,15 +1530,20 @@ pub async fn sweep(env: &Env) -> Result<()> {
                           WHERE rp.activity_id = a.id AND rp.person_id = ps.person_id \
                             AND rp.last_seen_at >= ?1))) \
              GROUP BY a.id, a.current_run_id \
+             HAVING COALESCE(MAX(pi.last_evaluated_at), 0) <= ?2 \
              ORDER BY COALESCE(MAX(pi.last_evaluated_at), 0) ASC \
              LIMIT 5",
-        )
-        .bind(&[db::i(now - crate::api::DESPONDENT_MS)])?
-        .all()
-        .await?
-        .results::<DueEvaluationRow>()?;
-    for context in recovery {
-        evaluate_activity(env, &db, &context.activity_id, &context.run_id, 0).await?;
+            )
+            .bind(&[
+                db::i(now - crate::api::DESPONDENT_MS),
+                db::i(now - RECOVERY_INTERVAL_MINUTES * 60 * 1000),
+            ])?
+            .all()
+            .await?
+            .results::<DueEvaluationRow>()?;
+        for context in recovery {
+            evaluate_activity(env, &db, &context.activity_id, &context.run_id, 0).await?;
+        }
     }
 
     let actions = db

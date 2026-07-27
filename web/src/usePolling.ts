@@ -23,18 +23,22 @@ interface PollState<T> {
 
 interface Options<T> {
   enabled: boolean
+  pollKey?: unknown
   load: (signal: AbortSignal) => Promise<T>
   signature: (data: T) => string
   onNotFound?: () => void
   onSuccess?: () => void
 }
 
-export function usePolling<T>({ enabled, load, signature, onNotFound, onSuccess }: Options<T>) {
+export function usePolling<T>({ enabled, pollKey, load, signature, onNotFound, onSuccess }: Options<T>) {
   const [state, setState] = useState<PollState<T>>({ data: null, error: null, loading: enabled })
   const intervalRef = useRef(FAST_MS)
   const sigRef = useRef<string | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const generationRef = useRef(0)
+  const optionsRef = useRef({ load, signature, onNotFound, onSuccess })
+  optionsRef.current = { load, signature, onNotFound, onSuccess }
 
   const clearTimer = () => {
     if (timerRef.current !== null) clearTimeout(timerRef.current)
@@ -50,6 +54,7 @@ export function usePolling<T>({ enabled, load, signature, onNotFound, onSuccess 
 
   const poll = useCallback(async () => {
     if (!enabled || document.hidden) return
+    const generation = ++generationRef.current
     // Abort any in-flight request rather than skipping this call -- a
     // refresh() right after a mutation (e.g. commit) must win over a
     // stale request that was already pending, or its late response would
@@ -59,17 +64,17 @@ export function usePolling<T>({ enabled, load, signature, onNotFound, onSuccess 
     abortRef.current = ctrl
 
     try {
-      const data = await load(ctrl.signal)
-      const sig = signature(data)
+      const data = await optionsRef.current.load(ctrl.signal)
+      const sig = optionsRef.current.signature(data)
       const changed = sig !== sigRef.current
       sigRef.current = sig
       intervalRef.current = changed ? FAST_MS : Math.min(SLOW_MS, Math.round(intervalRef.current * BACKOFF))
-      onSuccess?.()
+      optionsRef.current.onSuccess?.()
       setState({ data, error: null, loading: false })
     } catch (e) {
       if (ctrl.signal.aborted) return
-      if (e instanceof ApiError && e.status === 404 && onNotFound) {
-        onNotFound()
+      if (e instanceof ApiError && e.status === 404 && optionsRef.current.onNotFound) {
+        optionsRef.current.onNotFound()
         setState((s) => ({ ...s, loading: false, error: null }))
       } else {
         intervalRef.current = e instanceof ApiError && e.status === 429
@@ -78,10 +83,10 @@ export function usePolling<T>({ enabled, load, signature, onNotFound, onSuccess 
         setState((s) => ({ ...s, loading: false, error: e instanceof Error ? e.message : String(e) }))
       }
     } finally {
-      schedule()
+      if (generationRef.current === generation) schedule()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, load, signature, onNotFound, onSuccess, schedule])
+  }, [enabled, schedule])
 
   const refresh = useCallback(() => {
     intervalRef.current = FAST_MS
@@ -91,21 +96,26 @@ export function usePolling<T>({ enabled, load, signature, onNotFound, onSuccess 
 
   useEffect(() => {
     if (!enabled) {
+      generationRef.current += 1
       clearTimer()
       abortRef.current?.abort()
       return
     }
     intervalRef.current = FAST_MS
+    sigRef.current = null
+    setState({ data: null, error: null, loading: true })
     void poll()
     return () => {
+      generationRef.current += 1
       clearTimer()
       abortRef.current?.abort()
     }
-  }, [enabled, poll])
+  }, [enabled, poll, pollKey])
 
   useEffect(() => {
     const onVisibility = () => {
       if (document.hidden) {
+        generationRef.current += 1
         clearTimer()
         abortRef.current?.abort()
       } else if (enabled) {

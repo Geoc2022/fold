@@ -7,7 +7,9 @@ use worker::*;
 use crate::db::{self, PushSubscriptionRow};
 use crate::push_crypto::{encrypt_payload, validate_vapid_key_pair, vapid_audience};
 
-const PUSH_LIMIT: i64 = 100;
+// Queue batches contain up to 10 messages. Four deliveries per message keep
+// the worst-case batch at 40 external requests, below the Free-plan limit.
+const PUSH_PAGE_SIZE: i64 = 4;
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PushPayload<'a> {
@@ -53,7 +55,12 @@ pub fn public_key(env: &Env) -> Option<String> {
     env_string(env, "VAPID_PUBLIC_KEY")
 }
 
-pub async fn send_to_people(env: &Env, db: &D1Database, person_ids: &[String]) -> Result<()> {
+pub async fn send_to_people_page(
+    env: &Env,
+    db: &D1Database,
+    person_ids: &[String],
+    after_id: Option<&str>,
+) -> Result<Option<String>> {
     let id = crate::util::new_id();
     let payload = PushPayload {
         id: &id,
@@ -63,31 +70,21 @@ pub async fn send_to_people(env: &Env, db: &D1Database, person_ids: &[String]) -
         tag: "fold-update",
         created_at: crate::util::now_ms(),
     };
-    send_payload_to_people(env, db, person_ids, &payload).await
-}
-
-pub async fn send_payload_to_people(
-    env: &Env,
-    db: &D1Database,
-    person_ids: &[String],
-    payload: &PushPayload<'_>,
-) -> Result<()> {
     let Some(cfg) = vapid_config(env) else {
-        return Ok(());
+        return Ok(None);
     };
-    let plaintext = serde_json::to_vec(payload)
+    let plaintext = serde_json::to_vec(&payload)
         .map_err(|e| Error::RustError(format!("push payload encode failed: {e}")))?;
-    let subs = db::push_subscriptions_for_people(db, person_ids, PUSH_LIMIT).await?;
+    let subs = db::push_subscription_page(db, person_ids, after_id, PUSH_PAGE_SIZE).await?;
 
     // Fan the deliveries out concurrently instead of awaiting each in series.
     // These calls run in a mutation's request path (see `api::push_people`);
     // serial delivery made a single click cost ~sum(RTT) across every
     // subscriber, which is the main source of the reported latency. Firing
     // them together makes the request path cost ~max(RTT) instead.
-    let results = futures_util::future::join_all(
-        subs.iter().map(|sub| send_one(&cfg, sub, &plaintext)),
-    )
-    .await;
+    let results =
+        futures_util::future::join_all(subs.iter().map(|sub| send_one(&cfg, sub, &plaintext)))
+            .await;
 
     // D1 writes must stay serial, so reap gone endpoints after the fan-out.
     for (sub, result) in subs.iter().zip(results) {
@@ -104,7 +101,8 @@ pub async fn send_payload_to_people(
             ),
         }
     }
-    Ok(())
+    Ok((subs.len() == PUSH_PAGE_SIZE as usize)
+        .then(|| subs.last().expect("non-empty full push page").id.clone()))
 }
 
 pub async fn send_payload_to_subscription(
@@ -141,6 +139,7 @@ async fn send_one(
     let body = worker::js_sys::Uint8Array::from(encrypted.body.as_slice());
     init.with_method(Method::Post)
         .with_headers(headers)
+        .with_redirect(worker::RequestRedirect::Manual)
         .with_body(Some(body.into()));
     let req = Request::new_with_init(&sub.endpoint, &init)?;
     let mut resp = Fetch::Request(req).send().await?;

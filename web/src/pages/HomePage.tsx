@@ -1,5 +1,5 @@
 import { AnimatePresence } from 'framer-motion'
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { api, ApiError, ensureSession, resetSession } from '../api'
 import { useTheme } from '../theme'
@@ -11,14 +11,15 @@ import { ActivityTile } from '../components/ActivityTile'
 import { CreateTile } from '../components/CreateTile'
 import { HomeShell } from '../components/HomeShell'
 import { FoldTitleFX } from '../components/FoldTitleFX'
-import { PolicyPanel } from '../components/PolicyPanel'
-import { ProposeForm } from '../components/ProposeForm'
 import type { SortKey } from '../components/SortSelect'
 import type { HomeView } from '../components/ViewToggle'
 import { requestNotificationPermission } from '../notify-client'
 import { enablePushNotifications, testPushNotifications } from '../push-client'
 import { loadHomeRules, type PolicyRule } from '../policy/rules'
 import { appendPolicySources, decodePolicySources, encodePolicySources } from '../policy/share'
+import { PolicyPanel } from '../components/PolicyPanel'
+
+const ProposeForm = lazy(() => import('../components/ProposeForm').then((module) => ({ default: module.ProposeForm })))
 
 const CODE_PATTERN = /^[a-zA-Z]{4}$/
 const SORT_KEYS: SortKey[] = ['newest', 'oldest', 'runs', 'served', 'commit', 'name']
@@ -62,6 +63,7 @@ export function HomePage() {
   const location = useLocation()
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
+  const sharedPolicy = searchParams.get('policy')
   const { theme, toggleTheme } = useTheme()
 
   // No name-gated onboarding: mint an anonymous guest session immediately,
@@ -94,9 +96,12 @@ export function HomePage() {
   const { data, error, loading, refresh } = useSync(me !== null)
 
   useEffect(() => {
-    if (me && data && data.me === null) {
+    if (!me || !data) return
+    if (data.me === null) {
       setMe(null)
       void resetSession().finally(() => setSessionEpoch((e) => e + 1))
+    } else if (data.me.id !== me.id || data.me.handle !== me.handle || data.me.color !== me.color) {
+      setMe(data.me)
     }
   }, [me, data])
 
@@ -151,13 +156,29 @@ export function HomePage() {
   const toastTimerRef = useRef<number | null>(null)
   const [rules, setRules] = useState<PolicyRule[]>(loadHomeRules)
   const [policiesReady, setPoliciesReady] = useState(false)
+  const [policyLoadError, setPolicyLoadError] = useState<string | null>(null)
+  const [policyLoadEpoch, setPolicyLoadEpoch] = useState(0)
   const policyRevisionRef = useRef(0)
   const policyServerIdsRef = useRef(new Map<string, string>())
   const policySaveRef = useRef<Promise<void>>(Promise.resolve())
+  const policyOwnerRef = useRef<string | null>(null)
 
   useEffect(() => {
-    if (!me) return
+    const ownerId = me?.id ?? null
+    if (policyOwnerRef.current === ownerId) return
+    policyOwnerRef.current = ownerId
+    policyRevisionRef.current = 0
+    policyServerIdsRef.current.clear()
+    policySaveRef.current = Promise.resolve()
+    setRules(loadHomeRules())
+    setPoliciesReady(false)
+    setPolicyLoadError(null)
+  }, [me?.id])
+
+  useEffect(() => {
+    if (!me || policiesReady || (!showPolicyPanel && !sharedPolicy)) return
     let cancelled = false
+    setPolicyLoadError(null)
     async function loadPolicies() {
       const response = await api.policySets()
       let home = response.sets.find((set) => set.scope === 'home')
@@ -177,18 +198,23 @@ export function HomePage() {
       setPoliciesReady(true)
     }
     void loadPolicies().catch((error) => {
-      if (!cancelled) setNotifyStatus(error instanceof Error ? error.message : String(error))
+      if (!cancelled) {
+        setPolicyLoadError(error instanceof Error ? error.message : String(error))
+      }
     })
     return () => {
       cancelled = true
     }
-  }, [me])
+  }, [me, policiesReady, policyLoadEpoch, sharedPolicy, showPolicyPanel])
 
   const saveHomeRules = useCallback((nextRules: PolicyRule[]) => {
+    const ownerId = policyOwnerRef.current
     setRules(nextRules)
     policySaveRef.current = policySaveRef.current
       .catch(() => undefined)
       .then(async () => {
+        const ownerIsCurrent = () => policyOwnerRef.current === ownerId
+        if (!ownerIsCurrent()) return
         const save = () => api.replacePolicySet({
           scope: 'home' as const,
           timezone: browserTimezone(),
@@ -202,15 +228,19 @@ export function HomePage() {
         let saved
         try {
           saved = await save()
+          if (!ownerIsCurrent()) return
         } catch (error) {
           if (!(error instanceof ApiError) || error.status !== 409) throw error
+          if (!ownerIsCurrent()) return
           const current = (await api.policySets()).sets.find((set) => set.scope === 'home')
+          if (!ownerIsCurrent()) return
           policyRevisionRef.current = current?.revision ?? 0
           current?.rules.forEach((rule, index) => {
             const localId = nextRules[index]?.id
             if (localId) policyServerIdsRef.current.set(localId, rule.id)
           })
           saved = await save()
+          if (!ownerIsCurrent()) return
         }
         policyRevisionRef.current = saved.revision
         saved.rules.forEach((rule, index) => {
@@ -228,10 +258,9 @@ export function HomePage() {
   // A shared policy link (?policy=<base64 of source[]>) appends those rules
   // and opens the panel, mirroring the ?code= propose-form flow above.
   useEffect(() => {
-    const policyParam = searchParams.get('policy')
-    if (policyParam && policiesReady) {
+    if (sharedPolicy && policiesReady) {
       try {
-        const sources = decodePolicySources(policyParam)
+        const sources = decodePolicySources(sharedPolicy)
         if (sources.length > 0) {
           const next = appendPolicySources(rules, sources)
           saveHomeRules(next)
@@ -252,7 +281,7 @@ export function HomePage() {
       )
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [policiesReady, rules, saveHomeRules, searchParams, setSearchParams])
+  }, [policiesReady, rules, saveHomeRules, searchParams, setSearchParams, sharedPolicy])
 
   const showToast = useCallback((message: string) => {
     setToast(message)
@@ -274,6 +303,15 @@ export function HomePage() {
       setNotifyStatus(await requestNotificationPermission())
     }
     setShowPolicyPanel(true)
+  }
+
+  function closePolicyPanel() {
+    setShowPolicyPanel(false)
+    if (!sharedPolicy) return
+    setSearchParams((params) => {
+      params.delete('policy')
+      return params
+    }, { replace: true })
   }
 
   async function testNotifications() {
@@ -488,19 +526,21 @@ export function HomePage() {
       {creating && (
         <div className="modal-backdrop modal-backdrop-lower" onClick={() => setCreating(false)}>
           <div className="modal-card" onClick={(e) => e.stopPropagation()}>
-            <ProposeForm
-              initialCode={prefillCode}
-              categoryOptions={categoryOptions}
-              onCreated={() => {
-                setCreating(false)
-                setPrefillCode(null)
-                refresh()
-              }}
-              onClose={() => {
-                setCreating(false)
-                setPrefillCode(null)
-              }}
-            />
+            <Suspense fallback={<p className="card pending">Opening activity editor...</p>}>
+              <ProposeForm
+                initialCode={prefillCode}
+                categoryOptions={categoryOptions}
+                onCreated={() => {
+                  setCreating(false)
+                  setPrefillCode(null)
+                  refresh()
+                }}
+                onClose={() => {
+                  setCreating(false)
+                  setPrefillCode(null)
+                }}
+              />
+            </Suspense>
           </div>
         </div>
       )}
@@ -508,36 +548,66 @@ export function HomePage() {
       {editingActivity && (
         <div className="modal-backdrop" onClick={() => setEditingActivity(null)}>
           <div className="modal-card" onClick={(e) => e.stopPropagation()}>
-            <ProposeForm
-              activity={editingActivity}
-              categoryOptions={categoryOptions}
-              onCreated={() => {
-                setEditingActivity(null)
-                refresh()
-              }}
-              onDeleted={() => {
-                setExpandedId((prev) => (prev === editingActivity.id ? null : prev))
-                setEditingActivity(null)
-                refresh()
-              }}
-              onClose={() => setEditingActivity(null)}
-            />
+            <Suspense fallback={<p className="card pending">Opening activity editor...</p>}>
+              <ProposeForm
+                activity={editingActivity}
+                categoryOptions={categoryOptions}
+                onCreated={() => {
+                  setEditingActivity(null)
+                  refresh()
+                }}
+                onDeleted={() => {
+                  setExpandedId((prev) => (prev === editingActivity.id ? null : prev))
+                  setEditingActivity(null)
+                  refresh()
+                }}
+                onClose={() => setEditingActivity(null)}
+              />
+            </Suspense>
           </div>
         </div>
       )}
 
-      {showPolicyPanel && policiesReady && (
-        <PolicyPanel
-          rules={rules}
-          onRulesChange={saveHomeRules}
-          onClose={() => setShowPolicyPanel(false)}
-          focusRuleId={policyFocusId}
-          hint="Rules run against activities you've joined."
-          notifyStatus={notifyStatus}
-          onTestNotifications={testNotifications}
-          onShare={sharePolicy}
-        />
+      {(showPolicyPanel || sharedPolicy) && (
+        policyLoadError
+          ? (
+            <PolicyLoadError
+              error={policyLoadError}
+              onClose={closePolicyPanel}
+              onRetry={() => setPolicyLoadEpoch((epoch) => epoch + 1)}
+            />
+            )
+          : policiesReady && (
+            <PolicyPanel
+              rules={rules}
+              onRulesChange={saveHomeRules}
+              onClose={closePolicyPanel}
+              focusRuleId={policyFocusId}
+              hint="Rules run against activities you've joined."
+              notifyStatus={notifyStatus}
+              onTestNotifications={testNotifications}
+              onShare={sharePolicy}
+            />
+            )
       )}
     </>
+  )
+}
+
+function PolicyLoadError({ error, onClose, onRetry }: {
+  error: string
+  onClose: () => void
+  onRetry: () => void
+}) {
+  return (
+    <div className="modal-backdrop centered">
+      <section className="card" aria-live="polite">
+        <p className="pending">Could not load notification settings: {error}</p>
+        <div className="row">
+          <button type="button" className="ghost" onClick={onClose}>Close</button>
+          <button type="button" className="primary" onClick={onRetry}>Retry</button>
+        </div>
+      </section>
+    </div>
   )
 }

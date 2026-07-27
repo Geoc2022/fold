@@ -122,6 +122,7 @@ export interface ParticipantView {
 
 export interface RoomResponse {
   server_time: number
+  me: Person | null
   activity: ActivityView
   participants: ParticipantView[]
   already_committed_elsewhere: boolean

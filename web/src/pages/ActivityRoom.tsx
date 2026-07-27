@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { api, ApiError, ensureSession } from '../api'
 import { ActivityInfo } from '../components/ActivityInfo'
 import { useTheme } from '../theme'
@@ -35,8 +35,10 @@ interface RoomAlert {
 
 export function ActivityRoom() {
   const params = useParams()
+  const location = useLocation()
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
+  const sharedPolicy = searchParams.get('policy')
   const rawParam = params.code ?? ''
   // Any letters-only link of 4+ characters resolves against its first four
   // letters (e.g. /boardgames -> BOAR), so an existing code's link can be
@@ -58,20 +60,25 @@ export function ActivityRoom() {
   const [homeRules, setHomeRules] = useState<PolicyRule[]>(loadHomeRules)
   const [roomRules, setRoomRules] = useState<PolicyRule[] | null>(() => (code ? loadRoomRules(code) : null))
   const [policiesReady, setPoliciesReady] = useState(false)
+  const [policyLoadError, setPolicyLoadError] = useState<string | null>(null)
+  const [policyLoadEpoch, setPolicyLoadEpoch] = useState(0)
   const roomPolicyRevisionsRef = useRef(new Map<string, number>())
   const roomPolicyServerIdsRef = useRef(new Map<string, Map<string, string>>())
   const roomPolicySaveRef = useRef<Promise<void>>(Promise.resolve())
+  const roomPolicyOwnerRef = useRef<string | null>(null)
   const alertTimerRef = useRef<number | null>(null)
   const alertLastShownRef = useRef(new Map<string, number>())
   const alertQueueRef = useRef<RoomAlert[]>([])
   const currentAlertRef = useRef<RoomAlert | null>(null)
+  const showAlertRef = useRef(showAlert)
+  showAlertRef.current = showAlert
   const { data, error, loading, notFound, refresh } = useRoom(code, me !== null && code !== null)
 
   useEffect(() => {
     let cancelled = false
     ensureSession()
-      .then((p) => {
-        if (!cancelled) setMe(p)
+      .then((person) => {
+        if (!cancelled) setMe(person)
       })
       .catch(() => {
         if (!cancelled) setMe(null)
@@ -97,7 +104,30 @@ export function ActivityRoom() {
     if (!code) return
     setRoomRules(loadRoomRules(code))
     setPoliciesReady(false)
+    setPolicyLoadError(null)
   }, [code])
+
+  useEffect(() => {
+    const ownerId = me?.id ?? null
+    if (roomPolicyOwnerRef.current === ownerId) return
+    roomPolicyOwnerRef.current = ownerId
+    roomPolicyRevisionsRef.current.clear()
+    roomPolicyServerIdsRef.current.clear()
+    roomPolicySaveRef.current = Promise.resolve()
+    setHomeRules(loadHomeRules())
+    setRoomRules(code ? loadRoomRules(code) : null)
+    setPoliciesReady(false)
+    setPolicyLoadError(null)
+  }, [code, me?.id])
+
+  useEffect(() => {
+    if (!data || !me) return
+    if (data.me === null) {
+      void ensureSession().then(setMe).catch(() => setMe(null))
+    } else if (data.me.id !== me.id || data.me.handle !== me.handle || data.me.color !== me.color) {
+      setMe(data.me)
+    }
+  }, [data, me])
 
   useEffect(() => {
     currentAlertRef.current = alert
@@ -129,9 +159,9 @@ export function ActivityRoom() {
   // address bar, e.g. /boardgames -> /BOAR, once we know BOAR is real.
   useEffect(() => {
     if (code && data && !notFound && rawParam.toUpperCase() !== code) {
-      navigate(`/${code}`, { replace: true })
+      navigate(`/${code}${location.search}`, { replace: true })
     }
-  }, [code, data, notFound, rawParam, navigate])
+  }, [code, data, location.search, notFound, rawParam, navigate])
 
   const showNextAlert = () => {
     if (alertTimerRef.current != null) return
@@ -190,10 +220,11 @@ export function ActivityRoom() {
   const policyActivityId = data?.activity.id
 
   useEffect(() => {
-    if (!code || !me || !policyActivityId) return
+    if (!code || !me || !policyActivityId || policiesReady || (!showPolicyPanel && !sharedPolicy)) return
     const activityId = policyActivityId
     const roomCode = code
     let cancelled = false
+    setPolicyLoadError(null)
     async function loadPolicies() {
       const response = await api.policySets(activityId)
       let home = response.sets.find((set) => set.scope === 'home')
@@ -228,20 +259,25 @@ export function ActivityRoom() {
       setPoliciesReady(true)
     }
     void loadPolicies().catch((error) => {
-      if (!cancelled) setNotifyStatus(error instanceof Error ? error.message : String(error))
+      if (!cancelled) {
+        setPolicyLoadError(error instanceof Error ? error.message : String(error))
+      }
     })
     return () => {
       cancelled = true
     }
-  }, [code, me, policyActivityId])
+  }, [code, me, policiesReady, policyActivityId, policyLoadEpoch, sharedPolicy, showPolicyPanel])
 
   const saveRoomRules = useCallback((nextRules: PolicyRule[]) => {
     if (!policyActivityId) return
     const activityId = policyActivityId
+    const ownerId = roomPolicyOwnerRef.current
     setRoomRules(nextRules)
     roomPolicySaveRef.current = roomPolicySaveRef.current
       .catch(() => undefined)
       .then(async () => {
+        const ownerIsCurrent = () => roomPolicyOwnerRef.current === ownerId
+        if (!ownerIsCurrent()) return
         const serverIds = roomPolicyServerIdsRef.current.get(activityId) ?? new Map<string, string>()
         const save = () => api.replacePolicySet({
           scope: 'room' as const,
@@ -257,15 +293,19 @@ export function ActivityRoom() {
         let saved
         try {
           saved = await save()
+          if (!ownerIsCurrent()) return
         } catch (error) {
           if (!(error instanceof ApiError) || error.status !== 409) throw error
+          if (!ownerIsCurrent()) return
           const current = (await api.policySets(activityId)).sets.find((set) => set.scope === 'room')
+          if (!ownerIsCurrent()) return
           roomPolicyRevisionsRef.current.set(activityId, current?.revision ?? 0)
           current?.rules.forEach((rule, index) => {
             const localId = nextRules[index]?.id
             if (localId) serverIds.set(localId, rule.id)
           })
           saved = await save()
+          if (!ownerIsCurrent()) return
         }
         roomPolicyRevisionsRef.current.set(activityId, saved.revision)
         saved.rules.forEach((rule, index) => {
@@ -282,10 +322,9 @@ export function ActivityRoom() {
   }, [policyActivityId])
 
   useEffect(() => {
-    const policyParam = searchParams.get('policy')
-    if (!policyParam || !code || !policiesReady) return
+    if (!sharedPolicy || !code || !policiesReady) return
     try {
-      const sources = decodePolicySources(policyParam)
+      const sources = decodePolicySources(sharedPolicy)
       if (sources.length > 0) {
         saveRoomRules(appendPolicySources(policyRules, sources))
         setShowPolicyPanel(true)
@@ -297,7 +336,7 @@ export function ActivityRoom() {
       current.delete('policy')
       return current
     }, { replace: true })
-  }, [code, policiesReady, policyRules, saveRoomRules, searchParams, setSearchParams])
+  }, [code, policiesReady, policyRules, saveRoomRules, searchParams, setSearchParams, sharedPolicy])
 
   const presenceBadge = useMemo(
     () => (data ? activityPresenceBadgeModel(data.activity, data.server_time, data.participants) : null),
@@ -314,7 +353,7 @@ export function ActivityRoom() {
   }, [code, notFound, presenceBadge])
 
   useEffect(() => {
-    if (error) showAlert('Syncing')
+    if (error) showAlertRef.current('Syncing')
   }, [error])
 
   if (code === null) {
@@ -341,6 +380,15 @@ export function ActivityRoom() {
       setNotifyStatus(await requestNotificationPermission())
     }
     setShowPolicyPanel(true)
+  }
+
+  function closePolicyPanel() {
+    setShowPolicyPanel(false)
+    if (!sharedPolicy) return
+    setSearchParams((params) => {
+      params.delete('policy')
+      return params
+    }, { replace: true })
   }
 
   async function testNotifications() {
@@ -476,16 +524,26 @@ export function ActivityRoom() {
         }}
         onShare={shareActivity}
       />
-      {showPolicyPanel && policiesReady && (
-        <PolicyPanel
-          rules={policyRules}
-          onRulesChange={saveRoomRules}
-          onClose={() => setShowPolicyPanel(false)}
-          hint="Rules run against this room while you're here."
-          notifyStatus={notifyStatus}
-          onTestNotifications={testNotifications}
-          onShare={sharePolicy}
-        />
+      {(showPolicyPanel || sharedPolicy) && (
+        policyLoadError
+          ? (
+            <PolicyLoadError
+              error={policyLoadError}
+              onClose={closePolicyPanel}
+              onRetry={() => setPolicyLoadEpoch((epoch) => epoch + 1)}
+            />
+            )
+          : policiesReady && (
+            <PolicyPanel
+              rules={policyRules}
+              onRulesChange={saveRoomRules}
+              onClose={closePolicyPanel}
+              hint="Rules run against this room while you're here."
+              notifyStatus={notifyStatus}
+              onTestNotifications={testNotifications}
+              onShare={sharePolicy}
+            />
+            )
       )}
       {showInfo && (
         <div className="modal-backdrop" onClick={() => setShowInfo(false)}>
@@ -551,6 +609,24 @@ export function ActivityRoom() {
         </div>
       )}
     </main>
+  )
+}
+
+function PolicyLoadError({ error, onClose, onRetry }: {
+  error: string
+  onClose: () => void
+  onRetry: () => void
+}) {
+  return (
+    <div className="modal-backdrop centered">
+      <section className="card" aria-live="polite">
+        <p className="pending">Could not load notification settings: {error}</p>
+        <div className="row">
+          <button type="button" className="ghost" onClick={onClose}>Close</button>
+          <button type="button" className="primary" onClick={onRetry}>Retry</button>
+        </div>
+      </section>
+    </div>
   )
 }
 

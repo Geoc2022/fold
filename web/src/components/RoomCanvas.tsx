@@ -216,12 +216,14 @@ export function RoomCanvas({
   const commitLockRef = useRef(alreadyCommittedElsewhere)
   const otherCommittedRoomCodeRef = useRef<string | null | undefined>(otherCommittedRoomCode)
   const interactionPermissionsRef = useRef(interactionPermissions)
+  const callbacksRef = useRef({ onInterested, onCommit, onWithdraw, onAlert })
   const guardAlertRef = useRef(0)
   const expireNoticeArrivalRef = useRef<number | null>(null)
   const myStableNodeIdRef = useRef(`me-${me.id}`)
   visualRef.current = visual
   activityRef.current = activity
   interactionPermissionsRef.current = interactionPermissions
+  callbacksRef.current = { onInterested, onCommit, onWithdraw, onAlert }
 
   const source = useMemo(() => {
     const now = Date.now()
@@ -394,7 +396,7 @@ export function RoomCanvas({
       try {
         await fn()
       } catch (err) {
-        onAlert(err instanceof Error ? err.message : String(err))
+        callbacksRef.current.onAlert(err instanceof Error ? err.message : String(err))
       } finally {
         busyRef.current = false
       }
@@ -423,13 +425,13 @@ export function RoomCanvas({
         guardAlertRef.current = performance.now()
         const code = otherCommittedRoomCodeRef.current
         if (code) {
-          onAlert({
+          callbacksRef.current.onAlert({
             message: 'Already committed at {link} — withdraw there first.',
             href: `/${code}`,
             hrefLabel: code,
           })
         } else {
-          onAlert('Already committed elsewhere — withdraw there first.')
+          callbacksRef.current.onAlert('Already committed elsewhere — withdraw there first.')
         }
       }
       resetTug()
@@ -483,7 +485,7 @@ export function RoomCanvas({
           ps.node.state = 'interested'
           resetTug()
           winEaseUntilRef.current = performance.now() + WIN_EASE_MS
-          void call(onInterested)
+          void call(callbacksRef.current.onInterested)
         }
         return
       }
@@ -518,7 +520,7 @@ export function RoomCanvas({
              ps.node.arrivalAt = now + eta * 1_000
              resetTug()
              winEaseUntilRef.current = performance.now() + WIN_EASE_MS
-             void call(() => onCommit(eta))
+              void call(() => callbacksRef.current.onCommit(eta))
            }
           return
         }
@@ -535,7 +537,7 @@ export function RoomCanvas({
           ps.node.state = 'lurker'
           resetTug()
           winEaseUntilRef.current = performance.now() + WIN_EASE_MS
-          void call(onWithdraw)
+          void call(callbacksRef.current.onWithdraw)
         }
         return
       }
@@ -562,7 +564,7 @@ export function RoomCanvas({
         ps.node.state = 'interested'
         resetTug()
         winEaseUntilRef.current = performance.now() + WIN_EASE_MS
-        void call(onInterested)
+        void call(callbacksRef.current.onInterested)
       }
     }
 
@@ -715,13 +717,13 @@ export function RoomCanvas({
         // own API call -- only committed/arrived still needs its ETA saved.
         if (ps.node.state !== 'committed' && ps.node.state !== 'arrived') return
         const eta = etaFromDistance(ps.node.x, ps.node.y, activityMaxEta(activityRef.current))
-        void call(() => onCommit(eta))
+        void call(() => callbacksRef.current.onCommit(eta))
         return
       }
       if (ps.node.state === 'lurker') {
         if (interactionPermissionsRef.current?.interest === false) return
         ps.node.state = 'interested'
-        void call(onInterested)
+        void call(callbacksRef.current.onInterested)
       } else if (ps.node.state === 'interested' && held > 200) {
         if (interactionPermissionsRef.current?.commit === false) return
         if (commitLockRef.current) {
@@ -732,7 +734,7 @@ export function RoomCanvas({
         const eta = scaleHoldEta(etaFromHold(held), activityMaxEta(activityRef.current))
         ps.node.state = 'committed'
         ps.node.arrivalAt = Date.now() + eta * 1_000
-        void call(() => onCommit(eta))
+        void call(() => callbacksRef.current.onCommit(eta))
       }
     }
 
@@ -801,9 +803,9 @@ export function RoomCanvas({
           if (n.isMe) {
             if (expireNoticeArrivalRef.current !== expiredArrivalAt) {
               expireNoticeArrivalRef.current = expiredArrivalAt
-              onAlert('Your spot expired — commit again to rejoin')
+              callbacksRef.current.onAlert('Your spot expired — commit again to rejoin')
             }
-            void call(onWithdraw)
+            void call(callbacksRef.current.onWithdraw)
           }
         }
       }
@@ -842,7 +844,7 @@ export function RoomCanvas({
       canvas.removeEventListener('wheel', onWheel)
       cancelAnimationFrame(raf)
     }
-  }, [onAlert, onCommit, onInterested, onWithdraw])
+  }, [])
 
   return <canvas ref={canvasRef} className="room-canvas" />
 }

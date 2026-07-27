@@ -123,11 +123,10 @@ async fn run_maintenance(env: &Env) -> Result<()> {
     const EXPIRE_BATCH: i64 = 20;
     const READ_TTL_MS: i64 = 7 * 24 * 60 * 60 * 1000; // 7 days
     const HARD_TTL_MS: i64 = 30 * 24 * 60 * 60 * 1000; // 30 days
-                                                       // Cron backstop for the lazy on-read reaps in `room_get`/`run_commit`/
-                                                       // `run_interest`: catches despondent (unreachable >5min, see
-                                                       // `api::DESPONDENT_MS`) or event-over participations in rooms nobody is
-                                                       // actively polling. Bounded to stay within the free-plan subrequest
-                                                       // budget per 15-min tick, same pattern as EXPIRE_BATCH above.
+    const PRUNE_INTERVAL_MINUTES: i64 = 60;
+    // Cron backstop for mutation-path reaps: catches despondent (unreachable
+    // >5min) or event-over participations even when nobody changes the room.
+    // Bounded to stay within the free-plan subrequest budget per minute.
     const REAP_BATCH: i64 = 40;
 
     let db = env.d1("DB")?;
@@ -165,7 +164,7 @@ async fn run_maintenance(env: &Env) -> Result<()> {
                 now,
             )
             .await?;
-            push::send_to_people(env, &db, &recipients).await?;
+            policy_runtime::enqueue_push_to_people(env, recipients).await?;
         }
         api::end_run(&db, &r.id, "closed", now).await?;
         policy_runtime::emit_event(
@@ -180,6 +179,8 @@ async fn run_maintenance(env: &Env) -> Result<()> {
         .await?;
     }
 
-    db::prune_notifications(&db, now, READ_TTL_MS, HARD_TTL_MS).await?;
+    if (now / 60_000) % PRUNE_INTERVAL_MINUTES == 0 {
+        db::prune_notifications(&db, now, READ_TTL_MS, HARD_TTL_MS).await?;
+    }
     Ok(())
 }

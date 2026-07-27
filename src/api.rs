@@ -75,8 +75,7 @@ fn policy_store_error(error: PolicyStoreError) -> Result<Response> {
     json_status(&body, error.status_code())
 }
 
-/// Deliver a "something changed" Web Push to `people` off the response
-/// critical path.
+/// Queue a "something changed" Web Push to `people` off the response path.
 ///
 /// Push delivery makes one outbound HTTPS request per subscriber to a
 /// third-party push service (FCM/Mozilla/Apple), each carrying full TLS RTT
@@ -85,21 +84,16 @@ fn policy_store_error(error: PolicyStoreError) -> Result<Response> {
 /// -- the main source of the reported latency. The user-visible notification
 /// rows are already persisted in D1 before this call, so the poll/`sync`
 /// endpoint reflects the change immediately regardless; only the browser
-/// push is deferred. `ctx.wait_until` keeps the Worker alive to finish the
-/// send after the response is flushed.
+/// push is deferred. Queue consumers paginate subscriptions below the Free
+/// plan's external-subrequest limit.
 fn push_people(ctx: &Context, env: &Env, people: Vec<String>) {
     if people.is_empty() {
         return;
     }
     let env = env.clone();
     ctx.wait_until(async move {
-        match env.d1("DB") {
-            Ok(db) => {
-                if let Err(error) = push::send_to_people(&env, &db, &people).await {
-                    console_error!("deferred push send failed: {error}");
-                }
-            }
-            Err(error) => console_error!("deferred push: DB binding unavailable: {error}"),
+        if let Err(error) = crate::policy_runtime::enqueue_push_to_people(&env, people).await {
+            console_error!("deferred push enqueue failed: {error}");
         }
     });
 }
@@ -1406,15 +1400,6 @@ pub async fn room_get(req: Request, ctx: RouteContext<Context>) -> Result<Respon
             }
         }
     }
-    // Lazy reap: this is the primary "look at the room" read path, so keep
-    // its participant list/counts free of despondent or event-over ghosts
-    // before anyone sees them, rather than waiting on the 15-min cron.
-    if let Some(run_id) = &row.current_run_id {
-        if db::reap_run(&db, run_id, now, now - DESPONDENT_MS).await? {
-            refresh_run(&db, run_id, &row, now).await?;
-        }
-    }
-
     let view = match build_activity_view(&db, &row.id, me_id.as_deref()).await? {
         Some(v) => v,
         None => return err_json("activity not found", 404),
@@ -1430,6 +1415,7 @@ pub async fn room_get(req: Request, ctx: RouteContext<Context>) -> Result<Respon
     let already_committed_elsewhere = other_commitment.is_some();
     let resp = RoomResponse {
         server_time: now_ms(),
+        me,
         activity: view,
         participants,
         already_committed_elsewhere,
@@ -1463,7 +1449,7 @@ pub async fn sync(req: Request, ctx: RouteContext<Context>) -> Result<Response> 
 
     let (my_states, notifications) = match &me {
         Some(p) => {
-            let parts = db::participations_for_person(&db, &p.id).await?;
+            let parts = db::participations_for_person(&db, &p.id, &run_ids).await?;
             let map: std::collections::HashMap<String, ParticipationLite> =
                 parts.into_iter().map(|x| (x.run_id.clone(), x)).collect();
             let notifs = db::unread_notifications(&db, &p.id, NOTIFICATION_LIMIT).await?;

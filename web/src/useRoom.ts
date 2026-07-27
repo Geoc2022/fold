@@ -28,6 +28,7 @@ export function useRoom(code: string | null, enabled: boolean): UseRoom {
   const load = useCallback((signal: AbortSignal) => api.room(code!, signal), [code])
   const state = usePolling({
     enabled: enabled && code !== null,
+    pollKey: code,
     load,
     signature,
     onNotFound: () => setNotFound(true),

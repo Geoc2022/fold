@@ -346,6 +346,7 @@ pub struct ParticipantView {
 #[derive(Debug, Serialize)]
 pub struct RoomResponse {
     pub server_time: i64,
+    pub me: Option<PersonRow>,
     pub activity: ActivityView,
     pub participants: Vec<ParticipantView>,
     /// True if the requesting person is already committed to a *different*
