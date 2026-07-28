@@ -6,6 +6,10 @@ Try the tutorial at `/fold`
 
 ## Next Steps:
 
+### Fix the room info panel
+
+The room info panel is missing a lot of functionality/details
+
 ### Leaderboard
 
 It would be pretty fun to see the top people for a particular activity. At the moment, I think it's fine (and quite a bit easier) to have this be stored in people's local storage. Though, in the future maybe this requires some server signing data or using some computation on the server (there must be some cool algo like "A Linear Time Majority Vote Algorithm" that can get a good estimate). Also, this would need to be approved by the user to track this and store on local machines.
